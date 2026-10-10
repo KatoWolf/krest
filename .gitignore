@@ -26,3 +26,6 @@ currency_rates.json
 templates.json
 
 .ruff_cache/
+
+*.private.pem
+*-premium-code.txt

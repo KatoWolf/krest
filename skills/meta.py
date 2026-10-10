@@ -39,16 +39,10 @@ def show_toast(title, message):
 )
 def toggle_mute_mode(text: str):
     state = _get_state()
-    state.is_muted = not getattr(state, "is_muted", False)
+    state.is_muted = True
+    voice.stop_speaking()
 
-    if state.is_muted:
-        voice.speak(
-            "Тихий режим включен. Все последующие ответы будут выводиться через всплывающие уведомления."
-        )
-        show_toast("Крест Ассистент", "🔇 Тихий режим (Mute) АКТИВИРОВАН.")
-    else:
-        show_toast("Крест Ассистент", "🔊 Тихий режим ОТКЛЮЧЕН.")
-        voice.speak("Голосовое сопровождение снова активно.")
+    voice.speak("Тихий режим включён. Ответы остаются в меню.")
 
 
 @skill(
@@ -395,3 +389,14 @@ def reload_skills(text: str):
     except Exception as e:
         logger.error(f"Error reloading skills: {e}")
         voice.speak("Ошибка при горячей перезагрузке навыков.")
+
+
+@skill(
+    keywords=["выключи тихий режим", "верни голос", "говори вслух"],
+    description="Включить озвучку ответов ассистента",
+    category="Meta",
+)
+def unmute_assistant(text=""):
+    state = _get_state()
+    state.is_muted = False
+    voice.speak("Озвучка ответов включена.")

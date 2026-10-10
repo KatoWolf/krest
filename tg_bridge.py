@@ -94,7 +94,7 @@ def load_app_config() -> dict:
 
 def get_owner_name() -> str:
     cfg = load_app_config()
-    return cfg.get("owner_name", "КатоВульф")
+    return cfg.get("owner_name") or "Владелец"
 
 
 async def get_local_status() -> dict:
@@ -693,6 +693,10 @@ class TgBridge:
 
 
 if __name__ == "__main__":
+    from licensing import require_premium
+    from configuration import ConfigManager
+
+    require_premium(ConfigManager().snapshot())
     from notifications import NotificationQueue
 
     start_tg_bridge(NotificationQueue())

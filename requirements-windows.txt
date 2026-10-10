@@ -3,3 +3,4 @@
 comtypes>=1.2,<2; sys_platform == 'win32'
 pycaw>=20240210; sys_platform == 'win32'
 winsdk>=1.0.0b10; sys_platform == 'win32'
+pywinauto==0.6.9; sys_platform == 'win32'

@@ -75,6 +75,10 @@ def load_templates() -> dict:
         try:
             with open(TEMPLATES_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if not isinstance(data, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str) for k, v in data.items()
+                ):
+                    raise ValueError("Некорректный файл шаблонов")
                 return {**DEFAULT_TEMPLATES, **data}
         except Exception as e:
             logger.error(f"Ошибка загрузки шаблонов: {e}")
@@ -84,8 +88,9 @@ def load_templates() -> dict:
 def save_templates(templates: dict) -> bool:
     """Сохраняет текущие шаблоны в локальный JSON файл."""
     try:
-        with open(TEMPLATES_FILE, "w", encoding="utf-8") as f:
-            json.dump(templates, f, ensure_ascii=False, indent=2)
+        from storage import atomic_write_json
+
+        atomic_write_json(TEMPLATES_FILE, templates)
         return True
     except Exception as e:
         logger.error(f"Ошибка сохранения шаблонов в файл: {e}")

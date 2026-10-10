@@ -82,7 +82,7 @@ def test_startup_does_not_import_voice():
     assert result.returncode == 0, result.stderr
 
 
-def test_process_lifecycle(tmp_path, monkeypatch):
+def test_process_lifecycle(tmp_path, monkeypatch, premium_config):
     import welcome_gui
     import diagnostics
 
@@ -92,7 +92,7 @@ def test_process_lifecycle(tmp_path, monkeypatch):
         'import time\nprint("ready", flush=True)\ntime.sleep(60)\n'
     )
     manager = IntegrationManager(
-        SimpleNamespace(config_mgr=ConfigManager(tmp_path / "config.json")),
+        SimpleNamespace(config_mgr=premium_config),
         base_dir=tmp_path,
     )
     try:
@@ -107,7 +107,7 @@ def test_process_lifecycle(tmp_path, monkeypatch):
         manager.stop_all()
 
 
-def test_failed_child_is_reported(tmp_path, monkeypatch):
+def test_failed_child_is_reported(tmp_path, monkeypatch, premium_config):
     import welcome_gui
     import diagnostics
 
@@ -115,7 +115,7 @@ def test_failed_child_is_reported(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnostics, "validate_module", lambda *args: None)
     (tmp_path / "bad.py").write_text('raise RuntimeError("broken")\n')
     manager = IntegrationManager(
-        SimpleNamespace(config_mgr=ConfigManager(tmp_path / "config.json")),
+        SimpleNamespace(config_mgr=premium_config),
         base_dir=tmp_path,
     )
     manager.start("bad.py")

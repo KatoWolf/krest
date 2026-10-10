@@ -11,7 +11,10 @@ from storage import atomic_write_json
 
 CONFIG_PATH = Path(os.getenv("KREST_CONFIG_PATH", Path(__file__).resolve().parent / "config.json"))
 DEFAULT_CONFIG = {
-    "owner_name": "КатоВульф",
+    "owner_name": "",
+    "profile": {"onboarding_completed": False, "personality": "friendly"},
+    "license": {"code": ""},
+    "media": {"preferred_app": ""},
     "selected_theme": "Amethyst Modern",
     "app_settings": {
         "autostart": False,
@@ -164,8 +167,23 @@ def validate(data):
     path = data["app_settings"]["downloads_path"]
     if not isinstance(path, str) or not path.strip():
         raise ValueError("Укажите папку загрузок")
-    if not str(data["owner_name"]).strip():
+    name = data["owner_name"]
+    if not isinstance(name, str) or len(name.strip()) > 60 or any(ord(c) < 32 for c in name):
+        raise ValueError("Имя: до 60 символов без управляющих знаков")
+    data["owner_name"] = name.strip()
+    if type(data["profile"]["onboarding_completed"]) is not bool:
+        raise ValueError("Некорректное состояние профиля")
+    if data["profile"]["onboarding_completed"] and not name.strip():
         raise ValueError("Введите имя пользователя")
+    if data["profile"]["personality"] not in ("friendly", "concise", "lively"):
+        raise ValueError("Неизвестный стиль общения")
+    if not isinstance(data["license"]["code"], str) or len(data["license"]["code"]) > 4096:
+        raise ValueError("Некорректный код Premium")
+    if (
+        not isinstance(data["media"]["preferred_app"], str)
+        or len(data["media"]["preferred_app"]) > 512
+    ):
+        raise ValueError("Некорректный идентификатор плеера")
     for section in ("app_settings", "skills", "dota_guide"):
         for key, default in DEFAULT_CONFIG[section].items():
             if isinstance(default, bool) and not isinstance(data[section].get(key), bool):
@@ -212,6 +230,12 @@ class ConfigManager:
             data = json.loads(self.filepath.read_text(encoding="utf-8-sig"))
             if not isinstance(data, dict):
                 raise ValueError("Ожидался объект JSON")
+            if "profile" not in data and data.get("owner_name") in (
+                "Игорь",
+                "КатоВульф",
+                "KatoWolf",
+            ):
+                data["owner_name"] = ""
             return validate(merge(DEFAULT_CONFIG, data))
         except (ValueError, OSError) as exc:
             self.load_error = str(exc)
@@ -232,4 +256,6 @@ class ConfigManager:
             self.load_error = ""
 
     def is_premium(self):
-        return True  # Legacy GUI compatibility; local features are available without activation.
+        from licensing import status
+
+        return status(self.snapshot())["premium"]

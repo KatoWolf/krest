@@ -88,7 +88,7 @@ class AssistantState:
 
     @property
     def owner_name(self):
-        return self.config_getter().get("owner_name", "КатоВульф")
+        return self.config_getter().get("owner_name", "")
 
     def persist(self):
         with self._lock:

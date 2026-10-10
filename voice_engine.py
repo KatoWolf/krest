@@ -544,7 +544,7 @@ def apply_cyberpunk_dsp(
 def prepare_text(text):
     clean_text = clean_text_for_tts(verbalize_numbers(text))
 
-    owner_name = str(getattr(config, "OWNER_NAME", "KatoWolf"))
+    owner_name = str(_settings_getter().get("owner_name", ""))
     owner_pron = getattr(config, "OWNER_PRONUNCIATION", None)
 
     formatted_pronunciation = auto_accentuate_name(owner_name, owner_pron)

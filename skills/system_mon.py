@@ -234,8 +234,10 @@ def try_get_gpu_info() -> Dict[str, Any]:
     # Резервный запрос через nvidia-smi CLI
     try:
         cmd = "nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits"
-        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL, text=True)
-        parts = [p.strip() for p in output.strip().split(",")]
+        output = subprocess.check_output(
+            cmd.split(), stderr=subprocess.DEVNULL, text=True, timeout=3
+        )
+        parts = [p.strip() for p in output.strip().splitlines()[0].split(",")]
         if len(parts) >= 4:
             gpu_data = {
                 "load_percent": int(parts[0]),

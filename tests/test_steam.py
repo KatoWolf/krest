@@ -208,12 +208,12 @@ def test_presence_payload_uses_activity_without_user_token():
     }
 
 
-def test_real_custom_script_handshake_notifications_and_refresh(tmp_path):
+def test_real_custom_script_handshake_notifications_and_refresh(tmp_path, premium_config):
     from integrations import IntegrationManager
     from notifications import NotificationQueue
     from queue import Empty
 
-    cfg = ConfigManager(tmp_path / "config.json")
+    cfg = premium_config
     values = cfg.snapshot()
     values["services"] = {
         "custom-test.py": {
@@ -258,17 +258,26 @@ def test_real_custom_script_handshake_notifications_and_refresh(tmp_path):
     assert not manager.processes
 
 
-def test_steam_service_process_builds_local_catalog_without_credentials(tmp_path):
+def test_steam_service_process_builds_local_catalog_without_credentials(
+    tmp_path, premium_config, issuer, monkeypatch
+):
     from integrations import IntegrationManager
 
     folder = tmp_path / "Steam/steamapps"
     folder.mkdir(parents=True)
     (folder / "appmanifest_730.acf").write_text('"appid" "730" "name" "CS2" "StateFlags" "4"')
-    cfg = ConfigManager(tmp_path / "config.json")
+    cfg = premium_config
     values = cfg.snapshot()
     values["steam"]["install_path"] = str(folder.parent)
     cfg.save_config(values)
-    manager = IntegrationManager(SimpleNamespace(config_mgr=cfg))
+    # A real child process receives a distribution with this test issuer's public key.
+    import shutil
+
+    shutil.copy("steam_bot.py", tmp_path / "steam_bot.py")
+    shutil.copy("licensing.py", tmp_path / "licensing.py")
+    shutil.copy(issuer[1], tmp_path / "license_public_key.pem")
+    monkeypatch.setenv("PYTHONPATH", str(Path.cwd()))
+    manager = IntegrationManager(SimpleNamespace(config_mgr=cfg), base_dir=tmp_path)
     try:
         manager.start("steam_bot.py")
         deadline = time.monotonic() + 5

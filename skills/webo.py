@@ -374,7 +374,7 @@ def launch_steam_game(text: str, game_name: str = ""):
 
     if not games:
         voice.speak("Установленные игры Steam не обнаружены или библиотека недоступна.")
-        return
+        return False
 
     matched_game = match_game_by_user_input(target_query, games)
 
@@ -385,9 +385,11 @@ def launch_steam_game(text: str, game_name: str = ""):
         logger.info(f"Запуск Steam игры: {title} (AppID: {appid})")
 
         # Запуск через родовой протокол Steam
-        webbrowser.open(f"steam://rungameid/{appid}")
+        if not webbrowser.open(f"steam://rungameid/{appid}"):
+            return {"status": "error", "message": "Не удалось открыть протокол Steam."}
     else:
         voice.speak(f"Не удалось найти игру в библиотеке по запросу '{target_query}'.")
+        return False
 
 
 @skill(
@@ -567,7 +569,9 @@ def search_wikipedia(text: str, query: str = ""):
     if summary:
         voice.speak(summary[:350])
     else:
-        voice.speak(f"Статья о {clean_query} не найдена в Википедии. Открываю поиск в браузере.")
+        voice.speak(
+            f"Не удалось получить статью о {clean_query} из Википедии. Открываю поиск в браузере."
+        )
         webbrowser.open(f"https://yandex.ru/search/?text={urllib.parse.quote(clean_query)}")
 
 

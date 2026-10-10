@@ -29,7 +29,7 @@ def reload_config() -> dict:
 def get_owner_name() -> str:
     """Динамическое получение имени владельца из config.json."""
     cfg = _load_user_config()
-    return cfg.get("owner_name", "КатоВульф")
+    return cfg.get("owner_name") or "Владелец"
 
 
 # ==========================================
@@ -123,7 +123,9 @@ TELEGRAM_PHONE = _api_cfg.get("telegram_phone", "")
 # ==========================================
 # 7. Статус Лицензии и Переключатели Модулей
 # ==========================================
-IS_PREMIUM = _user_cfg.get("license", {}).get("is_premium", False)
+from licensing import status as license_status
+
+IS_PREMIUM = license_status(_user_cfg)["premium"]
 MODULES = _user_cfg.get(
     "modules",
     {

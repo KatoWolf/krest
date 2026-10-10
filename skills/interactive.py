@@ -304,8 +304,6 @@ def make_decision(text: str, options: str = ""):
 
 @skill(
     keywords=[
-        "аптайм",
-        "время работы пк",
         "сколько работает компьютер",
         "время работы системы",
     ],
@@ -348,7 +346,7 @@ def get_system_uptime(text: str):
         "запусти утренний сценарий",
         "утренний отчет",
     ],
-    description="Приветствие, сводка системы (время, дата, память, батарея) и запуск рабочих программ",
+    description="Приветствие, сводка системы и ежедневных дел",
     category="Сценарии",
 )
 def good_morning_ritual(text: str):
@@ -400,15 +398,98 @@ def good_morning_ritual(text: str):
             sys_info.append(f"Заряд аккумулятора {battery.percent}%, ноутбук {plugged}.")
 
     status_str = " ".join(sys_info)
-    full_speech = f"{greeting} {status_str} Запускаю рабочее окружение!"
+    name = state.owner_name
+    full_speech = (
+        (f"{name}, " if name else "") + f"{greeting} {status_str} " + daily_briefing(state)
+    )
 
     if state.is_muted:
         show_toast("Доброе утро!", full_speech)
     voice.speak(full_speech)
 
-    # 3. Автозапуск программ (раскомментируйте или добавьте нужные приложения)
-    try:
-        # subprocess.Popen(["cmd", "/c", "start", "https://google.com"])
-        pass
-    except Exception as e:
-        logger.error(f"Ошибка автозапуска программ утреннего ритуала: {e}")
+
+@skill(
+    keywords=["привет", "здравствуй", "ты здесь", "крест на связи"],
+    description="Поздороваться с Крест",
+    category="Общение",
+)
+def greet(state):
+    from personality import reply
+
+    return reply("greeting", state)
+
+
+@skill(
+    keywords=["спасибо", "благодарю", "молодец"],
+    description="Ответ на благодарность",
+    category="Общение",
+)
+def thanks(state):
+    from personality import reply
+
+    return reply("thanks", state)
+
+
+@skill(keywords=["кто ты", "расскажи о себе"], description="Знакомство с Крест", category="Общение")
+def introduce(state):
+    from personality import reply
+
+    return reply("identity", state)
+
+
+@skill(keywords=["как дела", "как ты"], description="Короткий ответ Крест", category="Общение")
+def mood(state):
+    from personality import reply
+
+    return reply("mood", state)
+
+
+@skill(
+    keywords=["поддержи меня", "я устал", "я устала"],
+    description="Несколько слов поддержки",
+    category="Общение",
+)
+def support(state):
+    from personality import reply
+
+    return reply("support", state)
+
+
+@skill(
+    keywords=["расскажи шутку", "пошути"],
+    description="Небольшая шутка из локального набора",
+    category="Общение",
+)
+def joke(state):
+    from personality import reply
+
+    return reply("joke", state)
+
+
+@skill(
+    keywords=["как меня зовут", "мое имя", "моё имя"],
+    description="Имя из вашего профиля",
+    category="Общение",
+)
+def owner_identity(state):
+    return (
+        f"Вы попросили обращаться к вам: {state.owner_name}."
+        if state.owner_name
+        else "Имя пока не задано. Его можно указать в настройках."
+    )
+
+
+@skill(
+    keywords=["план на сегодня", "мои ежедневные дела"],
+    description="Ежедневные задачи и непрочитанные напоминания",
+    category="Сценарии",
+)
+def daily_briefing(state):
+    pending = state.reminders()
+    tasks = list(state.daily_tasks)
+    lines = [f"Ежедневных дел: {len(tasks)}. Непрочитанных напоминаний: {len(pending)}."]
+    lines.extend(
+        f"{datetime.datetime.fromtimestamp(t['end_time']).strftime('%H:%M')}: {t['label']}"
+        for t in sorted(tasks, key=lambda x: x["end_time"])
+    )
+    return "\n".join(lines)

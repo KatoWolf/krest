@@ -15,6 +15,9 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 def redact(text, settings):
+    code = settings.get("license", {}).get("code", "")
+    if code:
+        text = text.replace(code, "[код скрыт]")
     for service in settings.get("services", {}).values():
         if isinstance(service, dict) and service.get("token"):
             text = text.replace(str(service["token"]), "[скрыто]")
@@ -93,6 +96,9 @@ class IntegrationManager:
         }
 
     def send(self, filename, command):
+        from licensing import require_premium
+
+        require_premium(self.app.config_mgr.snapshot())
         with self._lock:
             proc = self.processes.get(filename)
             capabilities = self.bridge.get(filename, {}).get("capabilities", [])
@@ -175,6 +181,9 @@ class IntegrationManager:
             handler.close()
 
     def start(self, filename):
+        from licensing import require_premium
+
+        require_premium(self.app.config_mgr.snapshot())
         with self._lock:
             if self._closed:
                 raise RuntimeError("Крест завершает работу; новые процессы не запускаются")
@@ -247,6 +256,13 @@ class IntegrationManager:
         with self._lock:
             self.stop(filename)
             return self.start(filename)
+
+    def enforce_license(self):
+        from licensing import status
+
+        if not status(self.app.config_mgr.snapshot())["premium"]:
+            for filename in list(self.processes):
+                self.stop(filename)
 
     def stop_all(self):
         with self._lock:

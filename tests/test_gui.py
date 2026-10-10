@@ -18,6 +18,14 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
     app = welcome_gui.ControlCenterApp()
     app.report_callback_exception = lambda *args: errors.append(str(args))
     try:
+        assert app.onboarding is not None
+        assert not app.owner_var.get()
+        assert not app.runtime._threads
+        app._complete_welcome()
+        assert app.onboarding is not None
+        app.owner_var.set("Тестовый пользователь")
+        app._complete_welcome()
+        assert app.onboarding is None and app.runtime._threads
         for code in app.pages:
             app.switch_page(code)
             app.update()
@@ -167,6 +175,76 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
     finally:
         app.integration.stop_all()
         app.runtime.close()
+        import logging
+
+        logging.getLogger().removeHandler(app._log_handler)
+        welcome_gui.indicator_controller.stop()
+        app.destroy()
+
+
+def test_profile_premium_themes_and_music_selection(tmp_path, monkeypatch, issuer):
+    import welcome_gui
+    import media_control
+    from unittest.mock import MagicMock
+
+    original = welcome_gui.ConfigManager
+    monkeypatch.setattr(welcome_gui, "ConfigManager", lambda: original(tmp_path / "config.json"))
+    app = welcome_gui.ControlCenterApp()
+    try:
+        app.owner_var.set("Алексей")
+        app.personality_var.set("Краткая")
+        app._complete_welcome()
+        assert app.config_mgr.snapshot()["profile"] == {
+            "onboarding_completed": True,
+            "personality": "concise",
+        }
+        app.apply_theme("Arctic Light")
+        assert app.theme_var.get() == "Amethyst Modern"
+        assert app.current_page == "license"
+        app.license_code_var.set("invalid")
+        app._activate_premium()
+        assert not app.config_mgr.is_premium()
+        assert "подписи" in app.license_feedback_var.get()
+        app.settings_vars["weather_city"].set("Казань")  # Draft survives activation.
+        app.license_code_var.set(issuer[2])
+        app._activate_premium()
+        assert app.config_mgr.is_premium()
+        assert app.settings_vars["weather_city"].get() == "Казань"
+        assert app.config_mgr.snapshot()["app_settings"]["weather_city"] != "Казань"
+        for name in ("Arctic Light", "Ocean Blue", "Copper Night", "Rose Quartz"):
+            app.apply_theme(name)
+            app.update()
+            assert app.theme_var.get() == name
+        assert app.save_all_settings()
+        monkeypatch.setattr(
+            media_control,
+            "query",
+            lambda **kw: [
+                {
+                    "app_id": "YandexMusic.exe",
+                    "app_name": "Яндекс Музыка",
+                    "artist": "Тест",
+                    "title": "Трек",
+                    "is_playing": True,
+                }
+            ],
+        )
+        app.switch_page("music")
+        app.after(200, app.quit)
+        app.mainloop()
+        app.music_tree.selection_set("0")
+        app._select_music()
+        assert app.config_mgr.snapshot()["media"]["preferred_app"] == "YandexMusic.exe"
+        app._auto_music()
+        assert app.config_mgr.snapshot()["media"]["preferred_app"] == ""
+        app._deactivate_premium()
+        assert not app.config_mgr.is_premium()
+        assert app.theme_var.get() == "Amethyst Modern"
+        assert not app.license_code_var.get()
+        assert original(tmp_path / "config.json").snapshot()["profile"]["onboarding_completed"]
+    finally:
+        app.runtime.close()
+        app.integration.stop_all()
         import logging
 
         logging.getLogger().removeHandler(app._log_handler)

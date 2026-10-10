@@ -36,6 +36,8 @@ VK_D = 0x44
 VK_E = 0x45
 VK_I = 0x49
 VK_L = 0x4C
+VK_M = 0x4D
+VK_N = 0x4E
 VK_R = 0x52
 VK_S = 0x53
 VK_V = 0x56
@@ -76,11 +78,11 @@ def force_set_foreground_window(hwnd: int):
 
 @skill(
     keywords=["сверни все", "свернуть все", "покажи рабочий стол", "рабочий стол"],
-    description="Свернуть все окна и показать рабочий стол (Win + D)",
+    description="Свернуть все окна и показать рабочий стол (Win + M)",
     category="Windows",
 )
 def minimize_all_windows(text: str = ""):
-    press_key_combination([VK_LWIN, VK_D])
+    press_key_combination([VK_LWIN, VK_M])
     voice.speak("Свернула все окна.")
 
 
@@ -201,7 +203,7 @@ def close_active_window(text: str = ""):
         r"закрой (?P<target>.+)",
     ],
     keywords=["закрой приложение", "заверши программу", "убей процесс"],
-    description="Завершение процесса по имени или фрагменту названия",
+    description="Завершение процесса по точному имени исполняемого файла",
     category="Windows",
 )
 def kill_process_by_name(text: str = "", target: str = ""):
@@ -235,48 +237,67 @@ def kill_process_by_name(text: str = "", target: str = ""):
     if killed:
         voice.speak(f"Приложение {target} успешно закрыто.")
     else:
-        voice.speak(f"Не удалось найти запущенный процесс {target}.")
+        voice.speak(f"Не удалось завершить процесс {target}. Проверьте точное имя и права доступа.")
+        return False
+
+
+def find_hung_processes():
+    found = {}
+
+    def inspect_window(hwnd, extra):
+        if ctypes.windll.user32.IsWindowVisible(hwnd) and ctypes.windll.user32.IsHungAppWindow(
+            hwnd
+        ):
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value and pid.value != os.getpid():
+                try:
+                    found[pid.value] = psutil.Process(pid.value)
+                except psutil.Error:
+                    pass
+        return True
+
+    callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    ctypes.windll.user32.EnumWindows(callback(inspect_window), 0)
+    return list(found.values())
 
 
 @skill(
-    keywords=[
-        "закрой зависшие",
-        "убей зависшие",
-        "проверь зависшие",
-        "зависшие программы",
-    ],
-    description="Проверка окон в состоянии 'Не отвечает' и их принудительное завершение",
+    keywords=["проверь зависшие", "зависшие программы"],
+    description="Показать зависшие программы, не завершая их",
     category="Windows",
 )
-def kill_frozen_processes(text: str = ""):
-    frozen_count = 0
-    killed_names = []
+def report_frozen_processes(text=""):
+    names = []
+    for proc in find_hung_processes():
+        try:
+            names.append(proc.name())
+        except psutil.Error:
+            continue
+    return "Не отвечают: " + ", ".join(names) if names else "Зависших окон не обнаружено."
 
-    def enum_frozen_callback(hwnd, extra):
-        nonlocal frozen_count
-        if ctypes.windll.user32.IsWindowVisible(hwnd):
-            if ctypes.windll.user32.IsHungAppWindow(hwnd):
-                pid = ctypes.c_ulong()
-                ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                try:
-                    proc = psutil.Process(pid.value)
-                    proc_name = proc.name()
-                    proc.kill()
-                    killed_names.append(proc_name)
-                    frozen_count += 1
-                    logger.info(f"Завершён зависший процесс: {proc_name} (PID: {pid.value})")
-                except Exception as e:
-                    logger.error(f"Не удалось завершить зависший PID {pid.value}: {e}")
-        return True
 
-    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-    ctypes.windll.user32.EnumWindows(EnumWindowsProc(enum_frozen_callback), 0)
-
-    if frozen_count > 0:
-        names_str = ", ".join(set(killed_names))
-        voice.speak(f"Обнаружены и завершены зависшие программы: {names_str}.")
-    else:
-        voice.speak("Зависших программ в системе не обнаружено.")
+@skill(
+    keywords=["закрой зависшие", "убей зависшие"],
+    description="Принудительно завершить процессы с зависшими окнами",
+    category="Windows",
+)
+def kill_frozen_processes(text=""):
+    closed, errors = [], []
+    for proc in find_hung_processes():
+        try:
+            name = proc.name()
+            proc.kill()
+            closed.append(name)
+        except psutil.Error:
+            errors.append(str(proc.pid))
+    message = "Завершены: " + ", ".join(closed) if closed else "Нет завершённых зависших программ."
+    if errors:
+        return {
+            "status": "error",
+            "message": message + " Не удалось завершить PID: " + ", ".join(errors),
+        }
+    return message
 
 
 # ==========================================
@@ -361,7 +382,8 @@ def open_clipboard_history(text: str = ""):
     category="Windows",
 )
 def open_action_center(text: str = ""):
-    press_key_combination([VK_LWIN, VK_A])
+    key = VK_N if sys.getwindowsversion().build >= 22000 else VK_A
+    press_key_combination([VK_LWIN, key])
     voice.speak("Открываю центр уведомлений.")
 
 
@@ -428,9 +450,11 @@ def empty_recycle_bin(text: str = ""):
             voice.speak("Корзина успешно очищена.")
         else:
             voice.speak("Корзина уже пуста или произошла ошибка.")
+            return False
     except Exception as e:
         logger.error(f"Ошибка при очистке корзины: {e}")
         voice.speak("Не удалось очистить корзину.")
+        return False
 
 
 @skill(
@@ -444,5 +468,6 @@ def empty_recycle_bin(text: str = ""):
     category="Windows",
 )
 def lock_workstation(text: str = ""):
-    voice.speak("Блокирую систему.")
-    ctypes.windll.user32.LockWorkStation()
+    if not ctypes.windll.user32.LockWorkStation():
+        return {"status": "error", "message": "Windows не разрешила блокировку сеанса."}
+    return "Сеанс заблокирован."

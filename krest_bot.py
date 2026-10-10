@@ -737,6 +737,10 @@ def run_krest_service(shared_queue=None):
 
 
 if __name__ == "__main__":
+    from licensing import require_premium
+    from configuration import ConfigManager
+
+    require_premium(ConfigManager().snapshot())
     from notifications import NotificationQueue
 
     run_krest_service(NotificationQueue())

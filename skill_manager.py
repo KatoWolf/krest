@@ -63,6 +63,8 @@ def format_result(value):
     if isinstance(value, dict):
         if value.get("status") == "error":
             return value.get("message", "Не удалось выполнить команду")
+        if "message" in value and ("success" in value or "status" in value):
+            return str(value["message"])
         if "cpu_usage_percent" in value:
             ram = value["ram"]
             return f"Процессор: {value['cpu_usage_percent']}%. Память: {ram['percent']}%, использовано {ram['used_gb']} из {ram['total_gb']} ГБ."
@@ -164,6 +166,8 @@ class SkillManager:
 
     def match(self, text):
         clean = text.casefold().strip(" ,.!?")
+        if re.match(r"^(?:не|не надо|не нужно)\s", clean) and clean != "не нравится":
+            return None
         candidates = []
         for entry in self.catalog():
             for keyword in entry.keywords:
@@ -174,8 +178,13 @@ class SkillManager:
             for pattern in entry.patterns:
                 match = pattern.fullmatch(clean)
                 if match:
-                    literal = re.split(r"[([.?\\]", pattern.pattern, maxsplit=1)[0]
-                    candidates.append((2002 + len(literal), entry, match.groupdict()))
+                    captured = sum(
+                        match.end(name) - match.start(name)
+                        for name in match.groupdict()
+                        if match.start(name) >= 0
+                    )
+                    specificity = max(0, len(clean) - captured)
+                    candidates.append((5000 + specificity, entry, match.groupdict()))
         if not candidates:
             return None
         # Stable ordering is by specificity, then skill identity, independent of file traversal.
@@ -232,6 +241,10 @@ class SkillManager:
                 isinstance(value, dict)
                 and (value.get("status") == "error" or value.get("success") is False)
             )
+            if not success and isinstance(value, dict):
+                detail = format_result(value)
+                if detail not in output:
+                    output = (output + "\n" + detail).strip()
             return CommandResult(
                 True, success, output or "Команда выполнена.", entry.id, bool(messages)
             )

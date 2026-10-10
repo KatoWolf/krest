@@ -15,21 +15,24 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
 from integrations import IntegrationManager
-from themes import THEMES
+from themes import THEMES, PREMIUM_THEMES
 from guikrest import indicator_controller
 from command_book import CommandBook
 from service_pages import ServicePages
 from voice_page import VoicePages
+from product_pages import ProductPages, PERSONALITIES
+import licensing
 
 logger = logging.getLogger(__name__)
 BASE_DIR = str(Path(__file__).resolve().parent)
 TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
-class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
+class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
     NAV = [
         ("actions", "Обзор"),
         ("voice", "Голос"),
+        ("music", "Музыка"),
         ("skills", "Навыки"),
         ("favorites", "Мои команды"),
         ("timers", "Таймеры"),
@@ -41,7 +44,7 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         ("dota", "Dota 2"),
         ("settings", "Настройки"),
         ("logs", "Журнал"),
-        ("license", "О программе"),
+        ("license", "Premium"),
     ]
 
     def __init__(self):
@@ -69,6 +72,7 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         )
         self.integration = IntegrationManager(self)
         self.init_voice_page()
+        self.init_product_pages()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
         self.steam_vars = {
@@ -107,6 +111,8 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self.dirty = False
         for variable in [
             self.owner_var,
+            self.personality_var,
+            self.media_source_var,
             self.theme_var,
             *self.settings_vars.values(),
             *self.api_vars.values(),
@@ -116,6 +122,8 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
             *self.presence_vars.values(),
         ]:
             variable.trace_add("write", self._mark_dirty)
+        if self.theme_var.get() in PREMIUM_THEMES and not self.config_mgr.is_premium():
+            self.theme_var.set("Amethyst Modern")
         self.theme = THEMES.get(self.theme_var.get(), THEMES["Amethyst Modern"])
 
         class UILogHandler(logging.Handler):
@@ -130,10 +138,8 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self.bind("<Escape>", lambda e: voice.stop_speaking())
         self.bind("<Unmap>", self._on_minimize)
         indicator_controller.attach(self)
-        self.runtime.start()
         self._poll_job = self.after(100, self._poll)
-        self._background(self.integration.autostart)
-        self._background(self._startup_checks)
+        self._show_welcome()
         if self.config_mgr.load_error:
             self._append_log(
                 "Настройки повреждены: "
@@ -252,13 +258,14 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         self.label(side, "✝ КРЕСТ", large=True).pack(anchor="w", pady=(0, 4))
-        self.label(side, "Личный ассистент", muted=True).pack(anchor="w", pady=(0, 28))
+        self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
+        self.edition_label.pack(anchor="w", pady=(0, 16))
         self.nav_buttons = {}
         for key, title in self.NAV:
             button = ttk.Button(
-                side, text=title, padding=(8, 4), command=lambda k=key: self.switch_page(k)
+                side, text=title, padding=(8, 3), command=lambda k=key: self.switch_page(k)
             )
-            button.pack(fill="x", pady=2)
+            button.pack(fill="x", pady=1)
             self.nav_buttons[key] = button
         ttk.Button(side, text="Завершить работу", command=self._real_quit).pack(
             side="bottom", fill="x"
@@ -307,6 +314,7 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self.bind_all("<Button-5>", self._wheel)
         self.build_actions_tab()
         self.build_voice_tab()
+        self.build_music_tab()
         self.build_skills_tab()
         self.build_favorites_tab()
         self.build_timers_tab()
@@ -317,7 +325,7 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self.build_dota_tab()
         self.build_settings_tab()
         self.build_logs_tab()
-        self.build_about_tab()
+        self.build_premium_tab()
         self.switch_page(self.current_page)
 
     def _wheel(self, event):
@@ -342,14 +350,21 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
             self.refresh_skills()
         if code == "logs":
             self.refresh_log()
+        if code == "music":
+            self._refresh_music()
 
     def build_actions_tab(self):
         page = self.page_bodies["actions"]
         card = self.card(
             page,
-            "На связи, " + self.owner_var.get(),
+            "Центр управления",
             "Все навыки работают через единое ядро. Команду можно ввести текстом или произнести после обращения.",
         )
+        self.home_greeting = self.label(
+            card,
+            "На связи, " + self.owner_var.get() if self.owner_var.get() else "Готова к знакомству.",
+        )
+        self.home_greeting.pack(anchor="w", pady=(0, 8))
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x")
         self.label(row, textvariable=self.voice_var).pack(side="left")
@@ -995,6 +1010,13 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
     def build_settings_tab(self):
         card = self.card(self.page_bodies["settings"], "Профиль и оформление")
         self.entry_owner_name = self.field(card, "Ваше имя", self.owner_var)
+        self.label(card, "Стиль общения", muted=True).pack(anchor="w")
+        ttk.Combobox(
+            card,
+            textvariable=self.personality_var,
+            values=list(PERSONALITIES.values()),
+            state="readonly",
+        ).pack(fill="x", pady=8)
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=6)
         self.label(row, "Тема", width=24).pack(side="left")
@@ -1087,27 +1109,17 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         )
         self.log_text.pack(fill="both", expand=True)
 
-    def build_about_tab(self):
-        card = self.card(
-            self.page_bodies["license"],
-            "КРЕСТ · исходный код",
-            "Python-проект для дальнейшей разработки. Сборка EXE и установщик не создаются.",
-        )
-        self.label(
-            card,
-            "Подключено 11 модулей навыков, планировщик, Steam, Telegram, Discord и Dota GSI.\n\n"
-            "Системные команды Windows требуют запуска на Windows. Голос требует моделей Vosk/Silero и аудиоустройств.\n\n"
-            "Ключи и Telegram-сессии хранятся локально. В журнале токены скрываются.\n\n"
-            "README содержит запуск, зависимости, примеры команд и ограничения проверок.",
-            wraplength=690,
-        ).pack(anchor="w")
-        ttk.Button(card, text="Проверить модули", command=self._diagnostics).pack(
-            anchor="w", pady=15
-        )
-
     def _draft(self):
         data = self.config_mgr.snapshot()
         data["owner_name"] = self.owner_var.get().strip()
+        data["profile"]["onboarding_completed"] = data["profile"]["onboarding_completed"] or bool(
+            data["owner_name"]
+        )
+        data["profile"]["personality"] = next(
+            key for key, value in PERSONALITIES.items() if value == self.personality_var.get()
+        )
+        data["media"]["preferred_app"] = self.media_source_var.get()
+
         data["selected_theme"] = self.theme_var.get()
         data["command_aliases"] = dict(self.aliases)
         data["pronunciations"] = dict(self.pronunciations)
@@ -1144,6 +1156,7 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self.dirty = False
         self.save_button.configure(text="Сохранить изменения")
         self.status_var.set("Настройки сохранены. Для ботов и моделей нужен перезапуск.")
+        self.home_greeting.configure(text="На связи, " + self.owner_var.get())
         self.refresh_skills()
         self._update_steam(force=True)
         if not self.config_mgr.config["skills"].get("gid", True):
@@ -1154,6 +1167,11 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         return True
 
     def apply_theme(self, name):
+        if name in PREMIUM_THEMES and not self.config_mgr.is_premium():
+            self.theme_var.set(next(key for key, value in THEMES.items() if value is self.theme))
+            self.status_var.set("Эта тема доступна в Premium. Активируйте код на странице Premium.")
+            self.switch_page("license")
+            return
         if name not in THEMES:
             return
         self.theme = THEMES[name]
@@ -1213,6 +1231,10 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self._append_log("Ошибка: " + str(text))
 
     def _integration_action(self, filename, action):
+        if action in ("start", "restart") and not self.config_mgr.is_premium():
+            self._report_error("Подключение ботов доступно в Premium")
+            self.switch_page("license")
+            return
         if filename in self.busy_services:
             return
         if action in ("start", "restart") and not self.save_all_settings(quiet=True):
@@ -1235,6 +1257,10 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
         self._background(operation)
 
     def _auth(self, login=False):
+        if not self.config_mgr.is_premium():
+            self._report_error("Подключение Telegram доступно в Premium")
+            self.switch_page("license")
+            return
         if self.auth_busy or not self.save_all_settings(quiet=True):
             return
         code = self.code_var.get().strip()
@@ -1443,6 +1469,8 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
                     fg=self.theme["text" if value.success else "danger"],
                 )
                 self._append_log(value.text)
+                if value.skill_id.startswith("skills.media."):
+                    self.media_status_var.set(value.text)
             elif kind == "speech":
                 self._append_log(value)
                 if self.config_mgr.config["app_settings"]["indicator_enabled"]:
@@ -1519,6 +1547,23 @@ class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
                     button.configure(state="normal" if enabled else "disabled")
             self._update_timers()
             self._update_reminders()
+            self._update_license_view()
+            if (
+                not self.config_mgr.is_premium()
+                and self.integration.processes
+                and not self._license_check_busy
+            ):
+                self._license_check_busy = True
+
+                def enforce():
+                    try:
+                        self.integration.enforce_license()
+                    finally:
+                        self.post_ui(lambda: setattr(self, "_license_check_busy", False))
+
+                self._background(enforce)
+            if not self.config_mgr.is_premium() and self.theme_var.get() in PREMIUM_THEMES:
+                self.apply_theme("Amethyst Modern")
             self.download_label.configure(text=self.runtime.download_status)
             self._update_steam()
             current, pending = self.runtime.command_status()

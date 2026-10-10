@@ -307,6 +307,10 @@ def start_ds_bridge(notifications_queue=None):
 
 
 if __name__ == "__main__":
+    from licensing import require_premium
+    from configuration import ConfigManager
+
+    require_premium(ConfigManager().snapshot())
     # Запуск напрямую для теста (без очереди)
     from notifications import NotificationQueue
 
