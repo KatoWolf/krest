@@ -42,13 +42,14 @@ class VoicePages:
         self.mic_meter.pack(fill="x", pady=8)
         self.mic_level_label = self.label(card, "Микрофон выключен", muted=True, wraplength=680)
         self.mic_level_label.pack(anchor="w")
+        tuning = self.advanced(card, "Точная настройка распознавания")
         for key, label in (
             ("speech_pause_ms", "Пауза в конце, мс"),
             ("speech_threshold", "Порог речи, 20–5000"),
             ("speech_confidence", "Порог уверенности, %"),
             ("tts_threads", "Потоки CPU, 1–4"),
         ):
-            self.field(card, label, self.settings_vars[key])
+            self.field(tuning, label, self.settings_vars[key])
         ttk.Checkbutton(
             card,
             text="Сохранять звуковой эффект Крест",
@@ -87,6 +88,12 @@ class VoicePages:
             "Выключите голос. Для измерения фона помолчите пять секунд; для тестовой записи произнесите команду. Запись остаётся только в памяти.",
         )
         self.field(card, "Имя / индекс микрофона", self.settings_vars["microphone"])
+        ttk.Button(
+            card,
+            text="Настроить порог автоматически · 5 секунд тишины",
+            style="Accent.TButton",
+            command=lambda: self._microphone_action("auto"),
+        ).pack(anchor="w", pady=8)
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=8)
         for title, fn in (
@@ -143,9 +150,12 @@ class VoicePages:
             self._report_error("Сначала выключите голос и дождитесь его остановки")
             return
         device = self.settings_vars["microphone"].get()
+        previous_threshold = self.settings_vars["speech_threshold"].get()
         self.audio_test_busy = True
         self.mic_test_status.set(
-            "Идёт проверка…" if action != "calibrate" else "Пять секунд тишины: измеряю фон…"
+            "Пять секунд тишины: измеряю фон…"
+            if action in ("calibrate", "auto")
+            else "Идёт проверка…"
         )
 
         def work():
@@ -154,8 +164,16 @@ class VoicePages:
                     self.microphone_test.playback()
                     result = "Воспроизведение завершено"
                 else:
-                    result = self.microphone_test.record(device, calibrate=action == "calibrate")
-                self.post_ui(lambda: self.mic_test_status.set(result))
+                    result = self.microphone_test.record(
+                        device, calibrate=action in ("calibrate", "auto")
+                    )
+                if action == "auto":
+                    value = self.microphone_test.noise_threshold
+                    self.post_ui(
+                        lambda: self._save_auto_threshold(value, device, previous_threshold)
+                    )
+                else:
+                    self.post_ui(lambda: self.mic_test_status.set(result))
             except Exception as exc:
                 message = "Проверка не удалась: " + str(exc)
                 self.post_ui(lambda: self.mic_test_status.set(message))
@@ -164,6 +182,34 @@ class VoicePages:
                 self.post_ui(lambda: setattr(self, "audio_test_busy", False))
 
         self._background(work)
+
+    def _save_auto_threshold(self, value, device, previous_threshold):
+        if value is None:
+            self.mic_test_status.set("Не удалось измерить фон. Настройки сохранены прежними.")
+            return
+        if (
+            self.settings_vars["microphone"].get() != device
+            or self.settings_vars["speech_threshold"].get() != previous_threshold
+        ):
+            self.mic_test_status.set(
+                "Во время проверки вы изменили настройки. Автоматический порог не применён."
+            )
+            return
+        cfg = self.config_mgr.snapshot()
+        cfg["app_settings"]["speech_threshold"] = value
+        cfg["app_settings"]["microphone"] = device
+        try:
+            self.config_mgr.save_config(cfg)
+        except (OSError, ValueError) as exc:
+            self.mic_test_status.set("Не удалось сохранить порог: " + str(exc))
+            return
+        dirty = self.dirty
+        self.settings_vars["speech_threshold"].set(value)
+        self.dirty = dirty
+        self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
+        self.mic_test_status.set(
+            f"Порог {value} сохранён. Включите голос и проверьте обычную команду."
+        )
 
     def _apply_mic_threshold(self):
         value = self.microphone_test.noise_threshold

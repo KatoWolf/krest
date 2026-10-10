@@ -67,7 +67,12 @@ class ServicePages:
         ttk.Checkbutton(
             parent, text="Запускать вместе с Крест", variable=self.service_autostart[filename]
         ).pack(anchor="w", pady=4)
-        row = tk.Frame(parent, bg=self.theme["card"])
+        options = (
+            parent
+            if filename.startswith("custom-")
+            else self.advanced(parent, "Заменить встроенный скрипт")
+        )
+        row = tk.Frame(options, bg=self.theme["card"])
         row.pack(fill="x")
         ttk.Button(
             row, text="Найти скрипт бота…", command=lambda: self._choose_service_script(filename)
@@ -102,11 +107,12 @@ class ServicePages:
         )
         self.field(card, "Steam Web API Key", self.api_vars["steam_api_key"], True)
         self.field(card, "SteamID64", self.api_vars["steam_id"])
-        self.field(card, "Папка Steam", self.steam_vars["install_path"])
-        ttk.Button(card, text="Найти папку Steam…", command=self._choose_steam_folder).pack(
+        advanced = self.advanced(card, "Папка Steam и частота обновления")
+        self.field(advanced, "Папка Steam", self.steam_vars["install_path"])
+        ttk.Button(advanced, text="Найти папку Steam…", command=self._choose_steam_folder).pack(
             anchor="w"
         )
-        self.field(card, "Проверять каждые, мин.", self.steam_vars["poll_minutes"])
+        self.field(advanced, "Проверять каждые, мин.", self.steam_vars["poll_minutes"])
         ttk.Checkbutton(
             card,
             text="Доставлять события Steam мне в Telegram",

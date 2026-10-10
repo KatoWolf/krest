@@ -23,13 +23,16 @@ from voice_page import VoicePages
 from product_pages import ProductPages, PERSONALITIES
 from workflow_pages import WorkflowPages, MODES, NOTICE_MODES
 import licensing
+from ui_design import apply_style, RoundedCard, Disclosure
+from app_icons import set_process_identity, install_window_icon, load_image
+from desktop_shell import DesktopShell
 
 logger = logging.getLogger(__name__)
 BASE_DIR = str(Path(__file__).resolve().parent)
 TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
-class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk.Tk):
+class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, ServicePages, tk.Tk):
     NAV = [
         ("actions", "Обзор"),
         ("voice", "Голос"),
@@ -51,19 +54,48 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         ("license", "Premium"),
     ]
 
+    NAV_GROUPS = [
+        ("actions", "Главная", ("actions", "favorites", "skills")),
+        ("music", "Музыка", ("music",)),
+        ("timers", "Дела и сценарии", ("timers", "scenarios")),
+        ("inbox", "Уведомления", ("inbox", "logs")),
+        (
+            "steam",
+            "Подключения",
+            ("steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
+        ),
+        ("settings", "Настройки", ("settings", "voice", "maintenance", "license")),
+    ]
+
     def __init__(self):
+        set_process_identity()
         super().__init__()
+        self._window_icons = install_window_icon(self)
         self.title("КРЕСТ — центр управления")
-        self.geometry("1120x790")
-        self.minsize(900, 650)
+        width = min(1180, max(900, self.winfo_screenwidth() - 60))
+        height = min(820, max(600, self.winfo_screenheight() - 80))
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(1020, width), min(700, height))
         self.protocol("WM_DELETE_WINDOW", self.on_close_window)
         self.bind("<Control-s>", lambda event: self.save_all_settings())
         self.config_mgr = ConfigManager()
+        from local_setup import discover_settings, readiness
+
+        self.setup_message = ""
+        try:
+            detected, changes = discover_settings(self.config_mgr.snapshot())
+            if changes:
+                self.config_mgr.save_config(detected)
+                self.setup_message = "Определено автоматически: " + ", ".join(changes)
+        except (OSError, ValueError) as exc:
+            self.setup_message = "Автонастройка: " + str(exc)
+        self.auto_setup_info = tk.StringVar(value=readiness(self.config_mgr.snapshot()))
+        self.auto_setup_busy = False
         self.command_book = CommandBook(self.config_mgr.filepath.parent / "favorites.json")
         self.ui_queue = queue.Queue()
         self.closing = False
         self.current_page = "actions"
-        self.tray_icon = None
+        self.init_desktop_shell()
         self.busy_services = set()
         self.auth_busy = False
         self.history = []
@@ -149,6 +181,8 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         indicator_controller.attach(self)
         self._poll_job = self.after(100, self._poll)
         self._show_welcome()
+        if self.setup_message:
+            self._append_log(self.setup_message)
         if self.config_mgr.load_error:
             self._append_log(
                 "Настройки повреждены: "
@@ -162,68 +196,10 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
     def _mark_dirty(self, *args):
         self.dirty = True
         if hasattr(self, "save_button"):
-            self.save_button.config(text="Сохранить изменения •")
+            self.save_button.config(text="Сохранить •")
 
     def _style(self):
-        self.configure(bg=self.theme["bg"])
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure(
-            ".",
-            background=self.theme["card"],
-            foreground=self.theme["text"],
-            font=("Segoe UI", 10),
-        )
-        style.configure(
-            "TButton",
-            background=self.theme["card_hover"],
-            foreground=self.theme["text"],
-            padding=(12, 7),
-            borderwidth=0,
-        )
-        style.map("TButton", background=[("active", self.theme["accent"])])
-        style.configure("Accent.TButton", background=self.theme["accent"], foreground="white")
-        style.configure(
-            "TEntry",
-            fieldbackground=self.theme["sidebar"],
-            foreground=self.theme["text"],
-            insertcolor=self.theme["text"],
-            padding=6,
-        )
-        style.configure(
-            "TCombobox",
-            fieldbackground=self.theme["sidebar"],
-            foreground=self.theme["text"],
-            padding=6,
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", self.theme["sidebar"])],
-            foreground=[("readonly", self.theme["text"])],
-        )
-        style.configure(
-            "Treeview",
-            background=self.theme["sidebar"],
-            fieldbackground=self.theme["sidebar"],
-            foreground=self.theme["text"],
-            rowheight=29,
-            borderwidth=0,
-        )
-        style.configure(
-            "Treeview.Heading",
-            background=self.theme["card"],
-            foreground=self.theme["sub_text"],
-            padding=8,
-        )
-        style.map("Treeview", background=[("selected", self.theme["accent"])])
-        style.configure(
-            "Horizontal.TProgressbar",
-            background=self.theme["accent"],
-            troughcolor=self.theme["sidebar"],
-            bordercolor=self.theme["sidebar"],
-            lightcolor=self.theme["accent"],
-            darkcolor=self.theme["accent"],
-        )
+        apply_style(self, self.theme)
 
     def label(self, parent, text="", large=False, muted=False, **kwargs):
         return tk.Label(
@@ -238,12 +214,18 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         )
 
     def card(self, parent, title, subtitle=""):
-        frame = tk.Frame(parent, bg=self.theme["card"], padx=18, pady=16)
-        frame.pack(fill="x", pady=(0, 12))
-        self.label(frame, title, large=True).pack(anchor="w", pady=(0, 8))
+        surface = RoundedCard(parent, self.theme)
+        surface.pack(fill="x", pady=(0, 16))
+        frame = surface.inner
+        heading = self.label(frame, title)
+        heading.configure(font=("Segoe UI", 14, "bold"))
+        heading.pack(anchor="w", pady=(0, 8))
         if subtitle:
-            self.label(frame, subtitle, muted=True, wraplength=690).pack(anchor="w", pady=(0, 12))
+            self.label(frame, subtitle, muted=True, wraplength=680).pack(anchor="w", pady=(0, 12))
         return frame
+
+    def advanced(self, parent, title="Дополнительные настройки"):
+        return Disclosure(parent, title, self.theme).body
 
     def field(self, parent, title, variable, secret=False):
         row = tk.Frame(parent, bg=parent.cget("bg"))
@@ -263,20 +245,29 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         self._style()
         self.shell = tk.Frame(self, bg=self.theme["bg"])
         self.shell.pack(fill="both", expand=True)
-        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=205, padx=16, pady=24)
+        from PIL import ImageTk
+
+        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=220, padx=18, pady=26)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        self.label(side, "✝ КРЕСТ", large=True).pack(anchor="w", pady=(0, 4))
-        self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
-        self.edition_label.pack(anchor="w", pady=(0, 16))
-        ttk.Button(side, text="Завершить работу", command=self._real_quit).pack(
-            side="bottom", fill="x"
+        self._brand_image = ImageTk.PhotoImage(load_image(44), master=self)
+        brand = tk.Frame(side, bg=self.theme["sidebar"])
+        brand.pack(fill="x", pady=(0, 8))
+        tk.Label(brand, image=self._brand_image, bg=self.theme["sidebar"]).pack(
+            side="left", padx=(0, 10)
         )
-        self.nav_canvas = tk.Canvas(side, bg=self.theme["sidebar"], highlightthickness=0, width=170)
-        nav_scroll = ttk.Scrollbar(side, orient="vertical", command=self.nav_canvas.yview)
-        nav_scroll.pack(side="right", fill="y")
+        self.label(brand, "КРЕСТ", large=True).pack(side="left")
+        self.label(side, "Личный помощник", muted=True).pack(anchor="w", padx=2, pady=(0, 28))
+        self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
+        self.edition_label.pack(side="bottom", anchor="w", pady=(14, 0))
+        ttk.Button(
+            side, text="Завершить работу", style="Nav.TButton", command=self._real_quit
+        ).pack(side="bottom", fill="x")
+        ttk.Button(
+            side, text="Свернуть в трей", style="Nav.TButton", command=self.hide_to_tray
+        ).pack(side="bottom", fill="x", pady=6)
+        self.nav_canvas = tk.Canvas(side, bg=self.theme["sidebar"], highlightthickness=0, width=178)
         self.nav_canvas.pack(fill="both", expand=True)
-        self.nav_canvas.configure(yscrollcommand=nav_scroll.set)
         self.nav_frame = tk.Frame(self.nav_canvas, bg=self.theme["sidebar"])
         nav_window = self.nav_canvas.create_window((0, 0), window=self.nav_frame, anchor="nw")
         self.nav_frame.bind(
@@ -287,27 +278,43 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             "<Configure>", lambda e: self.nav_canvas.itemconfigure(nav_window, width=e.width)
         )
         self.nav_buttons = {}
-        for key, title in self.NAV:
+        self.group_buttons = {}
+        for default, title, codes in self.NAV_GROUPS:
             button = ttk.Button(
                 self.nav_frame,
                 text=title,
-                padding=(8, 3),
-                command=lambda k=key: self.switch_page(k),
+                style="Nav.TButton",
+                padding=(16, 13),
+                command=lambda k=default: self.switch_page(k),
             )
-            button.pack(fill="x", pady=1)
-            self.nav_buttons[key] = button
-        body = tk.Frame(self.shell, bg=self.theme["bg"], padx=22, pady=20)
+            button.pack(fill="x", pady=4)
+            self.group_buttons[default] = button
+            for key in codes:
+                self.nav_buttons[key] = button
+        body = tk.Frame(self.shell, bg=self.theme["bg"], padx=28, pady=24)
         body.pack(side="left", fill="both", expand=True)
+        header = tk.Frame(body, bg=self.theme["bg"])
+        header.pack(fill="x", pady=(0, 18))
+        self.page_title = tk.StringVar()
+        self.page_subtitle = tk.StringVar()
+        title = self.label(header, textvariable=self.page_title)
+        title.configure(font=("Segoe UI", 24, "bold"))
+        title.pack(anchor="w")
+        self.label(header, textvariable=self.page_subtitle, muted=True).pack(
+            anchor="w", pady=(6, 0)
+        )
+        self.subnav = tk.Frame(body, bg=self.theme["bg"])
+        self.subnav.pack(fill="x", pady=(0, 18))
         footer = tk.Frame(body, bg=self.theme["bg"])
         footer.pack(side="bottom", fill="x", pady=(12, 0))
         self.save_button = ttk.Button(
             footer,
-            text="Сохранить изменения" + (" •" if self.dirty else ""),
+            text="Сохранить" + (" •" if self.dirty else ""),
             style="Accent.TButton",
             command=self.save_all_settings,
         )
         self.save_button.pack(side="right")
-        self.label(footer, textvariable=self.status_var, muted=True, wraplength=470).pack(
+        self.label(footer, textvariable=self.status_var, muted=True, wraplength=560).pack(
             side="left"
         )
         self.content = tk.Frame(body, bg=self.theme["bg"])
@@ -356,7 +363,9 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         self.switch_page(self.current_page)
 
     def _wheel(self, event):
-        if isinstance(event.widget, (ttk.Treeview, tk.Text)):
+        if isinstance(event.widget, (ttk.Treeview, tk.Text, ttk.Combobox, tk.Listbox)) or (
+            isinstance(event.widget, str) and "popdown" in event.widget
+        ):
             return
         units = (
             -1
@@ -374,9 +383,34 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         self.canvases[self.current_page].yview_scroll(units * 3, "units")
 
     def switch_page(self, code):
-        for key, page in self.pages.items():
+        names = dict(self.NAV)
+        for page in self.pages.values():
             page.pack_forget()
-            self.nav_buttons[key].configure(style="Accent.TButton" if key == code else "TButton")
+        group = next(g for g in self.NAV_GROUPS if code in g[2])
+        for key, button in self.group_buttons.items():
+            button.configure(style="Selected.Nav.TButton" if key == group[0] else "Nav.TButton")
+        self.page_title.set(group[1])
+        subtitles = {
+            "actions": "Всё нужное для вашего дня — в одном месте.",
+            "music": "Ваш плеер, текущий трек и управление воспроизведением.",
+            "timers": "Освободите голову. Крест напомнит и выполнит привычные действия.",
+            "inbox": "События, которые важно не пропустить.",
+            "steam": "Игры, боты и ваши сервисы.",
+            "settings": "Настройте под себя. Остальное Крест подберёт автоматически.",
+        }
+        self.page_subtitle.set(subtitles[group[0]])
+        for child in self.subnav.winfo_children():
+            child.destroy()
+        if len(group[2]) > 1:
+            for i, key in enumerate(group[2]):
+                ttk.Button(
+                    self.subnav,
+                    text=names[key],
+                    style="Selected.Tab.TButton" if key == code else "Tab.TButton",
+                    command=lambda k=key: self.switch_page(k),
+                ).grid(row=i // 4, column=i % 4, sticky="ew", padx=(0, 5), pady=(0, 4))
+            for i in range(4):
+                self.subnav.columnconfigure(i, weight=1, uniform="tabs")
         self.pages[code].pack(fill="both", expand=True)
         self.current_page = code
         if code == "skills":
@@ -385,56 +419,90 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             self.refresh_log()
         if code == "music":
             self._refresh_music()
+        if code == "inbox":
+            self._refresh_inbox()
 
     def build_actions_tab(self):
         page = self.page_bodies["actions"]
-        card = self.card(
-            page,
-            "Центр управления",
-            "Все навыки работают через единое ядро. Команду можно ввести текстом или произнести после обращения.",
-        )
+        surface = RoundedCard(page, self.theme, padding=24)
+        surface.pack(fill="x", pady=(0, 16))
+        card = surface.inner
+        top = tk.Frame(card, bg=self.theme["card"])
+        top.pack(fill="x")
+        text = tk.Frame(top, bg=self.theme["card"])
+        text.pack(side="left", fill="x", expand=True)
+        self.label(text, "ВАШ ЛИЧНЫЙ ПОМОЩНИК", muted=True).pack(anchor="w", pady=(0, 10))
         self.home_greeting = self.label(
-            card,
-            "На связи, " + self.owner_var.get() if self.owner_var.get() else "Готова к знакомству.",
+            text,
+            "Привет, " + self.owner_var.get() + "." if self.owner_var.get() else "Привет. Я Крест.",
         )
-        self.home_greeting.pack(anchor="w", pady=(0, 8))
+        self.home_greeting.configure(font=("Segoe UI", 24, "bold"))
+        self.home_greeting.pack(anchor="w")
+        self.label(text, "Скажите «Крест» или напишите, что нужно сделать.", muted=True).pack(
+            anchor="w", pady=(8, 20)
+        )
+        from PIL import ImageTk
+
+        self._hero_image = ImageTk.PhotoImage(load_image(88), master=self)
+        tk.Label(top, image=self._hero_image, bg=self.theme["card"]).pack(
+            side="right", padx=(20, 6)
+        )
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x")
-        self.label(row, textvariable=self.voice_var).pack(side="left")
-        ttk.Button(row, text="Включить голос", command=self._start_voice).pack(side="right")
-        ttk.Button(row, text="Выключить", command=self.runtime.stop_voice).pack(
-            side="right", padx=6
-        )
-        card = self.card(
-            page,
-            "Команда",
-            "Например: «таймер на пять минут», «посчитай 12 * 8», «помощь».",
-        )
-        self.command_entry = ttk.Entry(card)
-        self.command_entry.pack(fill="x", pady=5)
+        self.command_entry = ttk.Entry(row, font=("Segoe UI", 12))
+        self.command_entry.pack(side="left", fill="x", expand=True, ipady=3)
         self.command_entry.bind("<Return>", lambda e: self.execute_command())
         self.command_entry.bind("<Up>", lambda e: self._repeat_command())
         self.command_entry.bind("<Down>", lambda e: self._repeat_command(1))
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x", pady=8)
         ttk.Button(
-            row, text="Выполнить", style="Accent.TButton", command=self.execute_command
+            row, text="Выполнить  →", style="Accent.TButton", command=self.execute_command
+        ).pack(side="right", padx=(10, 0))
+        shortcuts = tk.Frame(card, bg=self.theme["card"])
+        shortcuts.pack(fill="x", pady=(14, 16))
+        for title, command in (
+            ("План на сегодня", "план на сегодня"),
+            ("Таймер на 5 минут", "таймер на пять минут"),
+        ):
+            ttk.Button(
+                shortcuts, text=title, command=lambda c=command: self.runtime.submit(c)
+            ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            shortcuts, text="Открыть музыку", command=lambda: self.switch_page("music")
         ).pack(side="left")
-        ttk.Button(row, text="В избранное", command=self._save_favorite).pack(side="left", padx=6)
-        ttk.Button(row, text="Очистить очередь", command=self._clear_pending).pack(side="left")
+        self.command_result = self.label(card, "Я здесь. Чем помочь?", wraplength=690)
+        self.command_result.pack(anchor="w", fill="x", pady=(0, 8))
         self.label(card, textvariable=self.queue_var, muted=True, wraplength=680).pack(anchor="w")
-        self.command_result = self.label(card, "Готов к командам.", wraplength=700)
-        self.command_result.pack(anchor="w", fill="x")
-        card = self.card(page, "Состояние")
-        self.overview_label = self.label(card, "", wraplength=700)
-        self.overview_label.pack(anchor="w")
+        tools = self.advanced(card, "Избранное и очередь команд")
+        ttk.Button(tools, text="Сохранить команду", command=self._save_favorite).pack(side="left")
+        ttk.Button(tools, text="Очистить очередь", command=self._clear_pending).pack(
+            side="left", padx=8
+        )
+        row = tk.Frame(page, bg=self.theme["bg"])
+        row.pack(fill="x")
+        for column in (0, 1):
+            row.columnconfigure(column, weight=1, uniform="home")
+        left = tk.Frame(row, bg=self.theme["bg"])
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        right = tk.Frame(row, bg=self.theme["bg"])
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        card = self.card(left, "Голос")
+        self.label(card, textvariable=self.voice_var, muted=True).pack(anchor="w", pady=(0, 12))
+        buttons = tk.Frame(card, bg=self.theme["card"])
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Включить", command=self._start_voice).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(buttons, text="Выключить", command=self.runtime.stop_voice).pack(side="left")
+        card = self.card(right, "Ваш день")
+        self.overview_label = self.label(card, "Крест готова к работе", muted=True, wraplength=320)
+        self.overview_label.pack(anchor="w", pady=(0, 8))
         ttk.Button(
             card, textvariable=self.reminder_var, command=lambda: self.switch_page("timers")
-        ).pack(anchor="w", pady=(8, 0))
-        card = self.card(page, "Последние события")
+        ).pack(anchor="w")
+        card = self.advanced(self.card(page, "История"), "Последние события")
         self.event_text = tk.Text(
             card,
-            height=8,
+            height=7,
             bg=self.theme["sidebar"],
             fg=self.theme["text"],
             font=("Segoe UI", 10),
@@ -1032,12 +1100,13 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             "Dota 2 — игровой гид",
             "Локальный GSI-сервер получает состояние матча. Файл игры создаётся только кнопкой «Настроить GSI».",
         )
+        tuning = self.advanced(card, "Параметры подключения и предупреждений")
         for key, label in [
             ("gsi_port", "Порт GSI"),
             ("warning_lead_time", "Предупреждать за, сек."),
             ("process_name", "Процесс игры"),
         ]:
-            self.field(card, label, self.dota_vars[key])
+            self.field(tuning, label, self.dota_vars[key])
         ttk.Checkbutton(
             card,
             text="Включать гид при обнаружении матча",
@@ -1072,7 +1141,77 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             wraplength=680,
         ).pack(anchor="w", pady=10)
 
+    def _auto_setup(self):
+        if self.auto_setup_busy:
+            return
+        from local_setup import discover_settings, readiness
+
+        self.auto_setup_busy = True
+        self.auto_setup_info.set("Ищу локальные модели и программы…")
+        before = self.config_mgr.snapshot()
+
+        def done(result):
+            detected, changes = result
+            current = self.config_mgr.snapshot()
+            applied = []
+            for section, variables in (
+                ("app_settings", self.settings_vars),
+                ("steam", self.steam_vars),
+            ):
+                for key, variable in variables.items():
+                    if (
+                        detected[section][key] != before[section][key]
+                        and current[section][key] == before[section][key]
+                        and str(variable.get()) == str(before[section][key])
+                    ):
+                        current[section][key] = detected[section][key]
+                        applied.append((variable, detected[section][key]))
+            try:
+                if applied:
+                    self.config_mgr.save_config(current)
+                    dirty = self.dirty
+                    for variable, value in applied:
+                        variable.set(value)
+                    self.dirty = dirty
+                    self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
+                self.auto_setup_info.set(readiness(current))
+                self.status_var.set(
+                    "Автонастройка завершена. "
+                    + (
+                        "Найдено: " + ", ".join(changes)
+                        if applied
+                        else "Ручные настройки сохранены."
+                    )
+                )
+            except (OSError, ValueError) as exc:
+                self._report_error(str(exc))
+            finally:
+                self.auto_setup_busy = False
+
+        def work():
+            try:
+                return discover_settings(before)
+            except Exception as exc:
+                self.post_ui(lambda: setattr(self, "auto_setup_busy", False))
+                self.post_ui(
+                    lambda error=str(exc): self.auto_setup_info.set(
+                        "Автонастройка не завершена: " + error
+                    )
+                )
+                raise
+
+        self._background(work, done=done)
+
     def build_settings_tab(self):
+        card = self.card(
+            self.page_bodies["settings"],
+            "Крест настроится сама",
+            "Микрофон и плеер выбираются автоматически. Модели и Steam ищутся на этом компьютере; ваши ручные настройки сохраняются.",
+        )
+        self.label(card, textvariable=self.auto_setup_info, muted=True, wraplength=680).pack(
+            anchor="w", pady=(0, 12)
+        )
+        ttk.Button(card, text="Подобрать автоматически", command=self._auto_setup).pack(anchor="w")
         card = self.card(self.page_bodies["settings"], "Профиль и оформление")
         self.entry_owner_name = self.field(card, "Ваше имя", self.owner_var)
         self.label(card, "Стиль общения", muted=True).pack(anchor="w")
@@ -1095,8 +1234,11 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             "Автосортировка загрузок",
             "После включения Крест проверяет выбранную папку каждые 30 секунд. Файлы должны оставаться неизменными минимум две минуты. Папки и незавершённые загрузки пропускаются.",
         )
-        self.field(card, "Папка загрузок", self.settings_vars["downloads_path"])
-        ttk.Button(card, text="Выбрать папку", command=self._pick_downloads).pack(anchor="w")
+        folder_details = self.advanced(card, "Изменить папку загрузок")
+        self.field(folder_details, "Папка загрузок", self.settings_vars["downloads_path"])
+        ttk.Button(folder_details, text="Выбрать папку", command=self._pick_downloads).pack(
+            anchor="w"
+        )
         ttk.Checkbutton(
             card,
             text="Сортировать загрузки автоматически",
@@ -1113,10 +1255,8 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
         )
         for key, title in [
             ("wake_word", "Обращение"),
-            ("active_timeout", "Ожидание команды, сек."),
             ("voice_volume", "Громкость, 0–100"),
             ("weather_city", "Город для погоды"),
-            ("microphone", "Имя / индекс микрофона"),
         ]:
             self.field(card, title, self.settings_vars[key])
         for key, title in [
@@ -1130,6 +1270,13 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             if key == "autostart" and os.name != "nt":
                 toggle.configure(state="disabled")
             toggle.pack(anchor="w", pady=5)
+        if os.name == "nt":
+            ttk.Button(
+                card, text="Видимость значка в трее Windows", command=self.open_tray_settings
+            ).pack(anchor="w", pady=6)
+        card = self.advanced(card, "Микрофон, модели и время ожидания")
+        self.field(card, "Микрофон (пусто = авто)", self.settings_vars["microphone"])
+        self.field(card, "Ожидание команды, сек.", self.settings_vars["active_timeout"])
         for key, title in [
             ("vosk_path", "Папка Vosk"),
             ("silero_path", "Файл Silero .pt"),
@@ -1228,9 +1375,9 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             messagebox.showerror("Настройки", str(exc), parent=self)
             return False
         self.dirty = False
-        self.save_button.configure(text="Сохранить изменения")
+        self.save_button.configure(text="Сохранить")
         self.status_var.set("Настройки сохранены. Для ботов и моделей нужен перезапуск.")
-        self.home_greeting.configure(text="На связи, " + self.owner_var.get())
+        self.home_greeting.configure(text="Привет, " + self.owner_var.get() + ".")
         self.refresh_skills()
         self._update_steam(force=True)
         if not self.config_mgr.config["skills"].get("gid", True):
@@ -1654,56 +1801,12 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
                 + f" · Время матча: {info['match_seconds'] // 60}:{info['match_seconds'] % 60:02}"
             )
             self.overview_label.configure(
-                text=f"Навыков: {len(self.runtime.manager.catalog())} · Таймеров: {len(self.runtime.state.snapshot()['active_timers'])} · "
-                + ("Режим сна" if self.runtime.state.is_sleeping else "Активен")
-                + "\n"
-                + " · ".join(
-                    f"{self.integration.MODULES[key][1]}: {value}"
-                    for key, value in statuses.items()
-                )
+                text=f"{len(self.runtime.manager.catalog())} навыков готовы  ·  "
+                f"{len(self.runtime.state.snapshot()['active_timers'])} активных таймеров  ·  "
+                f"{len(self.integration.processes)} подключённых сервисов"
             )
         if self.winfo_exists():
             self._poll_job = self.after(100, self._poll)
-
-    def _on_minimize(self, event):
-        if (
-            event.widget is self
-            and self.state() == "iconic"
-            and self.config_mgr.config["app_settings"].get("minimize_to_tray")
-        ):
-            self.hide_to_tray()
-
-    def hide_to_tray(self):
-        try:
-            if self.tray_icon is None:
-                import pystray
-                from PIL import Image, ImageDraw
-
-                image = Image.new("RGB", (64, 64), "#111520")
-                draw = ImageDraw.Draw(image)
-                draw.line((32, 10, 32, 54), fill="#a78bfa", width=5)
-                draw.line((18, 25, 46, 25), fill="#a78bfa", width=5)
-                menu = pystray.Menu(
-                    pystray.MenuItem(
-                        "Открыть",
-                        lambda *args: self.post_ui(self.deiconify),
-                        default=True,
-                    ),
-                    pystray.MenuItem("Выход", lambda *args: self.post_ui(self._real_quit)),
-                )
-                self.tray_icon = pystray.Icon("krest", image, "КРЕСТ", menu)
-                self.tray_icon.run_detached()
-            self.withdraw()
-            return True
-        except Exception as exc:
-            self.tray_icon = None
-            self._report_error("Трей недоступен: " + str(exc))
-            return False
-
-    def on_close_window(self):
-        if self.config_mgr.config["app_settings"].get("close_to_tray") and self.hide_to_tray():
-            return
-        self._real_quit()
 
     def _real_quit(self):
         if self.closing:
@@ -1717,6 +1820,9 @@ class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk
             if answer and not self.save_all_settings():
                 return
         self.closing = True
+        if self._tray_timeout:
+            self.after_cancel(self._tray_timeout)
+            self._tray_timeout = None
         self.microphone_test.stop.set()
         self.status_var.set("Завершение работы…")
 

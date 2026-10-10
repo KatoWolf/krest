@@ -18,6 +18,7 @@ class ProductPages:
             value="Нажмите «Найти плееры». Крест выбирает играющую медиасессию автоматически."
         )
         self.music_busy = False
+        self.media_track_var = tk.StringVar(value="Включите музыку в любимом плеере")
         self.diagnostics_busy = False
         self.media_diagnostics = tk.StringVar(value="Проверка ничего не нажимает в плеере.")
         self.license_code_var = tk.StringVar()
@@ -34,6 +35,10 @@ class ProductPages:
         self.runtime.start()
         self._background(self.integration.autostart)
         self._background(self._startup_checks)
+        import os
+
+        if os.name == "nt":
+            self.ensure_tray()
 
     def _show_welcome(self):
         if self.config_mgr.snapshot()["profile"]["onboarding_completed"]:
@@ -93,35 +98,15 @@ class ProductPages:
     def build_music_tab(self):
         card = self.card(
             self.page_bodies["music"],
-            "Музыка",
-            "Автоматический выбор играющего плеера. Если источников несколько, можно закрепить нужный.",
+            "Сейчас играет",
+            "Крест находит активный плеер автоматически.",
         )
-        self.label(card, textvariable=self.media_status_var, wraplength=690).pack(
-            anchor="w", pady=8
+        track = self.label(card, textvariable=self.media_track_var, wraplength=680)
+        track.configure(font=("Segoe UI", 20, "bold"))
+        track.pack(anchor="w", pady=(8, 14))
+        self.label(card, textvariable=self.media_status_var, muted=True, wraplength=680).pack(
+            anchor="w", pady=(0, 16)
         )
-        self.music_tree = ttk.Treeview(
-            card, columns=("app", "track", "state"), show="headings", height=5
-        )
-        for key, title in [
-            ("app", "Плеер"),
-            ("track", "Исполнитель / трек"),
-            ("state", "Состояние"),
-        ]:
-            self.music_tree.heading(key, text=title)
-            self.music_tree.column(key, width=200 if key != "state" else 100)
-        self.music_tree.pack(fill="x", pady=8)
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x")
-        for title, command in [
-            ("Найти плееры", self._refresh_music),
-            ("Выбрать источник", self._select_music),
-            ("Автовыбор", self._auto_music),
-        ]:
-            ttk.Button(row, text=title, command=command).pack(side="left", padx=(0, 6))
-        self.label(card, textvariable=self.media_source_var, muted=True, wraplength=680).pack(
-            anchor="w", pady=6
-        )
-        card = self.card(self.page_bodies["music"], "Управление текущим треком")
         for actions in [
             [
                 ("Назад", "предыдущий трек"),
@@ -139,20 +124,56 @@ class ProductPages:
             row = tk.Frame(card, bg=self.theme["card"])
             row.pack(fill="x", pady=5)
             for title, command in actions:
-                ttk.Button(row, text=title, command=lambda c=command: self._music_command(c)).pack(
-                    side="left", padx=(0, 6)
-                )
-        self.label(
-            card,
-            "Команды адресуются выбранной медиасессии. Лайки требуют доступной кнопки настольного плеера и подтверждённого названия трека. При неоднозначности Крест сообщит причину.",
-            muted=True,
-            wraplength=680,
-        ).pack(anchor="w", pady=12)
-
-        ttk.Button(card, text="Диагностика плеера", command=self._diagnose_music).pack(
+                ttk.Button(
+                    row,
+                    text=title,
+                    style="Accent.TButton" if title == "Играть" else "TButton",
+                    command=lambda c=command: self._music_command(c),
+                ).pack(side="left", padx=(0, 8))
+        ttk.Button(card, text="Обновить трек", command=self._refresh_music).pack(
+            anchor="w", pady=(14, 0)
+        )
+        card = self.card(
+            self.page_bodies["music"],
+            "Плеер и подключение",
+            "Если одновременно играют несколько источников, выберите нужный здесь.",
+        )
+        sources = self.advanced(card, "Выбрать плеер вручную")
+        self.music_tree = ttk.Treeview(
+            sources, columns=("app", "track", "state"), show="headings", height=3
+        )
+        for key, title in [
+            ("app", "Плеер"),
+            ("track", "Исполнитель / трек"),
+            ("state", "Состояние"),
+        ]:
+            self.music_tree.heading(key, text=title)
+            self.music_tree.column(key, width=200 if key != "state" else 100)
+        self.music_tree.pack(fill="x", pady=8)
+        row = tk.Frame(sources, bg=self.theme["card"])
+        row.pack(fill="x")
+        for title, command in [
+            ("Найти плееры", self._refresh_music),
+            ("Выбрать источник", self._select_music),
+            ("Автовыбор", self._auto_music),
+        ]:
+            ttk.Button(row, text=title, command=command).pack(side="left", padx=(0, 6))
+        self.label(sources, textvariable=self.media_source_var, muted=True, wraplength=680).pack(
             anchor="w", pady=6
         )
-        self.label(card, textvariable=self.media_diagnostics, wraplength=680).pack(anchor="w")
+        diagnostics = self.advanced(card, "Проверить доступные команды и лайки")
+        self.label(
+            diagnostics,
+            "Лайки зависят от доступности кнопки в вашем плеере. Диагностика ничего не нажимает.",
+            muted=True,
+            wraplength=680,
+        ).pack(anchor="w", pady=8)
+        ttk.Button(diagnostics, text="Диагностика плеера", command=self._diagnose_music).pack(
+            anchor="w", pady=6
+        )
+        self.label(diagnostics, textvariable=self.media_diagnostics, wraplength=680).pack(
+            anchor="w"
+        )
 
     def _diagnose_music(self):
         from media_control import diagnostics
@@ -203,6 +224,21 @@ class ProductPages:
                                 data["artist"] + " — " + data["title"],
                                 "Играет" if data["is_playing"] else "На паузе",
                             ),
+                        )
+                    preferred = self.media_source_var.get()
+                    candidates = (
+                        [v for v in rows if v["app_id"] == preferred]
+                        if preferred
+                        else [v for v in rows if v["is_playing"]]
+                    )
+                    if not candidates and not preferred and len(rows) == 1:
+                        candidates = rows
+                    if len(candidates) == 1:
+                        current = candidates[0]
+                        self.media_track_var.set(current["artist"] + " — " + current["title"])
+                    else:
+                        self.media_track_var.set(
+                            "Выберите источник ниже" if rows else "Включите музыку в любимом плеере"
                         )
                     self.media_status_var.set(
                         f"Найдено источников: {len(rows)}. Автовыбор включён."

@@ -5,6 +5,46 @@ import pytest
 pytestmark = pytest.mark.skipif(not os.getenv("DISPLAY"), reason="GUI requires an X display")
 
 
+def test_automatic_calibration_saves_only_audio_and_preserves_new_user_edits(tmp_path, monkeypatch):
+    import welcome_gui
+
+    original = welcome_gui.ConfigManager
+    monkeypatch.setattr(welcome_gui, "ConfigManager", lambda: original(tmp_path / "config.json"))
+    app = welcome_gui.ControlCenterApp()
+    try:
+        app.settings_vars["weather_city"].set("Казань")
+        monkeypatch.setattr(app, "_background", lambda operation: operation())
+
+        def record(device, calibrate):
+            assert calibrate and device == ""
+            app.microphone_test.noise_threshold = 310
+            return "Измерено"
+
+        monkeypatch.setattr(app.microphone_test, "record", record)
+        app._microphone_action("auto")
+        app.after(150, app.quit)
+        app.mainloop()
+        saved = original(tmp_path / "config.json").snapshot()
+        assert saved["app_settings"]["speech_threshold"] == 310
+        assert saved["app_settings"]["weather_city"] != "Казань"
+        assert app.settings_vars["weather_city"].get() == "Казань" and app.dirty
+        assert not app.audio_test_busy
+        app._microphone_action("auto")
+        app.settings_vars["speech_threshold"].set("800")
+        app.after(150, app.quit)
+        app.mainloop()
+        assert app.settings_vars["speech_threshold"].get() == "800"
+        assert "не применён" in app.mic_test_status.get()
+    finally:
+        app.runtime.close()
+        app.integration.stop_all()
+        import logging
+
+        logging.getLogger().removeHandler(app._log_handler)
+        welcome_gui.indicator_controller.stop()
+        app.destroy()
+
+
 def test_workflow_pages_save_steps_weekdays_and_notification_preferences(tmp_path, monkeypatch):
     import welcome_gui
 
