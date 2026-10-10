@@ -46,7 +46,9 @@ def run_checked(command, **kwargs):
         finally:
             reader.join(timeout=3)
         if code:
-            detail = "".join(tail)[-11000:]
+            detail = "".join(line for line in tail if not line.startswith("Nuitka-Options:"))[
+                -3000:
+            ]
             print(
                 "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
                 flush=True,
@@ -70,7 +72,6 @@ def compiler_command(output):
         "--windows-console-mode=attach",
         "--enable-plugin=tk-inter",
         "--module-parameter=torch-disable-jit=no",
-        "--user-package-configuration-file=" + str(ROOT / "packaging" / "nuitka-packages.yml"),
         "--include-package=skills",
         "--include-package=vosk",
         "--include-package=winsdk",
@@ -174,6 +175,12 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     run_checked(command, cwd=ROOT, check=True)
     dist = output / "main.dist"
+    native = {p.name.lower() for p in dist.rglob("*.dll")}
+    required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
+    if required - native:
+        raise RuntimeError(
+            "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
+        )
     audit_distribution(dist)
     smoke_test(dist)
     if not args.skip_installer:

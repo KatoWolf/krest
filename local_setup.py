@@ -6,8 +6,9 @@ from pathlib import Path
 
 
 def downloads_folder(home=None):
+    explicit_home = home is not None
     home = Path(home or Path.home())
-    if os.name == "nt":
+    if os.name == "nt" and not explicit_home:
         import winreg
 
         try:
@@ -26,6 +27,7 @@ def downloads_folder(home=None):
 
 def discover_settings(config, base_dir=None, home=None):
     root = Path(base_dir or Path(__file__).resolve().parent)
+    folder = downloads_folder(home)
     home = Path(home or Path.home())
     result = copy.deepcopy(config)
     settings = result["app_settings"]
@@ -38,7 +40,6 @@ def discover_settings(config, base_dir=None, home=None):
             changes.append(label)
 
     current = settings.get("downloads_path", "")
-    folder = downloads_folder(home)
     if current in ("", str(home / "Downloads")) and folder.is_dir():
         use("downloads_path", folder, "Папка загрузок")
 

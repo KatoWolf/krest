@@ -1,5 +1,8 @@
 """Steam read-only data service. AppIDs are launch IDs, never activation keys."""
 
+from storage import read_json
+
+
 from datetime import datetime, timezone
 import copy
 import html
@@ -19,7 +22,7 @@ class SteamError(RuntimeError):
 
 def read_cache(path):
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = read_json(path)
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}

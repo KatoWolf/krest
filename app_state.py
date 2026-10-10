@@ -1,5 +1,8 @@
 """One shared application state, independent of the entry point."""
 
+from storage import read_json
+
+
 from contextvars import ContextVar
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -68,7 +71,7 @@ class AssistantState:
         self.config_getter = lambda: {}
         if self.filepath and self.filepath.exists():
             try:
-                saved = json.loads(self.filepath.read_text(encoding="utf-8"))
+                saved = read_json(self.filepath)
                 if not isinstance(saved, dict):
                     raise ValueError("Ожидался объект с таймерами")
                 seen = set()

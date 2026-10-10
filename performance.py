@@ -1,5 +1,8 @@
 """Bounded sampling and shared background-work policy; no GPU probes."""
 
+from storage import read_json
+
+
 from pathlib import Path
 import threading
 import time
@@ -92,7 +95,7 @@ def shared_multiplier(folder):
     import json
 
     try:
-        value = json.loads((Path(folder) / "activity_profile.json").read_text())
+        value = read_json(Path(folder) / "activity_profile.json")
         if 0 <= time.time() - value["updated"] < 60 and value["mode"] in ("game", "economy"):
             return 3
     except (OSError, ValueError, KeyError, TypeError):

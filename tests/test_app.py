@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from commands import execute
-from storage import atomic_write_json
+from storage import atomic_write_json, read_json
 from diagnostics import validate_module
 from welcome_gui import ConfigManager, IntegrationManager
 
@@ -49,7 +49,7 @@ def test_atomic_write_with_concurrent_reader(tmp_path):
     thread = threading.Thread(target=writer)
     thread.start()
     while thread.is_alive():
-        assert isinstance(json.loads(path.read_text())["n"], int)
+        assert isinstance(read_json(path)["n"], int)
     thread.join()
     assert json.loads(path.read_text())["n"] == 99
 

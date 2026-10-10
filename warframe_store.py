@@ -1,5 +1,8 @@
 """Bounded local Warframe notebook; every edit is atomic and independent of network access."""
 
+from storage import read_json
+
+
 from contextlib import contextmanager
 import copy
 import json
@@ -164,7 +167,7 @@ class WarframeStore:
             try:
                 if self.path.stat().st_size > 4 * 1024**2:
                     raise ValueError("Данные превышают 4 МБ")
-                self.data = validate_state(json.loads(self.path.read_text(encoding="utf-8")))
+                self.data = validate_state(read_json(self.path))
             except (OSError, ValueError, TypeError) as exc:
                 self.error = str(exc)
 

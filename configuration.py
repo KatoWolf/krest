@@ -1,5 +1,8 @@
 """Validated application settings. Secrets remain in the local, ignored config file."""
 
+from storage import read_json
+
+
 import copy
 import json
 import os
@@ -317,7 +320,7 @@ class ConfigManager:
         if not self.filepath.exists():
             return copy.deepcopy(DEFAULT_CONFIG)
         try:
-            data = json.loads(self.filepath.read_text(encoding="utf-8-sig"))
+            data = read_json(self.filepath)
             if not isinstance(data, dict):
                 raise ValueError("Ожидался объект JSON")
             if data.get("schema_version", 1) not in (1, 2):

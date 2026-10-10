@@ -1,5 +1,8 @@
 """Small authenticated JSON client. Desktop state is cached off the Tk thread."""
 
+from storage import read_json
+
+
 from app_paths import app_command
 
 from pathlib import Path
@@ -22,7 +25,7 @@ class KernelClient:
         self.config_path = Path(config_path).resolve()
 
     def call(self, method, **args):
-        endpoint = json.loads((self.config_path.parent / "kernel_endpoint.json").read_text())
+        endpoint = read_json(self.config_path.parent / "kernel_endpoint.json")
         if endpoint.get("protocol") != 1:
             raise RuntimeError("Несовместимая версия ядра. Перезапустите Крест.")
         token = protect_bootstrap(endpoint["token"], decrypt=True)

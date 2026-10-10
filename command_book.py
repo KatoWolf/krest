@@ -1,5 +1,8 @@
 """Explicitly saved favourites and bounded, session-only input history."""
 
+from storage import read_json
+
+
 import json
 from pathlib import Path
 import shutil
@@ -18,7 +21,7 @@ class CommandBook:
         self.load_error = ""
         if self.path.exists():
             try:
-                values = json.loads(self.path.read_text(encoding="utf-8"))
+                values = read_json(self.path)
                 if not isinstance(values, list) or any(
                     not isinstance(v, str) or not v.strip() or len(v) > 2000 for v in values
                 ):

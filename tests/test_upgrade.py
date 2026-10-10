@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -304,3 +305,45 @@ def test_pages_build_independently_and_parser_is_a_separate_window(tmp_path, mon
         logging.getLogger().removeHandler(app._log_handler)
         welcome_gui.indicator_controller.stop()
         app.destroy()
+
+
+def test_atomic_storage_retries_windows_sharing_conflicts_without_deleting_old_file(
+    tmp_path, monkeypatch
+):
+    import storage
+
+    path = tmp_path / "config.json"
+    storage.atomic_write_json(path, {"value": "old"})
+    original = storage.os.replace
+    attempts = []
+
+    def replace(source, target):
+        attempts.append(1)
+        assert json.loads(path.read_text())["value"] == "old"
+        if len(attempts) < 3:
+            error = PermissionError("Sharing violation")
+            error.winerror = 32
+            raise error
+        original(source, target)
+
+    monkeypatch.setattr(storage.os, "replace", replace)
+    monkeypatch.setattr(storage.time, "sleep", lambda delay: None)
+    storage.atomic_write_json(path, {"value": "new"})
+    assert len(attempts) == 3 and json.loads(path.read_text())["value"] == "new"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_atomic_reader_retries_sharing_error_but_does_not_hide_corrupt_json(monkeypatch):
+    import storage
+
+    error = PermissionError("File is being replaced")
+    error.winerror = 32
+    reader = MagicMock(side_effect=[error, '{"ready":true}'])
+    monkeypatch.setattr(storage, "Path", lambda path: SimpleNamespace(read_text=reader))
+    monkeypatch.setattr(storage.time, "sleep", lambda delay: None)
+    assert storage.read_json("config.json") == {"ready": True}
+    assert reader.call_count == 2
+    reader.side_effect = None
+    reader.return_value = "not json"
+    with pytest.raises(ValueError):
+        storage.read_json("config.json")
