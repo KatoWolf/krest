@@ -354,7 +354,7 @@ def test_windows_crt_access_errors_without_winerror_are_retried(monkeypatch):
     import storage
 
     error = PermissionError(errno.EACCES, "sharing conflict")
-    assert not hasattr(error, "winerror")
+    assert getattr(error, "winerror", None) is None
     monkeypatch.setattr(storage, "os", SimpleNamespace(name="nt"))
     assert storage._sharing_conflict(error)
     assert not storage._sharing_conflict(OSError(errno.EIO, "disk failed"))
