@@ -29,7 +29,7 @@ def main(argv=None):
         open_menu_gui()
         return 0
     settings = ConfigManager()
-    runtime = AssistantRuntime(settings.snapshot)
+    runtime = AssistantRuntime(settings.snapshot, data_dir=settings.filepath.parent)
     try:
         if args.check:
             print(

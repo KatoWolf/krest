@@ -172,7 +172,8 @@ INCOMPLETE_DOWNLOAD_EXTENSIONS = {
     ".tmp",
     ".part",
     ".download",
-    "!ut",
+    ".!ut",
+    ".!qb",
     ".unconfirmed",
 }
 
@@ -499,68 +500,27 @@ def get_system_uptime(text: str = "") -> Dict[str, int]:
     category="System",
 )
 def organize_downloads(text: str = "") -> Dict[str, Any]:
-    """
-    Быстро сканирует папку 'Загрузки' и сортирует файлы по папкам *_Krest.
-    Выполняется молча без лишних задержек.
-    """
-    downloads_dir = Path.home() / "Downloads"
-    if not downloads_dir.exists():
-        logger.warning(f"Директория {downloads_dir} не найдена.")
-        return {
-            "status": "error",
-            "message": "Папка 'Загрузки' не найдена",
-            "moved_count": 0,
-        }
+    """Use the same conservative sorter as the background worker."""
+    from app_state import get_state
+    from downloads import DownloadSorter
 
-    moved_count = 0
-    moved_by_category: Dict[str, int] = {}
-
+    folder = (
+        get_state()
+        .config_getter()
+        .get("app_settings", {})
+        .get("downloads_path", str(Path.home() / "Downloads"))
+    )
     try:
-        with os.scandir(downloads_dir) as entries:
-            for entry in entries:
-                # Пропускаем директории и папки категорий
-                if not entry.is_file(follow_symlinks=False):
-                    continue
-
-                filename = entry.name
-                file_path = Path(entry.path)
-                ext = file_path.suffix.lower()
-
-                # Пропускаем служебные/незавершенные закачки
-                if not ext or ext in INCOMPLETE_DOWNLOAD_EXTENSIONS:
-                    continue
-
-                category_folder_name = get_category_for_extension(ext)
-                target_dir = downloads_dir / category_folder_name
-
-                # Создаем целевую папку
-                target_dir.mkdir(parents=True, exist_ok=True)
-
-                # Безопасно получаем уникальный путь без дубликатов
-                dest_filepath = get_unique_filepath(target_dir, filename)
-
-                try:
-                    shutil.move(str(file_path), str(dest_filepath))
-                    moved_count += 1
-                    moved_by_category[category_folder_name] = (
-                        moved_by_category.get(category_folder_name, 0) + 1
-                    )
-                except (PermissionError, OSError) as pe:
-                    logger.debug(f"Файл {filename} заблокирован или занят: {pe}")
-                    continue
-                except Exception as ex:
-                    logger.error(f"Ошибка при перемещении {filename}: {ex}")
-                    continue
-
-        logger.info(
-            f"Сортировка завершена. Перемещено файлов: {moved_count}, по категориям: {moved_by_category}"
-        )
-        return {
-            "status": "success",
-            "moved_count": moved_count,
-            "categories": moved_by_category,
-        }
-
-    except Exception as e:
-        logger.error(f"Ошибка при выполнении сортировки: {e}")
-        return {"status": "error", "message": str(e), "moved_count": 0}
+        result = DownloadSorter().scan(folder, automatic=False)
+        if result["errors"]:
+            return dict(
+                result,
+                status="error",
+                message=(
+                    f"Перемещено: {result['moved_count']}. Ошибки: "
+                    + "; ".join(result["errors"][:3])
+                ),
+            )
+        return dict(result, status="success")
+    except (OSError, ValueError) as exc:
+        return {"status": "error", "message": str(exc), "moved_count": 0}

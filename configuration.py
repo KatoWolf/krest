@@ -26,6 +26,8 @@ DEFAULT_CONFIG = {
         "microphone": "",
         "vosk_path": "model",
         "silero_path": "model_silero.pt",
+        "downloads_auto_sort": False,
+        "downloads_path": str(Path.home() / "Downloads"),
     },
     "api_keys": dict.fromkeys(
         (
@@ -42,6 +44,7 @@ DEFAULT_CONFIG = {
         ),
         "",
     ),
+    "command_aliases": {},
     "dota_guide": {
         "process_name": "dota2.exe",
         "warning_lead_time": 30,
@@ -80,6 +83,21 @@ def merge(default, values):
 
 
 def validate(data):
+    aliases = data["command_aliases"]
+    if len(aliases) > 100 or any(
+        not isinstance(key, str)
+        or not key.strip()
+        or len(key) > 100
+        or not isinstance(value, str)
+        or not value.strip()
+        or len(value) > 2000
+        for key, value in aliases.items()
+    ):
+        raise ValueError("Допускается до 100 своих фраз: фраза до 100, команда до 2000 символов")
+    data["command_aliases"] = {k.casefold().strip(): v.strip() for k, v in aliases.items()}
+    path = data["app_settings"]["downloads_path"]
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("Укажите папку загрузок")
     if not str(data["owner_name"]).strip():
         raise ValueError("Введите имя пользователя")
     for section in ("app_settings", "skills", "dota_guide"):

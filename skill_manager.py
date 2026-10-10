@@ -1,6 +1,7 @@
 """Skill discovery and deterministic dispatch for text and voice commands."""
 
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 import importlib
 import inspect
 import json
@@ -26,6 +27,7 @@ class SkillEntry:
     patterns: list = field(default_factory=list)
     description: str = ""
     category: str = "Общие"
+    examples: list = field(default_factory=list)
 
     @property
     def id(self):
@@ -86,7 +88,7 @@ def format_result(value):
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def skill(keywords=None, patterns=None, description="", category="Общие"):
+def skill(keywords=None, patterns=None, description="", category="Общие", examples=None):
     def decorator(func):
         entry = SkillEntry(
             func,
@@ -94,6 +96,7 @@ def skill(keywords=None, patterns=None, description="", category="Общие"):
             [re.compile(p, re.I) for p in patterns or []],
             description,
             category,
+            list(examples or []),
         )
         with _registry_lock:
             SKILL_REGISTRY[:] = [item for item in SKILL_REGISTRY if item.id != entry.id]
@@ -179,10 +182,35 @@ class SkillManager:
         _, entry, kwargs = sorted(candidates, key=lambda v: (-v[0], v[1].id))[0]
         return entry, kwargs
 
+    def suggest(self, text, limit=3):
+        """Offer close available keywords without ever dispatching a fuzzy match."""
+        clean = text.casefold().strip()
+        if len(clean) < 3:
+            return []
+        scores = {}
+        for entry in self.catalog():
+            if self.availability(entry) != "Доступен":
+                continue
+            for keyword in entry.keywords:
+                score = SequenceMatcher(None, clean, keyword).ratio()
+                if score >= 0.6:
+                    scores[keyword] = max(score, scores.get(keyword, 0))
+        return sorted(scores, key=lambda k: (-scores[k], k))[:limit]
+
     def execute(self, text, state=None):
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"^пожалуйста[, ]+|[, ]+пожалуйста[.!?]*$", "", text, flags=re.I)
+        # One explicit substitution, never recursive and never an inferred action.
+        text = self.settings().get("command_aliases", {}).get(text.casefold().strip(), text)
         match = self.match(text)
         if match is None:
-            return CommandResult(False, False, "Команда не найдена. Откройте каталог навыков.")
+            suggestions = self.suggest(text)
+            hint = (
+                " Возможно, вы имели в виду: " + "; ".join(suggestions) + "." if suggestions else ""
+            )
+            return CommandResult(
+                False, False, "Команда не найдена. Откройте каталог навыков." + hint
+            )
         entry, extra = match
         available = self.availability(entry)
         if available != "Доступен":

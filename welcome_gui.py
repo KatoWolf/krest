@@ -16,6 +16,7 @@ from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
 from integrations import IntegrationManager
 from themes import THEMES
 from guikrest import indicator_controller
+from command_book import CommandBook
 
 logger = logging.getLogger(__name__)
 BASE_DIR = str(Path(__file__).resolve().parent)
@@ -26,6 +27,7 @@ class ControlCenterApp(tk.Tk):
     NAV = [
         ("actions", "Обзор"),
         ("skills", "Навыки"),
+        ("favorites", "Мои команды"),
         ("timers", "Таймеры"),
         ("api", "Подключения"),
         ("dota", "Dota 2"),
@@ -42,6 +44,7 @@ class ControlCenterApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close_window)
         self.bind("<Control-s>", lambda event: self.save_all_settings())
         self.config_mgr = ConfigManager()
+        self.command_book = CommandBook(self.config_mgr.filepath.parent / "favorites.json")
         self.ui_queue = queue.Queue()
         self.closing = False
         self.current_page = "actions"
@@ -49,8 +52,10 @@ class ControlCenterApp(tk.Tk):
         self.busy_services = set()
         self.auth_busy = False
         self.history = []
+        self.aliases = self.config_mgr.snapshot().get("command_aliases", {})
         self.last_command = ""
         self._timer_rows = None
+        self._reminder_rows = None
         self.runtime = AssistantRuntime(
             self.config_mgr.snapshot, data_dir=self.config_mgr.filepath.parent
         )
@@ -77,6 +82,8 @@ class ControlCenterApp(tk.Tk):
             for key, value in self.config_mgr.config["dota_guide"].items()
         }
         self.status_var = tk.StringVar(value="Готово. Введите команду или выберите навык.")
+        self.queue_var = tk.StringVar(value="Нет команд в очереди")
+        self.reminder_var = tk.StringVar(value="Нет непрочитанных напоминаний")
         self.voice_var = tk.StringVar(value="Голос выключен")
         self.dirty = False
         for variable in [
@@ -97,6 +104,7 @@ class ControlCenterApp(tk.Tk):
         self._log_handler = UILogHandler(level=logging.WARNING)
         logging.getLogger().addHandler(self._log_handler)
         self.build_ui()
+        self.bind("<Control-l>", lambda e: self._focus_command())
         self.bind("<Unmap>", self._on_minimize)
         indicator_controller.attach(self)
         self.runtime.start()
@@ -107,6 +115,9 @@ class ControlCenterApp(tk.Tk):
                 + self.config_mgr.load_error
                 + ". При сохранении исходный файл будет скопирован в .broken."
             )
+        for error in (self.runtime.state.load_error, self.command_book.load_error):
+            if error:
+                self._report_error(error + ". Исходный файл будет сохранён в .broken при записи.")
 
     def _mark_dirty(self, *args):
         self.dirty = True
@@ -261,6 +272,7 @@ class ControlCenterApp(tk.Tk):
         self.bind_all("<Button-5>", self._wheel)
         self.build_actions_tab()
         self.build_skills_tab()
+        self.build_favorites_tab()
         self.build_timers_tab()
         self.build_api_tab()
         self.build_dota_tab()
@@ -315,14 +327,23 @@ class ControlCenterApp(tk.Tk):
         self.command_entry.pack(fill="x", pady=5)
         self.command_entry.bind("<Return>", lambda e: self.execute_command())
         self.command_entry.bind("<Up>", lambda e: self._repeat_command())
+        self.command_entry.bind("<Down>", lambda e: self._repeat_command(1))
+        row = tk.Frame(card, bg=self.theme["card"])
+        row.pack(fill="x", pady=8)
         ttk.Button(
-            card, text="Выполнить", style="Accent.TButton", command=self.execute_command
-        ).pack(anchor="w", pady=8)
+            row, text="Выполнить", style="Accent.TButton", command=self.execute_command
+        ).pack(side="left")
+        ttk.Button(row, text="В избранное", command=self._save_favorite).pack(side="left", padx=6)
+        ttk.Button(row, text="Очистить очередь", command=self._clear_pending).pack(side="left")
+        self.label(card, textvariable=self.queue_var, muted=True, wraplength=680).pack(anchor="w")
         self.command_result = self.label(card, "Готов к командам.", wraplength=700)
         self.command_result.pack(anchor="w", fill="x")
         card = self.card(page, "Состояние")
         self.overview_label = self.label(card, "", wraplength=700)
         self.overview_label.pack(anchor="w")
+        ttk.Button(
+            card, textvariable=self.reminder_var, command=lambda: self.switch_page("timers")
+        ).pack(anchor="w", pady=(8, 0))
         card = self.card(page, "Последние события")
         self.event_text = tk.Text(
             card,
@@ -341,14 +362,150 @@ class ControlCenterApp(tk.Tk):
         text = self.command_entry.get().strip()
         if text and self.runtime.submit(text):
             self.last_command = text
+            self.command_book.remember(text)
+            self._refresh_command_lists()
             self.command_result.configure(text="Выполняю: " + text)
             self._append_log("Вы: " + text)
             self.command_entry.delete(0, "end")
 
-    def _repeat_command(self):
+    def _repeat_command(self, offset=-1):
+        text = self.command_book.navigate(offset, self.command_entry.get())
         self.command_entry.delete(0, "end")
-        self.command_entry.insert(0, self.last_command)
+        self.command_entry.insert(0, text)
         return "break"
+
+    def _focus_command(self):
+        self.switch_page("actions")
+        self.canvases["actions"].yview_moveto(0)
+        self.command_entry.focus_set()
+        return "break"
+
+    def _clear_pending(self):
+        count = self.runtime.clear_pending()
+        self.status_var.set(
+            f"Удалено из очереди: {count}. Уже запущенная команда продолжит работу."
+        )
+
+    def _save_favorite(self):
+        text = self.command_entry.get().strip() or self.last_command
+        try:
+            self.command_book.add(text)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+            return
+        self._refresh_command_lists()
+        self.status_var.set("Команда сохранена в разделе «Мои команды».")
+
+    def _build_aliases(self):
+        card = self.card(
+            self.page_bodies["favorites"],
+            "Свои фразы",
+            "Крест подставит заданную команду при точном совпадении вашей фразы — голосом или текстом, без ИИ. Изменения применятся после сохранения.",
+        )
+        self.alias_name = tk.StringVar()
+        self.alias_target = tk.StringVar()
+        self.field(card, "Моя фраза", self.alias_name)
+        self.field(card, "Команда Крест", self.alias_target)
+        self.alias_tree = ttk.Treeview(
+            card, columns=("phrase", "command"), show="headings", height=5
+        )
+        self.alias_tree.heading("phrase", text="Моя фраза")
+        self.alias_tree.heading("command", text="Команда")
+        self.alias_tree.pack(fill="x", pady=8)
+        row = tk.Frame(card, bg=self.theme["card"])
+        row.pack(fill="x")
+        ttk.Button(row, text="Добавить / обновить", command=self._add_alias).pack(side="left")
+        ttk.Button(row, text="Удалить", command=self._remove_alias).pack(side="left", padx=6)
+        self._refresh_aliases()
+
+    def _refresh_aliases(self):
+        self.alias_tree.delete(*self.alias_tree.get_children())
+        for key, value in self.aliases.items():
+            self.alias_tree.insert("", "end", iid=key, values=(key, value))
+
+    def _add_alias(self):
+        key, value = self.alias_name.get().casefold().strip(), self.alias_target.get().strip()
+        if not key or len(key) > 100 or not value or len(value) > 2000:
+            self._report_error("Введите фразу до 100 и команду до 2000 символов")
+            return
+        if key not in self.aliases and len(self.aliases) >= 100:
+            self._report_error("Можно сохранить до 100 своих фраз")
+            return
+        self.aliases[key] = value
+        self._mark_dirty()
+        self._refresh_aliases()
+
+    def _remove_alias(self):
+        for key in self.alias_tree.selection():
+            self.aliases.pop(key, None)
+        self._mark_dirty()
+        self._refresh_aliases()
+
+    def build_favorites_tab(self):
+        self.command_lists = {}
+        for key, title, subtitle in (
+            ("favorites", "Избранное", "Сохранённые вами команды доступны после перезапуска."),
+            (
+                "history",
+                "История ввода",
+                "Последние 100 текстовых команд этой сессии. На диск не записываются.",
+            ),
+        ):
+            card = self.card(self.page_bodies["favorites"], title, subtitle)
+            tree = ttk.Treeview(
+                card, columns=("command",), show="headings", height=6, selectmode="browse"
+            )
+            tree.heading("command", text="Команда")
+            tree.column("command", width=600)
+            tree.pack(fill="x")
+            self.command_lists[key] = tree
+            tree.bind("<Double-1>", lambda e, k=key: self._use_saved_command(k))
+            row = tk.Frame(card, bg=self.theme["card"])
+            row.pack(fill="x", pady=8)
+            ttk.Button(
+                row, text="Подставить команду", command=lambda k=key: self._use_saved_command(k)
+            ).pack(side="left")
+            ttk.Button(
+                row,
+                text="Удалить выбранную" if key == "favorites" else "Очистить историю",
+                command=lambda k=key: self._clear_saved_command(k),
+            ).pack(side="left", padx=6)
+        self._refresh_command_lists()
+        self._build_aliases()
+
+    def _refresh_command_lists(self):
+        for key, tree in getattr(self, "command_lists", {}).items():
+            selected = tree.selection()
+            tree.delete(*tree.get_children())
+            values = (
+                self.command_book.favorites
+                if key == "favorites"
+                else list(reversed(self.command_book.history))
+            )
+            for index, value in enumerate(values):
+                tree.insert("", "end", iid=str(index), values=(value,))
+            if selected and tree.exists(selected[0]):
+                tree.selection_set(selected[0])
+
+    def _use_saved_command(self, kind):
+        tree = self.command_lists[kind]
+        if tree.selection():
+            text = tree.item(tree.selection()[0], "values")[0]
+            self._focus_command()
+            self.command_entry.delete(0, "end")
+            self.command_entry.insert(0, text)
+
+    def _clear_saved_command(self, kind):
+        tree = self.command_lists[kind]
+        try:
+            if kind == "history":
+                self.command_book.clear_history()
+                self.last_command = ""
+            elif tree.selection():
+                self.command_book.remove(tree.item(tree.selection()[0], "values")[0])
+        except OSError as exc:
+            self._report_error(str(exc))
+        self._refresh_command_lists()
 
     def build_skills_tab(self):
         card = self.card(
@@ -447,7 +604,7 @@ class ControlCenterApp(tk.Tk):
         selected = self.skill_tree.selection()
         if selected:
             entry = self.catalog[selected[0]]
-            examples = ", ".join(entry.keywords[:5]) or "; ".join(
+            examples = ", ".join(entry.examples or entry.keywords[:5]) or "; ".join(
                 p.pattern for p in entry.patterns[:2]
             )
             self.skill_details.configure(text=entry.description + "\nКоманды: " + examples)
@@ -457,15 +614,50 @@ class ControlCenterApp(tk.Tk):
         if not selected:
             return
         item = self.catalog[selected[0]]
-        if not item.keywords:
+        examples = item.examples or item.keywords
+        if not examples:
             self.status_var.set("Введите команду по шаблону из описания навыка.")
             return
         self.switch_page("actions")
         self.command_entry.delete(0, "end")
-        self.command_entry.insert(0, item.keywords[0])
+        self.command_entry.insert(0, examples[0])
         self.command_entry.focus_set()
 
     def build_timers_tab(self):
+        card = self.card(
+            self.page_bodies["timers"],
+            "Сработавшие напоминания",
+            "Остаются здесь до подтверждения, даже после перезапуска программы.",
+        )
+        self.reminder_tree = ttk.Treeview(
+            card, columns=("label", "time"), show="headings", height=4, selectmode="browse"
+        )
+        self.reminder_tree.heading("label", text="Напоминание")
+        self.reminder_tree.heading("time", text="Было запланировано")
+        self.reminder_tree.column("label", width=420)
+        self.reminder_tree.column("time", width=170)
+        self.reminder_tree.pack(fill="x")
+        row = tk.Frame(card, bg=self.theme["card"])
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Button(row, text="Готово", command=lambda: self._handle_reminder(False)).pack(
+            side="left"
+        )
+        ttk.Button(
+            row, text="Отложить на 5 минут", command=lambda: self._handle_reminder(True)
+        ).pack(side="left", padx=6)
+        card = self.card(self.page_bodies["timers"], "Новое напоминание")
+        self.reminder_label = tk.StringVar()
+        self.reminder_delay = tk.StringVar(value="20 минут")
+        self.field(card, "О чём напомнить", self.reminder_label)
+        self.field(card, "Через сколько", self.reminder_delay)
+        ttk.Button(card, text="Создать напоминание", command=self._add_reminder).pack(
+            anchor="w", pady=6
+        )
+        self.daily_time = tk.StringVar(value="09:00")
+        self.field(card, "Каждый день в", self.daily_time)
+        ttk.Button(card, text="Напоминать ежедневно", command=self._add_daily_reminder).pack(
+            anchor="w", pady=6
+        )
         card = self.card(
             self.page_bodies["timers"],
             "Таймеры и будильники",
@@ -514,10 +706,78 @@ class ControlCenterApp(tk.Tk):
             )
 
     def _cancel_timer(self):
-        for selected in self.timer_tree.selection():
-            kind, item_id = selected.split(":", 1)
-            self.runtime.state.cancel(kind, item_id)
+        try:
+            for selected in self.timer_tree.selection():
+                kind, item_id = selected.split(":", 1)
+                self.runtime.state.cancel(kind, item_id)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
         self._update_timers()
+
+    def _add_reminder(self):
+        from skills.timers_alarms import parse_timer_duration
+
+        try:
+            label = self.reminder_label.get().strip()
+            if not label or len(label) > 500:
+                raise ValueError("Введите текст напоминания длиной от 1 до 500 символов")
+            seconds, _ = parse_timer_duration(self.reminder_delay.get())
+            self.runtime.state.add_timer(seconds, label)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+            return
+        self.status_var.set("Напоминание создано: " + label)
+        self.reminder_label.set("")
+        self._update_timers()
+
+    def _handle_reminder(self, snooze):
+        selected = self.reminder_tree.selection()
+        if not selected:
+            return
+        try:
+            if snooze:
+                self.runtime.state.snooze(selected[0])
+            else:
+                self.runtime.state.acknowledge(selected[0])
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+        self._update_reminders()
+        self._update_timers()
+
+    def _add_daily_reminder(self):
+        try:
+            label = self.reminder_label.get().strip()
+            if not label or len(label) > 500:
+                raise ValueError("Заполните поле «О чём напомнить» (до 500 символов)")
+            self.runtime.state.add_alarm(self.daily_time.get().strip(), label, daily=True)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+            return
+        self.status_var.set("Ежедневное напоминание сохранено")
+        self._update_timers()
+
+    def _update_reminders(self):
+        items = self.runtime.state.reminders()
+        self.reminder_var.set(
+            f"Непрочитанных напоминаний: {len(items)}" if items else "Нет непрочитанных напоминаний"
+        )
+        if items == self._reminder_rows:
+            return
+        self._reminder_rows = items
+        selected = self.reminder_tree.selection()
+        self.reminder_tree.delete(*self.reminder_tree.get_children())
+        for item in items:
+            self.reminder_tree.insert(
+                "",
+                "end",
+                iid=item["id"],
+                values=(
+                    item.get("label", "Напоминание"),
+                    time.strftime("%d.%m %H:%M", time.localtime(item["end_time"])),
+                ),
+            )
+        if selected and self.reminder_tree.exists(selected[0]):
+            self.reminder_tree.selection_set(selected[0])
 
     def _update_timers(self):
         selected = self.timer_tree.selection()
@@ -529,7 +789,11 @@ class ControlCenterApp(tk.Tk):
                     (
                         kind + ":" + item["id"],
                         (
-                            "Таймер" if kind == "active_timers" else "Будильник",
+                            {
+                                "active_timers": "Таймер",
+                                "active_alarms": "Будильник",
+                                "daily_tasks": "Ежедневно",
+                            }[kind],
                             item.get("label", ""),
                             f"{seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}",
                         ),
@@ -548,6 +812,8 @@ class ControlCenterApp(tk.Tk):
     def build_api_tab(self):
         self.api_entries = {}
         self.service_labels = {}
+        self.service_details = {}
+        self.service_buttons = {}
         groups = [
             (
                 "Telegram Terminal",
@@ -590,10 +856,42 @@ class ControlCenterApp(tk.Tk):
         ]
         for title, description, fields, filename in groups:
             card = self.card(self.page_bodies["api"], title, description)
-            for key, label, secret in fields:
-                self.api_entries[key] = self.field(card, label, self.api_vars[key], secret)
-            if filename == "tg_bridge.py":
+            if filename:
+                label = self.label(card, "● Не запущен")
+                label.pack(anchor="w", pady=(0, 4))
+                self.service_labels[filename] = label
+                details = self.label(card, "", muted=True, wraplength=680)
+                details.pack(anchor="w")
+                self.service_details[filename] = details
                 row = tk.Frame(card, bg=self.theme["card"])
+                row.pack(fill="x", pady=10)
+                self.service_buttons[filename] = {}
+                for action, caption in (
+                    ("start", "Запустить"),
+                    ("stop", "Остановить"),
+                    ("restart", "Перезапустить"),
+                ):
+                    button = ttk.Button(
+                        row,
+                        text=caption,
+                        style="Accent.TButton" if action == "start" else "TButton",
+                        command=lambda f=filename, a=action: self._integration_action(f, a),
+                    )
+                    button.pack(side="left", padx=(0, 6))
+                    self.service_buttons[filename][action] = button
+                ttk.Button(
+                    row, text="Журнал →", command=lambda f=filename: self._open_service_log(f)
+                ).pack(side="right")
+            credentials = tk.Frame(card, bg=self.theme["card"])
+            ttk.Button(
+                card,
+                text="Настройка доступа ▾",
+                command=lambda frame=credentials: self._toggle_credentials(frame),
+            ).pack(anchor="w", pady=4)
+            for key, label, secret in fields:
+                self.api_entries[key] = self.field(credentials, label, self.api_vars[key], secret)
+            if filename == "tg_bridge.py":
+                row = tk.Frame(credentials, bg=self.theme["card"])
                 row.pack(fill="x", pady=8)
                 self.code_var = tk.StringVar()
                 ttk.Entry(row, textvariable=self.code_var, show="•").pack(
@@ -605,30 +903,24 @@ class ControlCenterApp(tk.Tk):
                 ]
                 for button in self.auth_buttons:
                     button.pack(side="left", padx=5)
-                self.auth_label = self.label(card, "Не авторизован", muted=True)
+                self.auth_label = self.label(credentials, "Авторизация Telegram", muted=True)
                 self.auth_label.pack(anchor="w")
-            if filename:
-                row = tk.Frame(card, bg=self.theme["card"])
-                row.pack(fill="x", pady=(12, 0))
-                label = self.label(row, "Не запущен", muted=True)
-                label.pack(side="left")
-                self.service_labels[filename] = label
-                for action, title in [
-                    ("start", "Запустить"),
-                    ("stop", "Стоп"),
-                    ("restart", "Перезапустить"),
-                ]:
-                    ttk.Button(
-                        row,
-                        text=title,
-                        command=lambda f=filename, a=action: self._integration_action(f, a),
-                    ).pack(side="right", padx=3)
         self.label(
             self.page_bodies["api"],
-            "«Запущен» означает работающий процесс. Подключение к сервису проверяйте по журналу.",
+            "«Запущен» означает работающий процесс. Авторизация и сетевое подключение проверяются по журналу.",
             muted=True,
             wraplength=700,
         ).pack(anchor="w")
+
+    def _toggle_credentials(self, frame):
+        if frame.winfo_manager():
+            frame.pack_forget()
+        else:
+            frame.pack(fill="x", pady=8)
+
+    def _open_service_log(self, filename):
+        self.log_source.set(filename)
+        self.switch_page("logs")
 
     def build_dota_tab(self):
         card = self.card(
@@ -689,6 +981,22 @@ class ControlCenterApp(tk.Tk):
         combo.bind("<<ComboboxSelected>>", lambda e: self.apply_theme(self.theme_var.get()))
         card = self.card(
             self.page_bodies["settings"],
+            "Автосортировка загрузок",
+            "После включения Крест проверяет выбранную папку каждые 30 секунд. Файлы должны оставаться неизменными минимум две минуты. Папки и незавершённые загрузки пропускаются.",
+        )
+        self.field(card, "Папка загрузок", self.settings_vars["downloads_path"])
+        ttk.Button(card, text="Выбрать папку", command=self._pick_downloads).pack(anchor="w")
+        ttk.Checkbutton(
+            card,
+            text="Сортировать загрузки автоматически",
+            variable=self.settings_vars["downloads_auto_sort"],
+        ).pack(anchor="w", pady=8)
+        self.download_label = self.label(
+            card, self.runtime.download_status, muted=True, wraplength=680
+        )
+        self.download_label.pack(anchor="w")
+        card = self.card(
+            self.page_bodies["settings"],
             "Голос и поведение",
             "Изменения модели и микрофона применяются после выключения и повторного включения голоса.",
         )
@@ -723,6 +1031,9 @@ class ControlCenterApp(tk.Tk):
             )
         ttk.Button(card, text="Проверить аудиоустройства", command=self._audio_devices).pack(
             anchor="w", pady=8
+        )
+        ttk.Button(card, text="Проверить готовность голоса", command=self._voice_diagnostics).pack(
+            anchor="w", pady=4
         )
 
     def build_logs_tab(self):
@@ -774,6 +1085,7 @@ class ControlCenterApp(tk.Tk):
         data = self.config_mgr.snapshot()
         data["owner_name"] = self.owner_var.get().strip()
         data["selected_theme"] = self.theme_var.get()
+        data["command_aliases"] = dict(self.aliases)
         data["app_settings"].update({key: var.get() for key, var in self.settings_vars.items()})
         data["api_keys"].update({key: var.get().strip() for key, var in self.api_vars.items()})
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
@@ -816,13 +1128,40 @@ class ControlCenterApp(tk.Tk):
         self.theme = THEMES[name]
         self.theme_var.set(name)
         pending_command = self.command_entry.get()
+        pending_fields = {
+            key: getattr(self, key).get()
+            for key in (
+                "timer_input",
+                "alarm_input",
+                "reminder_label",
+                "reminder_delay",
+                "skill_search",
+                "daily_time",
+                "alias_name",
+                "alias_target",
+            )
+        }
         self.shell.destroy()
         self._timer_rows = None
+        self._reminder_rows = None
         self.build_ui()
         self.command_entry.insert(0, pending_command)
+        for key, value in pending_fields.items():
+            target = getattr(self, key)
+            if isinstance(target, tk.Variable):
+                target.set(value)
+            else:
+                target.delete(0, "end")
+                target.insert(0, value)
+        self._update_reminders()
 
     def post_ui(self, callback):
         self.ui_queue.put(callback)
+
+    def _pick_downloads(self):
+        folder = filedialog.askdirectory(parent=self, title="Папка для сортировки загрузок")
+        if folder:
+            self.settings_vars["downloads_path"].set(folder)
 
     def _background(self, operation, done=None):
         def worker():
@@ -854,6 +1193,11 @@ class ControlCenterApp(tk.Tk):
             try:
                 result = getattr(self.integration, action)(filename)
                 self.post_ui(lambda: self._append_log(filename + ": " + result))
+            except Exception as exc:
+                from integrations import redact
+
+                self.integration.errors[filename] = redact(str(exc), self.config_mgr.snapshot())
+                raise
             finally:
                 self.post_ui(lambda: self.busy_services.discard(filename))
 
@@ -985,6 +1329,15 @@ class ControlCenterApp(tk.Tk):
             lambda result: messagebox.showinfo("Доступные микрофоны", result, parent=self),
         )
 
+    def _voice_diagnostics(self):
+        from diagnostics import voice_report
+
+        draft = self._draft()
+        self._background(
+            lambda: voice_report(draft),
+            lambda text: messagebox.showinfo("Готовность голоса", text, parent=self),
+        )
+
     def _diagnostics(self):
         errors = self.runtime.manager.errors
         text = f"Загружено навыков: {len(self.runtime.manager.catalog())}\n"
@@ -1067,9 +1420,18 @@ class ControlCenterApp(tk.Tk):
                 self.voice_var.set(value)
             elif kind == "error":
                 self._report_error(value)
+            elif kind == "automation":
+                self._append_log(value)
             elif kind == "alarm":
                 self.status_var.set("Сработало напоминание: " + value.get("label", ""))
                 self.bell()
+                if self.tray_icon:
+                    try:
+                        self.tray_icon.notify(
+                            value.get("label", "Напоминание"), "КРЕСТ — напоминание"
+                        )
+                    except Exception:
+                        logger.warning("Уведомление трея недоступно; напоминание сохранено в меню")
             elif kind == "shutdown":
                 self._real_quit()
         now = time.monotonic()
@@ -1078,8 +1440,39 @@ class ControlCenterApp(tk.Tk):
             statuses = self.integration.refresh()
             for key, (filename, title) in self.integration.MODULES.items():
                 if filename not in self.busy_services:
-                    self.service_labels[filename].configure(text=statuses[key])
+                    detail = self.integration.details(filename)
+                    self.service_labels[filename].configure(
+                        text="● " + statuses[key],
+                        fg=self.theme["accent"]
+                        if detail["running"]
+                        else self.theme["danger"]
+                        if detail["error"]
+                        else self.theme["sub_text"],
+                    )
+                    seconds = detail["uptime"]
+                    self.service_details[filename].configure(
+                        text=(
+                            f"PID {detail['pid']} · Работает {seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}"
+                            if detail["running"]
+                            else detail["error"]
+                            or "Откройте «Настройка доступа», сохраните данные и запустите сервис."
+                        )
+                    )
+                else:
+                    detail = self.integration.details(filename)
+                for action, button in self.service_buttons[filename].items():
+                    enabled = filename not in self.busy_services and (
+                        not detail["running"] if action == "start" else detail["running"]
+                    )
+                    button.configure(state="normal" if enabled else "disabled")
             self._update_timers()
+            self._update_reminders()
+            self.download_label.configure(text=self.runtime.download_status)
+            current, pending = self.runtime.command_status()
+            self.queue_var.set(
+                ("Выполняется: " + current[:100] if current else "Готов к командам")
+                + f" · В очереди: {pending}"
+            )
             from skills import gid
 
             info = gid.service_status()

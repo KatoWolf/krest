@@ -40,6 +40,8 @@ class AssistantRuntime:
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
+        self._request_lock = threading.RLock()
+        self.current_command = ""
         self.notifications = NotificationQueue(Path(data_dir) / "notifications.sqlite3")
         self.stop_event = threading.Event()
         self._threads = []
@@ -47,6 +49,7 @@ class AssistantRuntime:
         self._voice_control = threading.Lock()
         self._voice_stop = threading.Event()
         self._active_until = 0
+        self.download_status = "Автосортировка выключена"
         self.last_result = None
         self.status_path = Path(data_dir) / "current_status.json"
         voice.configure(self._speech_event, settings, self.state)
@@ -60,6 +63,7 @@ class AssistantRuntime:
         self._threads = [
             threading.Thread(target=self._commands, daemon=True, name="krest-commands"),
             threading.Thread(target=self._scheduler, daemon=True, name="krest-scheduler"),
+            threading.Thread(target=self._downloads, daemon=True, name="krest-downloads"),
         ]
         for thread in self._threads:
             thread.start()
@@ -68,17 +72,35 @@ class AssistantRuntime:
         text = text.strip()
         if not text:
             return False
-        try:
-            self.requests.put_nowait((text, source))
-            return True
-        except queue.Full:
-            self.events.put(
-                (
-                    "error",
-                    "Очередь команд заполнена. Дождитесь завершения текущих команд.",
-                )
-            )
+        if len(text) > 2000:
+            self.events.put(("error", "Команда слишком длинная: максимум 2000 символов."))
             return False
+        with self._request_lock:
+            if self.stop_event.is_set():
+                return False
+            try:
+                self.requests.put_nowait((text, source))
+                return True
+            except queue.Full:
+                pass
+        self.events.put(("error", "Очередь команд заполнена. Дождитесь завершения текущих команд."))
+        return False
+
+    def clear_pending(self):
+        """Cancel only commands that have not started; never interrupt a skill midway."""
+        with self._request_lock:
+            count = 0
+            while True:
+                try:
+                    self.requests.get_nowait()
+                    self.requests.task_done()
+                    count += 1
+                except queue.Empty:
+                    return count
+
+    def command_status(self):
+        with self._request_lock:
+            return self.current_command, self.requests.qsize()
 
     def execute(self, text, source="text"):
         cfg = self.settings().get("app_settings", {})
@@ -119,9 +141,17 @@ class AssistantRuntime:
 
     def _commands(self):
         while not self.stop_event.is_set():
-            try:
-                text, source = self.requests.get(timeout=0.2)
-            except queue.Empty:
+            with self._request_lock:
+                if self.stop_event.is_set():
+                    break
+                try:
+                    text, source = self.requests.get_nowait()
+                except queue.Empty:
+                    text = None
+                if text is not None:
+                    self.current_command = text
+            if text is None:
+                self.stop_event.wait(0.1)
                 continue
             try:
                 self.execute(text, source)
@@ -129,6 +159,8 @@ class AssistantRuntime:
                 logger.exception("Сбой обработки команды")
                 self.events.put(("error", str(exc)))
             finally:
+                with self._request_lock:
+                    self.current_command = ""
                 self.requests.task_done()
 
     def _scheduler(self):
@@ -164,6 +196,44 @@ class AssistantRuntime:
                 self.events.put(("error", str(exc)))
                 self.stop_event.wait(2)
 
+    def _downloads(self):
+        from downloads import DownloadSorter
+
+        sorter = DownloadSorter()
+        last_run = 0
+        previous = None
+        last_error = ""
+        while not self.stop_event.is_set():
+            cfg = self.settings().get("app_settings", {})
+            enabled = cfg.get("downloads_auto_sort", False) and self.settings().get(
+                "skills", {}
+            ).get("system_mon", True)
+            signature = (enabled, cfg.get("downloads_path", ""))
+            if signature != previous:
+                sorter = DownloadSorter()
+                last_run = 0
+                previous = signature
+                last_error = ""
+            if enabled and time.monotonic() - last_run >= 30:
+                last_run = time.monotonic()
+                try:
+                    result = sorter.scan(signature[1], stop=self.stop_event)
+                    self.download_status = f"Проверено в {time.strftime('%H:%M:%S')} · перемещено: {result['moved_count']} · ожидают: {result['skipped_count']}"
+                    if result["moved_count"]:
+                        self.events.put(("automation", "Загрузки: " + self.download_status))
+                    error = "; ".join(result["errors"][:3])
+                    if error:
+                        self.download_status += " · ошибки: " + error
+                except (OSError, ValueError) as exc:
+                    error = str(exc)
+                    self.download_status = "Сортировка: " + error
+                if error and error != last_error:
+                    self.events.put(("error", "Автосортировка: " + error))
+                last_error = error
+            elif not enabled:
+                self.download_status = "Автосортировка выключена"
+            self.stop_event.wait(1)
+
     def start_voice(self):
         if self._voice_thread and self._voice_thread.is_alive():
             return
@@ -193,7 +263,9 @@ class AssistantRuntime:
         self._voice_stop.set()
 
     def close(self):
-        self.stop_event.set()
+        with self._request_lock:
+            self.stop_event.set()
+            self.clear_pending()
         self.stop_voice()
         from skills import gid
 

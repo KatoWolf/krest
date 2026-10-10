@@ -16,6 +16,70 @@ import voice
 
 logger = logging.getLogger("SkillTimers")
 
+
+@skill(
+    patterns=[r"напоминай каждый день в (?P<phrase>.+)"],
+    examples=["напоминай каждый день в девять утра сделать зарядку"],
+    description="Ежедневное напоминание: напоминай каждый день в 09:00 сделать зарядку",
+    category="Timers",
+)
+def daily_reminder(phrase, state):
+    tokens = phrase.split()
+    split = 0
+    for token in tokens:
+        if (
+            token in NUMBERS_DICT
+            or token in ("утра", "дня", "вечера", "ночи", "часов", "час")
+            or re.fullmatch(r"\d{1,2}(?::\d{2})?", token)
+        ):
+            split += 1
+        else:
+            break
+    clock = parse_alarm_time(" ".join(tokens[:split]))
+    label = " ".join(tokens[split:])
+    if clock is None or not label or len(label) > 500:
+        return {
+            "status": "error",
+            "message": "Скажите: напоминай каждый день в девять утра сделать зарядку",
+        }
+    state.add_alarm(clock, label=label, daily=True)
+    return f"Буду напоминать каждый день в {clock}: {label}."
+
+
+@skill(
+    patterns=[r"напомни через (?P<phrase>.+)"],
+    examples=["напомни через пять минут выпить воды"],
+    description="Напоминание: напомни через 20 минут: проверить духовку",
+    category="Timers",
+)
+def named_reminder(phrase, state):
+    if ":" in phrase:
+        delay, label = phrase.split(":", 1)
+    else:
+        tokens = phrase.split()
+        split = 0
+        for token in tokens:
+            if (
+                token in NUMBERS_DICT
+                or token in ("полчаса", "полтора", "полторы", "и")
+                or re.fullmatch(
+                    r"\d+(?:[.,]\d+)?|час(?:а|ов)?|ч|минут[уыа]?|мин|секунд[уыа]?|сек", token
+                )
+            ):
+                split += 1
+            else:
+                break
+        delay, label = " ".join(tokens[:split]), " ".join(tokens[split:])
+    if not label.strip() or len(label) > 500:
+        return {
+            "status": "error",
+            "message": "Укажите, о чём напомнить, например: напомни через пять минут выпить воды",
+        }
+    seconds, _ = parse_timer_duration(delay)
+    state.add_timer(seconds, label.strip())
+    return f"Напоминание создано: {label}."
+
+
 stopwatch_start_time: Optional[float] = None
 
 # Словарь числительных для перевода устной речи в числа

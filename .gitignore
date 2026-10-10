@@ -16,6 +16,9 @@ aesthetics/
 steam_cache.json
 notifications.sqlite3*
 assistant_state.json
+assistant_state.json.broken-*
+favorites.json
+favorites.json.broken-*
 config.json.broken-*
 commands_list.txt
 currency_rates.json

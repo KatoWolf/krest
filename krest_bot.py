@@ -75,9 +75,6 @@ class BotProxy:
 
 bot = BotProxy()
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2:1b"
-
 AFK_MODE = False
 START_TIME = datetime.now()
 LOGS = []
@@ -140,39 +137,6 @@ def get_main_keyboard():
     markup.add(KeyboardButton("📦 Инвентарь CS2"), KeyboardButton("🤝 Трейды"))
     markup.add(KeyboardButton("🎵 Плей / Пауза"), KeyboardButton("🧠 Меню команд"))
     return markup
-
-
-# --- ИИ МОДУЛЬ ---
-def ask_krest_ai(prompt, is_post=False):
-    try:
-        if is_post:
-            system_rules = (
-                "Ты — Крест, ИИ-система. Напиши ровно ОДНО философское предложение для поста. "
-                "Вайб: ночной город, киберпанк, одиночество. НИКАКИХ тегов."
-            )
-        else:
-            system_rules = "Ты — Крест, ИИ-ассистентка. Создатель — KatoWolf. Отвечай на русском языке, коротко, стиль холодный и преданный."
-
-        payload = {
-            "model": OLLAMA_MODEL,
-            "prompt": f"{system_rules}\n\nЗапрос: {prompt}\nОтвет:",
-            "stream": False,
-            "options": {"temperature": 0.6},
-        }
-
-        response = requests.post(OLLAMA_URL, json=payload, timeout=120)
-
-        if response.status_code == 200:
-            ans = response.json().get("response", "Протоколы пусты.").strip()
-            if is_post:
-                ans = ans.split("#")[0].strip()
-                ans = ans.replace('"', "").replace("'", "")
-            return ans
-        return f"💠 Код ошибки сервера: {response.status_code}."
-    except requests.exceptions.Timeout:
-        return "💠 Нейросеть была в спящем режиме и загружается. Повтори запрос через пару секунд."
-    except Exception as e:
-        return f"💠 Системный сбой LLM: {str(e)}"
 
 
 # --- ТОП ПРОЦЕССОВ ---
@@ -467,8 +431,7 @@ def terminal_handler(message):
             "───\n"
             "🎵 **Разное:**\n"
             "● `пауза` / `громче` / `тише` / `некст`\n"
-            "● `не спи` — AFK-защита мыши\n"
-            "● `крест [текст]` — Диалог с ИИ"
+            "● `не спи` — AFK-защита мыши"
         )
         bot.reply_to(message, menu, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
@@ -476,7 +439,7 @@ def terminal_handler(message):
     elif "статус" in text:
         bot.reply_to(
             message,
-            f"📊 **ОТЧЕТ ДЛЯ KATOWOLF:**\n{get_sys_info()}\n💠 ИИ: {OLLAMA_MODEL}",
+            f"📊 **ОТЧЕТ ДЛЯ KATOWOLF:**\n{get_sys_info()}",
         )
     elif text in ["топ", "процессы", "нагрузка"]:
         bot.reply_to(message, get_top_processes(), parse_mode="Markdown")
@@ -713,9 +676,6 @@ def terminal_handler(message):
     elif "не спи" in text:
         AFK_MODE = not AFK_MODE
         bot.reply_to(message, f"💠 AFK-защита: **{'АКТИВИРОВАНА' if AFK_MODE else 'ВЫКЛЮЧЕНА'}**")
-    elif text.startswith("крест "):
-        bot.send_chat_action(message.chat.id, "typing")
-        bot.reply_to(message, f"💠 **KREST:** {ask_krest_ai(message.text[6:])}")
     elif text.startswith("убей "):
         proc_name = text.replace("убей ", "").strip()
         c = 0

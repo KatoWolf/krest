@@ -61,6 +61,19 @@ class IntegrationManager:
             return "Запущен"
         return "Ошибка запуска" if filename in self.errors else "Не запущен"
 
+    def details(self, filename):
+        """Read-only UI snapshot; never wait for a process being stopped."""
+        proc = self.processes.get(filename)
+        running = proc is not None and proc.poll() is None
+        return {
+            "running": running,
+            "pid": proc.pid if running else None,
+            "uptime": max(0, int(time.time() - self.started_at.get(filename, time.time())))
+            if running
+            else 0,
+            "error": self.errors.get(filename, ""),
+        }
+
     def refresh(self):
         if self._lock.acquire(blocking=False):
             try:

@@ -42,6 +42,38 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
         app.skill_search.set("таймер")
         assert app.skill_tree.get_children()
         assert len(app.skill_tree.get_children()) < len(app.runtime.manager.catalog())
+        app.command_entry.delete(0, "end")
+        app.command_entry.insert(0, "время")
+        app._save_favorite()
+        assert app.command_book.favorites == ["время"]
+        app.command_lists["favorites"].selection_set("0")
+        before = app.runtime.requests.qsize()
+        app._use_saved_command("favorites")
+        assert app.command_entry.get() == "время"
+        assert app.runtime.requests.qsize() == before  # Selection does not execute a command.
+        app.alias_name.set("проверка")
+        app.alias_target.set("статус")
+        app._add_alias()
+        app.save_all_settings()
+        assert app.config_mgr.snapshot()["command_aliases"] == {"проверка": "статус"}
+        app.reminder_label.set("Зарядка")
+        app.daily_time.set("09:15")
+        app._add_daily_reminder()
+        assert app.runtime.state.daily_tasks[0]["label"] == "Зарядка"
+        app.reminder_label.set("Черновик напоминания")
+        app.apply_theme("Emerald Cyber")
+        assert app.reminder_label.get() == "Черновик напоминания"
+        assert app.daily_time.get() == "09:15"
+        assert app.alias_tree.exists("проверка")
+        item = app.runtime.state.add_timer(1, "Проверка списка")
+        app.runtime.state.take_due(item["end_time"])
+        app._update_reminders()
+        app.reminder_tree.selection_set(item["id"])
+        app._handle_reminder(True)
+        assert not app.runtime.state.reminders()
+        assert app.runtime.state.active_timers[0]["label"] == "Проверка списка"
+        app._open_service_log("ds_session.py")
+        assert app.current_page == "logs" and app.log_source.get() == "ds_session.py"
         app.after(1700, app.quit)
         app.mainloop()
         assert not errors, errors
