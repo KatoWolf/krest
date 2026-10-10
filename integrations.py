@@ -143,7 +143,10 @@ class IntegrationManager:
         elif kind == "error":
             self.errors[filename] = message
         elif kind == "notification" and hasattr(self.app, "runtime"):
-            self.app.runtime.notifications.put(message)
+            priority = value.get("priority", "normal")
+            if priority not in ("low", "normal", "high"):
+                priority = "normal"
+            self.app.runtime.notifications.put(message, source=filename, priority=priority)
 
     def refresh(self):
         if self._lock.acquire(blocking=False):

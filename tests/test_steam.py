@@ -299,7 +299,9 @@ def test_telegram_delivery_is_opt_in_and_targets_owner(monkeypatch):
 
     events, sends = [], []
     monkeypatch.delenv("KREST_BOT_TOKEN", raising=False)
-    monkeypatch.setattr(steam_bot, "emit", lambda kind, text: events.append((kind, text)))
+    monkeypatch.setattr(
+        steam_bot, "emit", lambda kind, text, **values: events.append((kind, text, values))
+    )
 
     def send(url, **kwargs):
         sends.append((url, kwargs))
@@ -311,7 +313,7 @@ def test_telegram_delivery_is_opt_in_and_targets_owner(monkeypatch):
         "api_keys": {"krest_bot_token": "fake-token", "telegram_owner_id": "123"},
     }
     steam_bot.deliver_notification("event", cfg)
-    assert events == [("notification", "event")] and not sends
+    assert events == [("notification", "event", {"priority": "high"})] and not sends
     cfg["steam"]["telegram_notifications"] = True
     steam_bot.deliver_notification("event", cfg)
     assert sends[0][1]["json"] == {"chat_id": "123", "text": "event"}

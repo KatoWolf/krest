@@ -75,6 +75,16 @@ async def _metadata(session):
     start = timeline.start_time.total_seconds()
     end = timeline.end_time.total_seconds()
     return {
+        "capabilities": {
+            name: bool(getattr(playback.controls, flag, False))
+            for name, flag in [
+                ("Играть", "is_play_enabled"),
+                ("Пауза", "is_pause_enabled"),
+                ("Следующий", "is_next_enabled"),
+                ("Предыдущий", "is_previous_enabled"),
+                ("Перемотка", "is_playback_position_enabled"),
+            ]
+        },
         "app_id": session.source_app_user_model_id,
         "app_name": app_name(session.source_app_user_model_id),
         "title": info.title or "",
@@ -181,3 +191,34 @@ def rating(action, preferred=""):
     if not data["title"]:
         raise MediaError("Плеер не сообщил название трека: отметку не меняю.")
     return change_rating(data, action)
+
+
+def diagnostics(preferred=""):
+    data = query(preferred)
+    lines = [
+        f"Источник: {data['app_name']} ({data['app_id']})",
+        f"Трек: {data['artist']} — {data['title']}",
+    ]
+    lines.extend(
+        name + ": " + ("доступно" if enabled else "плеер не разрешает")
+        for name, enabled in data["capabilities"].items()
+    )
+    try:
+        from media_rating import find_player_window, _label, _toggle, LABELS
+
+        window = find_player_window(data)
+        buttons = window.descendants(control_type="Button")
+        candidates = [b for b in buttons if _label(b) in set().union(*LABELS.values())]
+        lines.append(f"Кнопок отметки найдено: {len(candidates)}")
+        for button in candidates:
+            lines.append(
+                f"{button.window_text()} · доступна: {button.is_enabled()} · видна: {button.is_visible()} · состояние: {_toggle(button)}"
+            )
+        if not candidates:
+            lines.append(
+                "Кнопка отметки не распознана. Доступные названия: "
+                + "; ".join(b.window_text() for b in buttons[:40])
+            )
+    except Exception as exc:
+        lines.append("Лайк: " + str(exc))
+    return "\n".join(lines)

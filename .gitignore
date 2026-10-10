@@ -29,3 +29,7 @@ templates.json
 
 *.private.pem
 *-premium-code.txt
+
+inbox.sqlite3*
+activity_profile.json
+.krest-sort-history.sqlite3*

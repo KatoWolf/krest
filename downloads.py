@@ -1,6 +1,8 @@
 """Conservative downloads sorting, shared by manual and background commands."""
 
 import os
+import hashlib
+import uuid
 from pathlib import Path
 import shutil
 import threading
@@ -12,11 +14,14 @@ _sort_lock = threading.Lock()
 class _CancellableReader:
     def __init__(self, source, stop):
         self.source, self.stop = source, stop
+        self.hash = hashlib.sha256()
 
     def read(self, size):
         if self.stop and self.stop.is_set():
             raise InterruptedError("Сортировка остановлена")
-        return self.source.read(size)
+        data = self.source.read(size)
+        self.hash.update(data)
+        return data
 
 
 class DownloadSorter:
@@ -24,20 +29,30 @@ class DownloadSorter:
         self.observed = {}
         self.root = None
 
-    def scan(self, folder, *, automatic=True, now=None, stop=None):
+    def scan(self, folder, *, automatic=True, now=None, stop=None, preview=False):
         from skills.system_mon import get_category_for_extension, INCOMPLETE_DOWNLOAD_EXTENSIONS
 
         now = time.time() if now is None else now
-        root = Path(folder).expanduser()
+        root = Path(folder).expanduser().resolve()
         if not root.is_dir():
             raise ValueError("Папка загрузок не найдена: " + str(root))
         if root != self.root:
             self.observed.clear()
             self.root = root
-        result = {"moved_count": 0, "skipped_count": 0, "errors": [], "moved_by_category": {}}
+        result = {
+            "preview": [],
+            "moved_count": 0,
+            "skipped_count": 0,
+            "errors": [],
+            "moved_by_category": {},
+        }
         if not _sort_lock.acquire(blocking=False):
             return result
         try:
+            from sort_history import SortHistory
+
+            journal = None if preview else SortHistory(root)
+            batch = uuid.uuid4().hex
             seen = set()
             for path in root.iterdir():
                 if stop and stop.is_set():
@@ -50,6 +65,9 @@ class DownloadSorter:
                     if not ext or ext in INCOMPLETE_DOWNLOAD_EXTENSIONS:
                         continue
                     info = path.stat()
+                    if automatic and journal and journal.was_restored(path, info):
+                        result["skipped_count"] += 1
+                        continue
                     stamp = (info.st_size, info.st_mtime_ns)
                     previous = self.observed.get(path.name)
                     if previous is None or previous[:2] != stamp:
@@ -64,6 +82,11 @@ class DownloadSorter:
                     target_dir = root / folder_name
                     if target_dir.is_symlink():
                         raise ValueError("Папка категории является ссылкой: " + folder_name)
+                    if preview:
+                        result["preview"].append(
+                            {"source": str(path), "category": folder_name, "bytes": info.st_size}
+                        )
+                        continue
                     target_dir.mkdir(exist_ok=True)
                     target = None
                     # Exclusive creation preserves existing same-name files on every OS.
@@ -79,11 +102,11 @@ class DownloadSorter:
                             continue
                     if target is None:
                         raise OSError("Слишком много файлов с одинаковым именем")
+                    record_id = None
                     try:
                         with output, path.open("rb") as source:
-                            shutil.copyfileobj(
-                                _CancellableReader(source, stop), output, length=1024 * 1024
-                            )
+                            reader = _CancellableReader(source, stop)
+                            shutil.copyfileobj(reader, output, length=1024 * 1024)
                             output.flush()
                             os.fsync(output.fileno())
                         after = path.stat()
@@ -92,9 +115,14 @@ class DownloadSorter:
                             result["skipped_count"] += 1
                             continue
                         shutil.copystat(path, target)
+                        record_id = journal.record(batch, path, target, reader.hash.hexdigest())
                         path.unlink()
                     except Exception:
-                        target.unlink(missing_ok=True)
+                        try:
+                            if record_id is not None:
+                                journal.discard(record_id)
+                        finally:
+                            target.unlink(missing_ok=True)
                         raise
                     self.observed.pop(path.name, None)
                     result["moved_count"] += 1

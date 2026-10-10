@@ -8,6 +8,7 @@ import shutil
 import time
 import threading
 from storage import atomic_write_json
+from scenarios import DEFAULT_SCENARIOS, validate_scenarios
 
 CONFIG_PATH = Path(os.getenv("KREST_CONFIG_PATH", Path(__file__).resolve().parent / "config.json"))
 DEFAULT_CONFIG = {
@@ -15,6 +16,9 @@ DEFAULT_CONFIG = {
     "profile": {"onboarding_completed": False, "personality": "friendly"},
     "license": {"code": ""},
     "media": {"preferred_app": ""},
+    "scenarios": DEFAULT_SCENARIOS,
+    "performance": {"mode": "auto", "game_processes": "cs2.exe,dota2.exe"},
+    "notification_settings": {"mode": "all", "game_important_only": True},
     "selected_theme": "Amethyst Modern",
     "app_settings": {
         "autostart": False,
@@ -79,6 +83,7 @@ DEFAULT_CONFIG = {
         name: True
         for name in (
             "basic",
+            "workflows",
             "interactive",
             "meta",
             "media",
@@ -97,7 +102,9 @@ DEFAULT_CONFIG = {
 def merge(default, values):
     result = copy.deepcopy(default)
     for key, value in values.items():
-        if key in result and isinstance(result[key], dict):
+        if key == "scenarios":
+            result[key] = copy.deepcopy(value)
+        elif key in result and isinstance(result[key], dict):
             if not isinstance(value, dict):
                 raise ValueError(f"Раздел {key} должен быть объектом JSON")
             result[key] = merge(result[key], value)
@@ -107,6 +114,20 @@ def merge(default, values):
 
 
 def validate(data):
+    validate_scenarios(data["scenarios"])
+    if data["performance"]["mode"] not in ("auto", "balanced", "game", "economy"):
+        raise ValueError("Неизвестный профиль нагрузки")
+    if (
+        not isinstance(data["performance"]["game_processes"], str)
+        or len(data["performance"]["game_processes"]) > 2000
+    ):
+        raise ValueError("Укажите список процессов игр до 2000 символов")
+    if (
+        data["notification_settings"]["mode"] not in ("all", "important", "silent")
+        or type(data["notification_settings"]["game_important_only"]) is not bool
+    ):
+        raise ValueError("Некорректные настройки уведомлений")
+
     if len(data["pronunciations"]) > 100 or any(
         not isinstance(k, str)
         or not k.strip()

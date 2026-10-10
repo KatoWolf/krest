@@ -11,6 +11,10 @@ from app_state import AssistantState
 from notifications import NotificationQueue
 from skill_manager import SkillManager, CommandResult
 from storage import atomic_write_json
+from performance import PerformancePolicy
+from scenarios import ScenarioRunner
+from notification_center import NotificationCenter, should_speak
+from command_context import CommandContext
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,6 +31,13 @@ class AssistantRuntime:
         self.settings = settings
         self.state = state or AssistantState(Path(data_dir) / "assistant_state.json")
         self.state.config_getter = settings
+        self.state.runtime = self
+        self.performance = PerformancePolicy(settings, Path(data_dir) / "activity_profile.json")
+        self.center = NotificationCenter(Path(data_dir) / "inbox.sqlite3")
+        self.context = CommandContext(self.state)
+        self.notification_mode = None
+        self.scenarios = ScenarioRunner(self)
+        self._execute_lock = threading.RLock()
         self.manager = SkillManager(settings)
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
@@ -95,6 +106,10 @@ class AssistantRuntime:
             return self.current_command, self.requests.qsize()
 
     def execute(self, text, source="text", confidence=None):
+        with self._execute_lock:
+            return self._execute(text, source, confidence)
+
+    def _execute(self, text, source="text", confidence=None):
         cfg = self.settings().get("app_settings", {})
         wake, command = check_wake_word(text, cfg.get("wake_word", "крест"))
         from speech_tools import normalize_command
@@ -156,11 +171,19 @@ class AssistantRuntime:
             elif command.strip().casefold() in ("нет", "не надо", "отмена"):
                 command = "отмена гида"
         observed("Передано на выполнение")
-        result = self.manager.execute(command, self.state)
+        normalized = normalize_command(command, self.settings().get("command_aliases", {}))
+        followup = self.context.handle(normalized) if source != "scenario" else None
+        result = (
+            CommandResult(True, followup.success, followup.text)
+            if followup is not None
+            else self.manager.execute(command, self.state)
+        )
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         self.last_result = result
         if result.text and not result.responded:
             voice.speak(result.text)
+        if result.skill_id.startswith("skills.media."):
+            self.publish_notice(result.text, "Музыка", "low", speak=False)
         self.events.put(("result", result))
         return result
 
@@ -195,26 +218,46 @@ class AssistantRuntime:
         while not self.stop_event.wait(0.3):
             try:
                 for item in self.state.take_due():
-                    voice.speak(f"Время вышло: {item.get('label', 'Напоминание')}.")
+                    self.publish_notice(
+                        f"Время вышло: {item.get('label', 'Напоминание')}.", "Задачи", "high"
+                    )
                     self.events.put(("alarm", item))
                 try:
                     notification = self.notifications.get_nowait()
                 except queue.Empty:
                     notification = None
                 if notification:
-                    voice.speak(f"Новое сообщение: {notification}")
-                    self.events.put(("notification", notification))
+                    import json
+
+                    try:
+                        envelope = json.loads(notification)
+                    except (ValueError, TypeError):
+                        envelope = None
+                    if isinstance(envelope, dict) and envelope.get("krest_notice") == 1:
+                        self.publish_notice(
+                            envelope.get("text", ""),
+                            envelope.get("source", "Боты"),
+                            envelope.get("priority", "normal"),
+                        )
+                    else:
+                        self.publish_notice(notification, "Боты")
+                self.performance.tick()
                 from skills import gid
 
                 self.state.dota_guide_active = gid.dota_state.is_active
                 status = {
-                    "is_playing": gid.dota_state.dota_running,
-                    "game": "Dota 2" if gid.dota_state.dota_running else "",
-                    "activity_type": "GAME" if gid.dota_state.dota_running else "IDLE",
+                    "is_playing": bool(gid.dota_state.dota_running or self.performance.game),
+                    "game": "Dota 2" if gid.dota_state.dota_running else self.performance.game,
+                    "activity_type": "GAME"
+                    if gid.dota_state.dota_running or self.performance.game
+                    else "IDLE",
                     "full_message": "Режим сна" if self.state.is_sleeping else "Ожидание команды",
                     "updated_at": time.time(),
                 }
-                if not hasattr(self, "_published") or time.monotonic() - self._published >= 2:
+                if (
+                    not hasattr(self, "_published")
+                    or time.monotonic() - self._published >= 2 * self.performance.poll_multiplier
+                ):
                     atomic_write_json(self.status_path, status)
                     self._published = time.monotonic()
                 if self.state.shutdown_requested.is_set():
@@ -243,13 +286,15 @@ class AssistantRuntime:
                 last_run = 0
                 previous = signature
                 last_error = ""
-            if enabled and time.monotonic() - last_run >= 30:
+            if enabled and self.performance.defer_files:
+                self.download_status = "Сортировка отложена: " + self.performance.active
+            elif enabled and time.monotonic() - last_run >= 30:
                 last_run = time.monotonic()
                 try:
                     result = sorter.scan(signature[1], stop=self.stop_event)
                     self.download_status = f"Проверено в {time.strftime('%H:%M:%S')} · перемещено: {result['moved_count']} · ожидают: {result['skipped_count']}"
                     if result["moved_count"]:
-                        self.events.put(("automation", "Загрузки: " + self.download_status))
+                        self.publish_notice("Загрузки: " + self.download_status, "Файлы", "low")
                     error = "; ".join(result["errors"][:3])
                     if error:
                         self.download_status += " · ошибки: " + error
@@ -262,6 +307,38 @@ class AssistantRuntime:
             elif not enabled:
                 self.download_status = "Автосортировка выключена"
             self.stop_event.wait(1)
+
+    def publish_notice(self, text, source="Система", priority="normal", speak=True):
+        if priority not in ("low", "normal", "high"):
+            priority = "normal"
+        ident, fresh = self.center.add(text, source, priority)
+        cfg = self.settings().get("notification_settings", {})
+        mode = self.notification_mode or cfg.get("mode", "all")
+        if (
+            fresh
+            and speak
+            and should_speak(
+                priority,
+                mode,
+                self.performance.active == "game",
+                cfg.get("game_important_only", True),
+            )
+        ):
+            voice.speak(text)
+        if fresh:
+            self.events.put(("notification", str(text)))
+        return ident
+
+    def is_scenario_command(self, text):
+        from speech_tools import normalize_command
+
+        wake, command = check_wake_word(
+            text, self.settings().get("app_settings", {}).get("wake_word", "крест")
+        )
+        matched = self.manager.match(
+            normalize_command(command if wake else text, self.settings().get("command_aliases", {}))
+        )
+        return matched and matched[0].func.__name__ in ("run_scenario", "stop_scenario")
 
     def start_voice(self):
         if self._voice_thread and self._voice_thread.is_alive():
@@ -309,6 +386,9 @@ class AssistantRuntime:
         with self._request_lock:
             self.stop_event.set()
             self.clear_pending()
+        self.scenarios.cancel()
+        if self.scenarios.thread:
+            self.scenarios.thread.join(timeout=1)
         self.stop_voice()
         from skills import gid
 

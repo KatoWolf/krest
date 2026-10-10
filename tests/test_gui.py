@@ -5,6 +5,65 @@ import pytest
 pytestmark = pytest.mark.skipif(not os.getenv("DISPLAY"), reason="GUI requires an X display")
 
 
+def test_workflow_pages_save_steps_weekdays_and_notification_preferences(tmp_path, monkeypatch):
+    import welcome_gui
+
+    original = welcome_gui.ConfigManager
+    monkeypatch.setattr(welcome_gui, "ConfigManager", lambda: original(tmp_path / "config.json"))
+    app = welcome_gui.ControlCenterApp()
+    errors = []
+    app.report_callback_exception = lambda *args: errors.append(str(args))
+    try:
+        app._new_scenario()
+        app.scenario_name.set("Мой режим")
+        app.step_action.set("Команда")
+        app.step_value.set("время")
+        app._add_scenario_step()
+        app.step_value.set("статус")
+        app._add_scenario_step()
+        app.scenario_tree.selection_set("1")
+        app._move_step(-1)
+        app._save_scenario()
+        assert (
+            original(tmp_path / "config.json").snapshot()["scenarios"]["Мой режим"][0]["value"]
+            == "статус"
+        )
+        app.step_value.set("таймер пять минут")
+        app._add_scenario_step()
+        app.apply_theme("Emerald Cyber")
+        assert app.scenario_steps[-1]["value"] == "таймер пять минут"
+        app.reminder_label.set("Выходной")
+        for i, var in enumerate(app.weekdays):
+            var.set(i in (5, 6))
+        app._add_daily_reminder()
+        assert app.runtime.state.daily_tasks[0]["weekdays"] == [5, 6]
+        app.runtime.notification_mode = "silent"
+        app.notice_mode_var.set("Только важные")
+        app._apply_notices()
+        assert app.runtime.notification_mode is None
+        assert app.config_mgr.snapshot()["notification_settings"]["mode"] == "important"
+        ident, _ = app.runtime.center.add("Проверка", "Система")
+        app._refresh_inbox()
+        app.inbox_tree.selection_set(str(ident))
+        app._notice_details()
+        assert app.notice_details.get() == "Проверка"
+        app._read_notice()
+        assert not app.runtime.center.list(unread=True)
+        for code in ("scenarios", "inbox", "maintenance", "timers"):
+            app.switch_page(code)
+            app._update_workflows()
+            app.update()
+        assert not errors
+    finally:
+        app.runtime.close()
+        app.integration.stop_all()
+        import logging
+
+        logging.getLogger().removeHandler(app._log_handler)
+        welcome_gui.indicator_controller.stop()
+        app.destroy()
+
+
 def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
     import welcome_gui
 

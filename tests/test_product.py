@@ -94,7 +94,7 @@ def test_response_personality_and_quiet_mode_are_local(tmp_path):
         assert app.state.is_muted
         app.execute("верни голос")
         assert not app.state.is_muted
-        assert "Ежедневных дел" in app.execute("план на сегодня").text
+        assert "Дел по расписанию до конца дня" in app.execute("план на сегодня").text
         assert "Запускаю рабочее окружение" not in app.execute("доброе утро").text
     finally:
         app.close()

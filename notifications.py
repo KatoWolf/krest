@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import os
+import json
 import queue
 import sqlite3
 import time
@@ -29,7 +30,12 @@ class NotificationQueue:
         finally:
             connection.close()
 
-    def put(self, text):
+    def put(self, text, source=None, priority="normal"):
+        if source is not None:
+            text = json.dumps(
+                {"krest_notice": 1, "text": str(text), "source": str(source), "priority": priority},
+                ensure_ascii=False,
+            )
         with self._connect() as connection:
             connection.execute("DELETE FROM notifications WHERE created < ?", (time.time() - 300,))
             connection.execute(

@@ -114,6 +114,20 @@ class Button:
         self.state = 1 - self.state
 
 
+def test_diagnostics_reports_capabilities_without_pressing_like(monkeypatch):
+    selected = session()
+    monkeypatch.setattr(media, "_sessions", AsyncMock(return_value=([selected], selected)))
+    button = Button()
+    window = SimpleNamespace(descendants=lambda **kw: [button])
+    monkeypatch.setattr("media_rating.find_player_window", lambda data: window)
+    report = media.diagnostics()
+    assert "Яндекс" in report and "Кнопок отметки найдено: 1" in report
+    assert "доступно" in report
+    assert button.calls == 0
+    selected.try_play_async.assert_not_awaited()
+    selected.try_pause_async.assert_not_awaited()
+
+
 def test_rating_is_confirmed_and_idempotent(monkeypatch):
     monkeypatch.setattr("media_rating.time.sleep", lambda _: None)
     button = Button()

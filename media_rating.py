@@ -97,7 +97,7 @@ def apply_rating(buttons, action):
     )
 
 
-def change_rating(data, action):
+def find_player_window(data):
     names = player_processes(data["app_id"])
     try:
         from pywinauto import Desktop
@@ -122,4 +122,8 @@ def change_rating(data, action):
         raise MediaError(
             "Откройте экран текущего трека в настольном плеере. Не удалось подтвердить окно и название трека."
         )
-    return apply_rating(windows[0].descendants(control_type="Button"), action)
+    return windows[0]
+
+
+def change_rating(data, action):
+    return apply_rating(find_player_window(data).descendants(control_type="Button"), action)

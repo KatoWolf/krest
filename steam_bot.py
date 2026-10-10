@@ -5,10 +5,11 @@ import time
 from configuration import ConfigManager
 from bridge_sdk import commands, data_dir, emit
 from steam_service import SteamMonitor
+from performance import shared_multiplier
 
 
 def deliver_notification(text, cfg):
-    emit("notification", text)
+    emit("notification", text, priority="high")
     if not cfg.get("steam", {}).get("telegram_notifications", False):
         return
     import os
@@ -66,8 +67,11 @@ def main():
         except Exception as exc:
             emit("error", f"Проверка Steam не завершена: {type(exc).__name__}")
         if remote:
-            next_remote = now + int(cfg.get("steam", {}).get("poll_minutes", 15)) * 60
-        refresh.wait(30)
+            next_remote = now + int(
+                cfg.get("steam", {}).get("poll_minutes", 15)
+            ) * 60 * shared_multiplier(data_dir())
+
+        refresh.wait(30 * shared_multiplier(data_dir()))
 
 
 if __name__ == "__main__":

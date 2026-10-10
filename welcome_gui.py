@@ -21,6 +21,7 @@ from command_book import CommandBook
 from service_pages import ServicePages
 from voice_page import VoicePages
 from product_pages import ProductPages, PERSONALITIES
+from workflow_pages import WorkflowPages, MODES, NOTICE_MODES
 import licensing
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ BASE_DIR = str(Path(__file__).resolve().parent)
 TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
-class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
+class ControlCenterApp(WorkflowPages, ProductPages, VoicePages, ServicePages, tk.Tk):
     NAV = [
         ("actions", "Обзор"),
         ("voice", "Голос"),
@@ -36,6 +37,9 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         ("skills", "Навыки"),
         ("favorites", "Мои команды"),
         ("timers", "Таймеры"),
+        ("scenarios", "Сценарии"),
+        ("inbox", "Уведомления"),
+        ("maintenance", "Нагрузка и файлы"),
         ("api", "Telegram"),
         ("steam", "Steam / CS2"),
         ("discord_account", "Мой Discord"),
@@ -73,6 +77,7 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         self.integration = IntegrationManager(self)
         self.init_voice_page()
         self.init_product_pages()
+        self.init_workflows()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
         self.steam_vars = {
@@ -112,6 +117,10 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         for variable in [
             self.owner_var,
             self.personality_var,
+            self.profile_var,
+            self.game_processes_var,
+            self.notice_mode_var,
+            self.game_notices_var,
             self.media_source_var,
             self.theme_var,
             *self.settings_vars.values(),
@@ -260,16 +269,33 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         self.label(side, "✝ КРЕСТ", large=True).pack(anchor="w", pady=(0, 4))
         self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
         self.edition_label.pack(anchor="w", pady=(0, 16))
-        self.nav_buttons = {}
-        for key, title in self.NAV:
-            button = ttk.Button(
-                side, text=title, padding=(8, 3), command=lambda k=key: self.switch_page(k)
-            )
-            button.pack(fill="x", pady=1)
-            self.nav_buttons[key] = button
         ttk.Button(side, text="Завершить работу", command=self._real_quit).pack(
             side="bottom", fill="x"
         )
+        self.nav_canvas = tk.Canvas(side, bg=self.theme["sidebar"], highlightthickness=0, width=170)
+        nav_scroll = ttk.Scrollbar(side, orient="vertical", command=self.nav_canvas.yview)
+        nav_scroll.pack(side="right", fill="y")
+        self.nav_canvas.pack(fill="both", expand=True)
+        self.nav_canvas.configure(yscrollcommand=nav_scroll.set)
+        self.nav_frame = tk.Frame(self.nav_canvas, bg=self.theme["sidebar"])
+        nav_window = self.nav_canvas.create_window((0, 0), window=self.nav_frame, anchor="nw")
+        self.nav_frame.bind(
+            "<Configure>",
+            lambda e: self.nav_canvas.configure(scrollregion=self.nav_canvas.bbox("all")),
+        )
+        self.nav_canvas.bind(
+            "<Configure>", lambda e: self.nav_canvas.itemconfigure(nav_window, width=e.width)
+        )
+        self.nav_buttons = {}
+        for key, title in self.NAV:
+            button = ttk.Button(
+                self.nav_frame,
+                text=title,
+                padding=(8, 3),
+                command=lambda k=key: self.switch_page(k),
+            )
+            button.pack(fill="x", pady=1)
+            self.nav_buttons[key] = button
         body = tk.Frame(self.shell, bg=self.theme["bg"], padx=22, pady=20)
         body.pack(side="left", fill="both", expand=True)
         footer = tk.Frame(body, bg=self.theme["bg"])
@@ -315,6 +341,7 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         self.build_actions_tab()
         self.build_voice_tab()
         self.build_music_tab()
+        self.build_workflows()
         self.build_skills_tab()
         self.build_favorites_tab()
         self.build_timers_tab()
@@ -338,6 +365,12 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
             if getattr(event, "num", 0) == 5
             else -int(event.delta / 120) or (-1 if event.delta > 0 else 1)
         )
+        widget = event.widget
+        while widget is not None:
+            if widget is self.nav_canvas or widget is self.nav_frame:
+                self.nav_canvas.yview_scroll(units * 3, "units")
+                return
+            widget = getattr(widget, "master", None)
         self.canvases[self.current_page].yview_scroll(units * 3, "units")
 
     def switch_page(self, code):
@@ -697,8 +730,11 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         ttk.Button(row, text="Готово", command=lambda: self._handle_reminder(False)).pack(
             side="left"
         )
-        ttk.Button(
-            row, text="Отложить на 5 минут", command=lambda: self._handle_reminder(True)
+        ttk.Button(row, text="Отложить", command=lambda: self._handle_reminder(True)).pack(
+            side="left", padx=6
+        )
+        ttk.Combobox(
+            row, textvariable=self.snooze_delay, values=["5 минут", "15 минут", "1 час"], width=14
         ).pack(side="left", padx=6)
         card = self.card(self.page_bodies["timers"], "Новое напоминание")
         self.reminder_label = tk.StringVar()
@@ -709,8 +745,12 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
             anchor="w", pady=6
         )
         self.daily_time = tk.StringVar(value="09:00")
-        self.field(card, "Каждый день в", self.daily_time)
-        ttk.Button(card, text="Напоминать ежедневно", command=self._add_daily_reminder).pack(
+        self.field(card, "Напоминать в", self.daily_time)
+        days_row = tk.Frame(card, bg=self.theme["card"])
+        days_row.pack(fill="x", pady=6)
+        for name, var in zip(["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"], self.weekdays):
+            ttk.Checkbutton(days_row, text=name, variable=var).pack(side="left")
+        ttk.Button(card, text="Сохранить расписание", command=self._add_daily_reminder).pack(
             anchor="w", pady=6
         )
         card = self.card(
@@ -760,6 +800,16 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
                 side="left", padx=3
             )
 
+        card = self.card(
+            self.page_bodies["timers"],
+            "История выполнения",
+            "Последние 30 завершённых напоминаний.",
+        )
+        self.completed_label = self.label(
+            card, "Пока нет выполненных дел", muted=True, wraplength=680
+        )
+        self.completed_label.pack(anchor="w", pady=12)
+
     def _cancel_timer(self):
         try:
             for selected in self.timer_tree.selection():
@@ -791,9 +841,14 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
             return
         try:
             if snooze:
-                self.runtime.state.snooze(selected[0])
+                from skills.timers_alarms import parse_timer_duration
+
+                self.runtime.state.snooze(
+                    selected[0],
+                    parse_timer_duration(self.snooze_delay.get())[0],
+                )
             else:
-                self.runtime.state.acknowledge(selected[0])
+                self.runtime.state.complete(selected[0])
         except (OSError, ValueError) as exc:
             self._report_error(str(exc))
         self._update_reminders()
@@ -804,7 +859,12 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
             label = self.reminder_label.get().strip()
             if not label or len(label) > 500:
                 raise ValueError("Заполните поле «О чём напомнить» (до 500 символов)")
-            self.runtime.state.add_alarm(self.daily_time.get().strip(), label, daily=True)
+            self.runtime.state.add_alarm(
+                self.daily_time.get().strip(),
+                label,
+                daily=True,
+                weekdays=[i for i, var in enumerate(self.weekdays) if var.get()],
+            )
         except (OSError, ValueError) as exc:
             self._report_error(str(exc))
             return
@@ -838,6 +898,8 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
         selected = self.timer_tree.selection()
         rows = []
         for kind, items in self.runtime.state.snapshot().items():
+            if kind == "completed_tasks":
+                continue
             for item in items:
                 seconds = max(0, int(item["end_time"] - time.time()))
                 rows.append(
@@ -847,7 +909,10 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
                             {
                                 "active_timers": "Таймер",
                                 "active_alarms": "Будильник",
-                                "daily_tasks": "Ежедневно",
+                                "daily_tasks": " / ".join(
+                                    ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][d]
+                                    for d in item.get("weekdays", range(7))
+                                ),
                             }[kind],
                             item.get("label", ""),
                             f"{seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}",
@@ -1111,6 +1176,15 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
 
     def _draft(self):
         data = self.config_mgr.snapshot()
+        data["scenarios"] = copy.deepcopy(self.scenario_drafts)
+        data["performance"] = {
+            "mode": MODES[self.profile_var.get()],
+            "game_processes": self.game_processes_var.get().strip(),
+        }
+        data["notification_settings"] = {
+            "mode": NOTICE_MODES[self.notice_mode_var.get()],
+            "game_important_only": self.game_notices_var.get(),
+        }
         data["owner_name"] = self.owner_var.get().strip()
         data["profile"]["onboarding_completed"] = data["profile"]["onboarding_completed"] or bool(
             data["owner_name"]
@@ -1547,6 +1621,7 @@ class ControlCenterApp(ProductPages, VoicePages, ServicePages, tk.Tk):
                     button.configure(state="normal" if enabled else "disabled")
             self._update_timers()
             self._update_reminders()
+            self._update_workflows()
             self._update_license_view()
             if (
                 not self.config_mgr.is_premium()

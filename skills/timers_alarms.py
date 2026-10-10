@@ -23,7 +23,7 @@ logger = logging.getLogger("SkillTimers")
     description="Ежедневное напоминание: напоминай каждый день в 09:00 сделать зарядку",
     category="Timers",
 )
-def daily_reminder(phrase, state):
+def daily_reminder(phrase, state, weekdays=None):
     tokens = phrase.split()
     split = 0
     for token in tokens:
@@ -42,8 +42,10 @@ def daily_reminder(phrase, state):
             "status": "error",
             "message": "Скажите: напоминай каждый день в девять утра сделать зарядку",
         }
-    state.add_alarm(clock, label=label, daily=True)
-    return f"Буду напоминать каждый день в {clock}: {label}."
+    state.add_alarm(clock, label=label, daily=True, weekdays=weekdays)
+    return f"Буду напоминать в {clock}: {label}. " + (
+        "Каждый день." if weekdays is None else "По выбранным дням недели."
+    )
 
 
 @skill(

@@ -15,7 +15,13 @@ import uuid
 from storage import atomic_write_json
 
 _current = ContextVar("assistant_state", default=None)
-_COLLECTIONS = ("active_timers", "active_alarms", "daily_tasks", "pending_reminders")
+_COLLECTIONS = (
+    "active_timers",
+    "active_alarms",
+    "daily_tasks",
+    "pending_reminders",
+    "completed_tasks",
+)
 
 
 def _valid_item(item, seen):
@@ -52,6 +58,8 @@ class AssistantState:
         self.active_alarms = []
         self.pending_reminders = []
         self.daily_tasks = []
+        self.completed_tasks = []
+        self.last_target = None
         self.load_error = ""
         self.stopwatch_start_time = None
         self.shutdown_requested = threading.Event()
@@ -69,9 +77,23 @@ class AssistantState:
                         self.load_error = "Повреждён список напоминаний"
                         continue
                     for item in values:
+                        if key == "completed_tasks" and (
+                            not isinstance(item, dict)
+                            or type(item.get("completed_at")) not in (int, float)
+                            or not 0 < item["completed_at"] < 253402300800
+                        ):
+                            self.load_error = "Повреждена история выполнения"
+                            continue
                         if key == "daily_tasks":
                             try:
                                 datetime.strptime(item.get("time_str", ""), "%H:%M")
+                                days = item.get("weekdays", list(range(7)))
+                                if (
+                                    not days
+                                    or not isinstance(days, list)
+                                    or any(type(v) is not int or v not in range(7) for v in days)
+                                ):
+                                    raise ValueError("Дни недели")
                             except (ValueError, AttributeError, TypeError):
                                 self.load_error = "Повреждено время ежедневного напоминания"
                                 continue
@@ -108,12 +130,14 @@ class AssistantState:
         """Do not report success or lose a reminder when saving fails."""
         with self._lock:
             previous = {key: [dict(v) for v in getattr(self, key)] for key in _COLLECTIONS}
+            previous_target = self.last_target
             try:
                 yield
                 self.persist()
             except Exception:
                 for key, items in previous.items():
                     setattr(self, key, items)
+                self.last_target = previous_target
                 raise
 
     def reminders(self):
@@ -136,7 +160,10 @@ class AssistantState:
                 end_time=time.time() + seconds,
                 total_seconds=seconds,
             )
+            if "task_id" in item:
+                timer["task_id"] = item["task_id"]
             self.active_timers.append(timer)
+            self.last_target = (timer["id"], time.monotonic())
             self.pending_reminders.remove(item)
             return dict(timer)
 
@@ -153,7 +180,7 @@ class AssistantState:
         with self._lock:
             return {
                 k: [dict(item) for item in getattr(self, k)]
-                for k in ("active_timers", "active_alarms", "daily_tasks")
+                for k in ("active_timers", "active_alarms", "daily_tasks", "completed_tasks")
             }
 
     def add_timer(self, seconds, label):
@@ -166,13 +193,17 @@ class AssistantState:
                 total_seconds=seconds,
             )
             self.active_timers.append(item)
+            self.last_target = (item["id"], time.monotonic())
             return dict(item)
 
-    def add_alarm(self, time_str, label="Будильник", now=None, daily=False):
+    def add_alarm(self, time_str, label="Будильник", now=None, daily=False, weekdays=None):
         now = now or datetime.now()
         parsed = datetime.strptime(time_str, "%H:%M")
         target = now.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
-        if target <= now:
+        days = list(range(7)) if weekdays is None else sorted(set(weekdays))
+        if not days or any(type(day) is not int or day not in range(7) for day in days):
+            raise ValueError("Выберите хотя бы один день недели")
+        while target <= now or (daily and target.weekday() not in days):
             target += timedelta(days=1)
         with self._change():
             item = dict(
@@ -181,6 +212,9 @@ class AssistantState:
                 time_str=time_str,
                 label=label,
             )
+            if daily:
+                item["weekdays"] = days
+            self.last_target = (item["id"], time.monotonic())
             (self.daily_tasks if daily else self.active_alarms).append(item)
             return dict(item)
 
@@ -192,6 +226,26 @@ class AssistantState:
             before = len(items)
             items[:] = [item for item in items if item_id and item["id"] != item_id]
             return before - len(items)
+
+    def extend_timer(self, item_id, seconds):
+        self._validate_duration(seconds)
+        with self._change():
+            item = next((v for v in self.active_timers if v["id"] == item_id), None)
+            if item is None or item["end_time"] <= time.time():
+                raise ValueError("Этот таймер уже закончился")
+            self._validate_duration(item["end_time"] - time.time() + seconds)
+            item["end_time"] += seconds
+            item["total_seconds"] = item.get("total_seconds", 0) + seconds
+            self.last_target = (item_id, time.monotonic())
+
+    def complete(self, item_id):
+        with self._change():
+            item = next((v for v in self.pending_reminders if v["id"] == item_id), None)
+            if item is None:
+                raise ValueError("Напоминание уже закрыто")
+            self.completed_tasks.append(dict(item, completed_at=time.time()))
+            self.completed_tasks[:] = self.completed_tasks[-500:]
+            self.pending_reminders.remove(item)
 
     def take_due(self, now=None):
         now = time.time() if now is None else now
@@ -223,7 +277,9 @@ class AssistantState:
                     target = datetime.fromtimestamp(now).replace(
                         hour=clock.hour, minute=clock.minute, second=0, microsecond=0
                     )
-                    if target.timestamp() <= now:
+                    while target.timestamp() <= now or target.weekday() not in task.get(
+                        "weekdays", list(range(7))
+                    ):
                         target += timedelta(days=1)
                     task["end_time"] = target.timestamp()
             return due

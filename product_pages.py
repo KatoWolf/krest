@@ -18,6 +18,8 @@ class ProductPages:
             value="Нажмите «Найти плееры». Крест выбирает играющую медиасессию автоматически."
         )
         self.music_busy = False
+        self.diagnostics_busy = False
+        self.media_diagnostics = tk.StringVar(value="Проверка ничего не нажимает в плеере.")
         self.license_code_var = tk.StringVar()
         self.license_status_var = tk.StringVar()
         self.license_feedback_var = tk.StringVar()
@@ -146,6 +148,30 @@ class ProductPages:
             muted=True,
             wraplength=680,
         ).pack(anchor="w", pady=12)
+
+        ttk.Button(card, text="Диагностика плеера", command=self._diagnose_music).pack(
+            anchor="w", pady=6
+        )
+        self.label(card, textvariable=self.media_diagnostics, wraplength=680).pack(anchor="w")
+
+    def _diagnose_music(self):
+        from media_control import diagnostics
+
+        if self.diagnostics_busy:
+            return
+        self.diagnostics_busy = True
+        self.media_diagnostics.set("Проверяю возможности плеера…")
+        selected = self.media_source_var.get()
+
+        def work():
+            try:
+                return diagnostics(selected)
+            except Exception as exc:
+                return "Диагностика не завершена: " + str(exc)
+            finally:
+                self.post_ui(lambda: setattr(self, "diagnostics_busy", False))
+
+        self._background(work, done=lambda text: self.media_diagnostics.set(text))
 
     def _music_command(self, command):
         if self.save_all_settings(quiet=True):

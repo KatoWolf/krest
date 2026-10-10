@@ -44,7 +44,9 @@ def main():
             connection.update(**presence_payload(cfg, status))
             emit("status", "Активность обновлена")
             last_error = ""
-            time.sleep(20)
+            from performance import shared_multiplier
+
+            time.sleep(20 * shared_multiplier(data_dir()))
         except KeyboardInterrupt:
             if connection:
                 connection.close()
