@@ -12,6 +12,7 @@ class MicrophoneTest:
         self.samples = b""
         self.noise_threshold = None
         self.busy = False
+        self.device_name = ""
         self.stop = threading.Event()
         self._lock = threading.Lock()
 
@@ -41,16 +42,15 @@ class MicrophoneTest:
                     parts.append(bytes(data))
                     levels.append(rms)
 
-            selected = int(device) if str(device).isdigit() else device or None
-            with sd.RawInputStream(
-                device=selected,
-                channels=1,
-                dtype="int16",
-                samplerate=16000,
-                blocksize=800,
-                callback=capture,
-            ):
+            from audio_devices import open_microphone
+
+            stream, info = open_microphone(sd, device, capture)
+            self.device_name = info["name"]
+            try:
                 self.stop.wait(5)
+            finally:
+                stream.stop()
+                stream.close()
             if self.stop.is_set():
                 return "Проверка отменена"
             if dropped:

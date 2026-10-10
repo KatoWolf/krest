@@ -17,6 +17,7 @@ FILES = {
     "memory.sqlite3",
     "jobs.sqlite3",
     "inbox.sqlite3",
+    "warframe_state.json",
 }
 MAX_TOTAL = 64 * 1024 * 1024
 
@@ -102,6 +103,10 @@ def inspect_backup(path):
         if config_data.get("schema_version", 1) not in (1, 2):
             raise ValueError("Настройки копии созданы новой версией Крест")
         validate(merge(DEFAULT_CONFIG, config_data))
+        if "warframe_state.json" in result:
+            from warframe_store import validate_state
+
+            validate_state(json.loads(result["warframe_state.json"]))
         return result
 
 

@@ -104,3 +104,37 @@ for name, palette in {
     },
 }.items():
     THEMES[name] = palette
+
+# Optional premium palettes share the same readable focus/hover system.
+for name, changes in {
+    "Obsidian Crimson": {
+        "bg": "#100e12",
+        "sidebar": "#171318",
+        "card": "#211a22",
+        "card_hover": "#31222f",
+        "accent": "#e07c95",
+        "accent_hover": "#f29db1",
+        "text": "#f9edf1",
+        "sub_text": "#bca5b0",
+        "border": "#45303e",
+        "glow": "#402231",
+        "success": "#78cfb0",
+        "danger": "#ff728f",
+    },
+    "Void Pearl": {
+        "bg": "#11171d",
+        "sidebar": "#172129",
+        "card": "#1e2c35",
+        "card_hover": "#2b3d48",
+        "accent": "#dac58d",
+        "accent_hover": "#efddb0",
+        "text": "#f2f1e9",
+        "sub_text": "#acbbc0",
+        "border": "#39505b",
+        "glow": "#35382f",
+        "success": "#79d8b6",
+        "danger": "#ef8590",
+    },
+}.items():
+    THEMES[name] = changes
+    PREMIUM_THEMES.add(name)

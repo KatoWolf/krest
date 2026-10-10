@@ -53,6 +53,9 @@ class Kernel:
         self.tray = KernelTray(self)
         self._ui_spawn_lock = threading.Lock()
         self._last_ui_spawn = 0
+        from game_overlay import OverlayManager
+
+        self.overlay = OverlayManager(self.config.filepath)
 
     def open_ui(self, quick=False):
         with self._ui_spawn_lock:
@@ -150,6 +153,7 @@ class Kernel:
                 "game": rt.performance.game,
             },
             "scenario": rt.scenarios.status,
+            "warframe": rt.warframe.status(),
             "downloads": rt.download_status,
             "command": rt.command_status(),
             "notifications_mode": rt.notification_mode,
@@ -173,6 +177,25 @@ class Kernel:
             return {"protocol": PROTOCOL_VERSION, "pid": os.getpid(), "safe_mode": self.safe}
         if method == "snapshot":
             return self.snapshot(int(args.get("after", 0)))
+        if method == "warframe.snapshot":
+            result = rt.warframe.snapshot()
+            result["status"]["overlay_error"] = self.overlay.error
+            return result
+        if method == "warframe.request":
+            return rt.warframe.request(args["action"], args.get("values", {}))
+        if method == "warframe.result":
+            return rt.warframe.result(args["id"])
+        if method == "overlay":
+            import voice
+
+            return {
+                "game": rt.warframe.status(),
+                "settings": self.settings()["warframe"],
+                "voice": voice.telemetry(),
+                "listening": bool(rt._voice_thread and rt._voice_thread.is_alive()),
+                "command": rt.current_command,
+                "reduced": self.settings()["accessibility"]["reduce_motion"],
+            }
         if method == "media_query":
             import media_control
 
@@ -356,6 +379,14 @@ class Kernel:
                 except queue.Empty:
                     break
             self.integrations.refresh()
+            cfg = self.settings()
+            self.overlay.tick(
+                self._ready
+                and not self.safe
+                and cfg["warframe"]["overlay_enabled"]
+                and self.runtime.warframe.running
+            )
+        self.overlay.close()
         self.event("shutdown", None)
         # Let attached menus observe the final event before closing local IPC.
         time.sleep(0.75)

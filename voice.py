@@ -102,6 +102,15 @@ def speak(text):
                 logger.warning("Очередь озвучки заполнена; текст доступен в меню")
 
 
+def local_models_ready(settings):
+    """Only inspect paths: this does not import models or open a microphone."""
+    cfg = settings.get("app_settings", {})
+    base = Path(__file__).resolve().parent
+    return (base / cfg.get("vosk_path", "model")).is_dir() and (
+        base / cfg.get("silero_path", "model_silero.pt")
+    ).is_file()
+
+
 def enable():
     global _engine, _model_signature
     with _engine_lock:
@@ -134,9 +143,12 @@ def enable():
         engine.configure(_settings)
         if engine.rec is None or engine.model_tts is None:
             raise RuntimeError("Не загружены модели Vosk/Silero. Проверьте пути в настройках.")
-        if engine.stream is None or not engine.stream.active:
-            if not engine.start_microphone():
-                raise RuntimeError("Микрофон недоступен. Проверьте выбранное устройство.")
+        try:
+            active = engine.stream is not None and engine.stream.active
+        except Exception:
+            active = False
+        if not active:
+            engine.start_microphone()  # Keep the listener alive so a newly connected microphone can recover.
         _engine = engine
 
 
@@ -152,10 +164,19 @@ def disable():
             except queue.Empty:
                 break
         if engine is not None:
-            engine.sd.stop()
+            try:
+                engine.sd.stop()
+            except Exception:
+                pass
             if engine.stream is not None:
-                engine.stream.stop()
-                engine.stream.close()
+                try:
+                    engine.stream.stop()
+                except Exception:
+                    pass
+                try:
+                    engine.stream.close()
+                except Exception:
+                    pass
                 engine.stream = None
 
 
@@ -190,7 +211,7 @@ def telemetry():
     if _remote is not None:
         return _remote.cached["voice"]["telemetry"]
     engine = _engine
-    return dict(engine.metrics) if engine else {}
+    return dict(engine.metrics, speaking=bool(engine.is_speaking)) if engine else {}
 
 
 def recognition():

@@ -64,6 +64,9 @@ class AssistantRuntime:
         self.download_status = "Автосортировка выключена"
         self.last_result = None
         self.status_path = Path(data_dir) / "current_status.json"
+        from warframe_service import WarframeService
+
+        self.warframe = WarframeService(self, data_dir)
         voice.configure(self._speech_event, settings, self.state)
 
     def _speech_event(self, text):
@@ -101,6 +104,14 @@ class AssistantRuntime:
         ]
         for thread in self._threads:
             thread.start()
+        self.warframe.start()
+        cfg = self.settings()
+        if (
+            not cfg.get("safe_mode")
+            and cfg.get("app_settings", {}).get("voice_auto_start", True)
+            and voice.local_models_ready(cfg)
+        ):
+            self.start_voice()
 
     def submit(self, text, source="text", confidence=None, request_key=None):
         text = text.strip()
@@ -449,7 +460,10 @@ class AssistantRuntime:
         try:
             with self._voice_control:
                 voice.enable()
-            self.events.put(("voice", "Микрофон активен"))
+            connected = bool(voice.telemetry().get("connected"))
+            self.events.put(
+                ("voice", "Микрофон активен" if connected else "Ищу доступный микрофон…")
+            )
             while not self.stop_event.is_set() and not self._voice_stop.wait(0.03):
                 if self._arm_requested.is_set():
                     self._arm_requested.clear()
@@ -458,6 +472,17 @@ class AssistantRuntime:
                     ).get("active_timeout", 6)
                     self.events.put(("voice", "Слушаю команду без обращения"))
                 text = voice.listen()
+                now_connected = bool(voice.telemetry().get("connected"))
+                if now_connected != connected:
+                    connected = now_connected
+                    self.events.put(
+                        (
+                            "voice",
+                            "Подключён микрофон: " + voice.telemetry().get("device_name", "")
+                            if connected
+                            else "Микрофон отключён, пробую подключиться снова…",
+                        )
+                    )
                 if text:
                     self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
@@ -482,6 +507,7 @@ class AssistantRuntime:
         with self._request_lock:
             self.stop_event.set()
             self.clear_pending()
+        self.warframe.close()
         self.scenarios.cancel()
         if self.scenarios.thread:
             self.scenarios.thread.join(timeout=1)

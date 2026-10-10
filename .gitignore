@@ -41,6 +41,11 @@ kernel_endpoint.json
 .ui.lock
 .krest-sort.lock
 imported_skills/
+warframe_state.json
+warframe_state.json.broken-*
+warframe_cache/
+captures/
+.overlay.lock
 
 update_rollback.json
 before-update-*.zip

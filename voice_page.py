@@ -37,6 +37,11 @@ class VoicePages:
             ("Прервать ответ", voice.stop_speaking),
         ):
             ttk.Button(row, text=title, command=fn).pack(side="left", padx=(0, 5))
+        ttk.Checkbutton(
+            card,
+            text="Включать голос при запуске Крест, если модели найдены",
+            variable=self.settings_vars["voice_auto_start"],
+        ).pack(anchor="w", pady=4)
         self.label(card, textvariable=self.voice_var, muted=True).pack(anchor="w")
         self.mic_meter = ttk.Progressbar(card, maximum=100)
         self.mic_meter.pack(fill="x", pady=8)
@@ -87,7 +92,18 @@ class VoicePages:
             "Проверка микрофона",
             "Выключите голос. Для измерения фона помолчите пять секунд; для тестовой записи произнесите команду. Запись остаётся только в памяти.",
         )
+        self.label(
+            card,
+            "Оставьте поле пустым для автоматического выбора. При отключении устройства Крест попробует другие доступные входы.",
+            muted=True,
+            wraplength=680,
+        ).pack(anchor="w", pady=6)
         self.field(card, "Имя / индекс микрофона", self.settings_vars["microphone"])
+        ttk.Button(
+            card,
+            text="Выбирать автоматически",
+            command=lambda: self.settings_vars["microphone"].set(""),
+        ).pack(anchor="w", pady=4)
         ttk.Button(
             card,
             text="Настроить порог автоматически · 5 секунд тишины",
@@ -292,6 +308,15 @@ class VoicePages:
         peak = self.microphone_test.peak if self.audio_test_busy else data.get("peak", 0)
         self.mic_meter["value"] = min(100, peak / 32768 * 100)
         text = f"Уровень: {rms:.0f} · Пик: {peak / 32768:.0%}"
+        if data.get("device_name"):
+            text = (
+                data["device_name"]
+                + (" · подключён" if data.get("connected") else " · ожидает подключения")
+                + "\n"
+                + text
+            )
+        if data.get("mic_error"):
+            text += "\n" + data["mic_error"][:240]
         if peak >= 32700:
             text += " · Перегрузка: уменьшите усиление"
         if data.get("dropped"):

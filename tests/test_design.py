@@ -79,3 +79,16 @@ def test_indicator_has_no_idle_animation_and_stops_after_pulse():
     finally:
         indicator.stop()
         root.destroy()
+
+
+def test_destroying_unmapped_card_cancels_pending_layout():
+    root = tk.Tk()
+    try:
+        card = RoundedCard(root, THEMES["Amethyst Modern"])
+        job = card._layout_job
+        assert job in root.tk.call("after", "info")
+        card.destroy()
+        assert job not in root.tk.call("after", "info")
+        root.update()
+    finally:
+        root.destroy()

@@ -29,6 +29,7 @@ def main(argv=None):
     parser.add_argument("--restore", help="Восстановить локальную копию при остановленном ядре")
     parser.add_argument("--kernel", action="store_true", help="Постоянное ядро без меню")
     parser.add_argument("--config", help="Путь к конфигурации")
+    parser.add_argument("--game-overlay", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--safe-mode", action="store_true", help="Без автозапуска ботов")
     parser.add_argument("--status", action="store_true", help="Состояние работающего ядра")
     parser.add_argument("--stop-kernel", action="store_true", help="Завершить ядро и его сервисы")
@@ -42,6 +43,10 @@ def main(argv=None):
     from app_runtime import AssistantRuntime
 
     settings = ConfigManager(args.config or CONFIG_PATH)
+    if args.game_overlay:
+        from game_overlay import run_overlay
+
+        return run_overlay(settings.filepath)
     if args.update or args.rollback:
         from source_update import SourceUpdater
         from pathlib import Path

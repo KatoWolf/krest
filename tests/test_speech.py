@@ -338,3 +338,52 @@ def test_embedded_or_negated_dangerous_keywords_never_dispatch():
         assert manager.match(phrase) is None, phrase
     assert manager.match("очисти корзину") is not None
     assert manager.match("напомни через пять минут не закрывать окно") is not None
+
+
+def test_removed_microphone_active_property_error_retries_without_killing_listener(
+    engine, monkeypatch
+):
+    class Removed:
+        @property
+        def active(self):
+            raise RuntimeError("Device removed")
+
+    engine.stream = Removed()
+    attempts = []
+    monkeypatch.setattr(engine, "start_microphone", lambda: attempts.append(True) or False)
+    assert engine.listen() == "" and attempts == [True]
+
+
+def test_microphone_backend_refresh_is_rate_limited_and_only_after_failure(engine, monkeypatch):
+    import audio_devices
+
+    calls = []
+    monkeypatch.setattr(audio_devices, "refresh_idle_backend", lambda sd: calls.append("refresh"))
+    monkeypatch.setattr(
+        audio_devices,
+        "open_microphone",
+        lambda *a: (
+            SimpleNamespace(active=True, stop=lambda: None, close=lambda: None),
+            {"name": "USB", "index": 1, "input_rate": 48000},
+        ),
+    )
+    engine.last_mic_error_time = engine.time.time() - 10
+    assert engine.start_microphone()
+    assert engine.metrics["device_name"] == "USB" and engine.metrics["connected"]
+    assert engine.start_microphone()
+    assert calls == ["refresh"]
+
+
+def test_voice_autostart_inspects_paths_without_opening_devices(tmp_path):
+    import voice
+
+    cfg = {
+        "app_settings": {
+            "vosk_path": str(tmp_path / "vosk"),
+            "silero_path": str(tmp_path / "silero.pt"),
+        }
+    }
+    assert not voice.local_models_ready(cfg)
+    (tmp_path / "vosk").mkdir()
+    (tmp_path / "silero.pt").touch()
+    assert voice.local_models_ready(cfg)

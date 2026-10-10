@@ -1,5 +1,6 @@
 """Shared visual system. Explicit state colours avoid native white hover surfaces."""
 
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -189,7 +190,17 @@ class RoundedCard(tk.Canvas):
         self.window = self.create_window(padding, padding, anchor="nw", window=self.inner)
         self.bind("<Configure>", self._resize)
         self.inner.bind("<Configure>", self._content)
-        self.after_idle(self._content)
+        self._layout_job = self.after_idle(self._initial_layout)
+        self.bind("<Destroy>", self._cancel_layout)
+
+    def _initial_layout(self):
+        self._layout_job = None
+        self._content()
+
+    def _cancel_layout(self, event=None):
+        if self._layout_job:
+            self.after_cancel(self._layout_job)
+            self._layout_job = None
 
     def _content(self, event=None):
         height = self.inner.winfo_reqheight() + 2 * self.padding
@@ -302,7 +313,7 @@ def style_titlebar(window, colours):
 
 
 class MotionController:
-    """Five frames on interaction, zero timers at rest. Respects reduced motion."""
+    """Time-bounded interaction animation, zero timers at rest. Respects reduced motion."""
 
     def __init__(self, root):
         self.root = root
@@ -348,11 +359,14 @@ class MotionController:
         widget.configure(style=name)
         start, end = (normal, active) if entering else (active, normal)
 
-        def frame(index=0):
+        began = time.monotonic()
+
+        def frame():
             self.jobs.pop(widget, None)
             if not widget.winfo_exists() or str(widget.cget("style")) != name:
                 return
-            colour = colour_mix(start, end, index / 5)
+            progress = min(1, (time.monotonic() - began) / 0.12)
+            colour = colour_mix(start, end, progress)
             style.configure(name, background=colour)
             style.map(
                 name,
@@ -362,8 +376,8 @@ class MotionController:
                     ("!disabled", colour),
                 ],
             )
-            if index < 5:
-                self.jobs[widget] = self.root.after(24, frame, index + 1)
+            if progress < 1:
+                self.jobs[widget] = self.root.after(24, frame)
             elif not entering:
                 widget.configure(style=base)
 

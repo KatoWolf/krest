@@ -14,6 +14,8 @@ from tkinter import ttk, filedialog
 from ui_dialogs import messagebox, simpledialog
 from core_pages import CorePages
 from skill_import_pages import SkillImportPages
+from warframe_pages import WarframePages, PAGE_NAMES
+from menu_effects import AppearancePages, MenuEffects
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -36,6 +38,8 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    WarframePages,
+    AppearancePages,
     SkillImportPages,
     CorePages,
     DesktopShell,
@@ -45,7 +49,8 @@ class ControlCenterApp(
     ServicePages,
     tk.Tk,
 ):
-    NAV = [
+    NAV = PAGE_NAMES + [
+        ("appearance", "Оформление"),
         ("actions", "Обзор"),
         ("voice", "Голос"),
         ("music", "Музыка"),
@@ -82,7 +87,8 @@ class ControlCenterApp(
             ("steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
         ),
         ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
-        ("settings", "Настройки", ("settings", "voice", "license")),
+        ("wf_home", "Warframe", tuple(code for code, _ in PAGE_NAMES)),
+        ("settings", "Настройки", ("settings", "voice", "appearance", "license")),
     ]
 
     def __init__(self, remote=None, config_path=None):
@@ -128,6 +134,8 @@ class ControlCenterApp(
         self.init_voice_page()
         self.init_product_pages()
         self.init_workflows()
+        self.init_warframe()
+        self.init_appearance()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
         self.service_restart = {}
@@ -340,6 +348,11 @@ class ControlCenterApp(
         self.label(header, textvariable=self.page_subtitle, muted=True).pack(
             anchor="w", pady=(6, 0)
         )
+        self.effects_header = tk.Canvas(body, bg=self.theme["bg"], height=14, highlightthickness=0)
+        self.effects_header.pack(fill="x", pady=(0, 6))
+        if self.effects:
+            self.effects.close()
+        self.effects = MenuEffects(self, self.effects_header)
         self.subnav = tk.Frame(body, bg=self.theme["bg"])
         self.subnav.pack(fill="x", pady=(0, 18))
         footer = tk.Frame(body, bg=self.theme["bg"])
@@ -398,6 +411,8 @@ class ControlCenterApp(
         self.build_logs_tab()
         self.build_premium_tab()
         self.build_core_pages()
+        self.build_warframe_pages()
+        self.build_appearance()
         from ui_design import style_titlebar
 
         self.after_idle(lambda: style_titlebar(self, self.theme))
@@ -438,6 +453,7 @@ class ControlCenterApp(
             "inbox": "События, которые важно не пропустить.",
             "steam": "Игры, боты и ваши сервисы.",
             "kernel": "Крест работает рядом — даже когда меню закрыто.",
+            "wf_home": "Ваш второй пилот. Мир игры, планы и важные моменты.",
             "settings": "Настройте под себя. Остальное Крест подберёт автоматически.",
         }
         self.page_subtitle.set(subtitles[group[0]])
@@ -455,6 +471,8 @@ class ControlCenterApp(
                 self.subnav.columnconfigure(i, weight=1, uniform="tabs")
         self.pages[code].pack(fill="both", expand=True)
         self.current_page = code
+        if code.startswith("wf_"):
+            self.wf_refresh()
         if code == "skills":
             self.refresh_skills()
         if code == "logs":
@@ -1394,6 +1412,8 @@ class ControlCenterApp(
         )
         data["media"]["preferred_app"] = self.media_source_var.get()
 
+        data["warframe"] = self.warframe_settings_draft()
+        data["visual_effects"] = self.effects_draft()
         data["selected_theme"] = self.theme_var.get()
         data["command_aliases"] = dict(self.aliases)
         data["pronunciations"] = dict(self.pronunciations)
@@ -1471,6 +1491,9 @@ class ControlCenterApp(
             )
         }
         core_pending = self.core_draft_values()
+        self.wf_preserve()
+        if self.effects:
+            self.effects.close()
         self.shell.destroy()
         self._timer_rows = None
         self._reminder_rows = None
@@ -1733,6 +1756,12 @@ class ControlCenterApp(
 
     def _poll(self):
         if (
+            self.current_page.startswith("wf_")
+            and self.state() == "normal"
+            and time.monotonic() - self.wf_refreshed > 4
+        ):
+            self.wf_refresh()
+        if (
             self.current_page == "music"
             and self.state() != "withdrawn"
             and time.monotonic() - self.music_refreshed_at >= 8
@@ -1937,11 +1966,26 @@ class ControlCenterApp(
         self.runtime.detach()
         self._destroy_window()
 
+    def destroy(self):
+        # Cancel Tcl timers before their Python callbacks/widgets are destroyed.
+        effects = getattr(self, "effects", None)
+        if effects:
+            effects.close()
+        try:
+            for job in self.tk.call("after", "info"):
+                # Preserve callback ownership: child.destroy() deletes its own Tcl command.
+                self.tk.call("after", "cancel", job)
+        except tk.TclError:
+            pass
+        super().destroy()
+
     def _destroy_window(self):
         self.after_cancel(self._poll_job)
         indicator_controller.stop()
         logging.getLogger().removeHandler(self._log_handler)
         self._destroyed = True
+        if self.effects:
+            self.effects.close()
         self.destroy()
 
 

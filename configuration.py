@@ -9,10 +9,13 @@ import time
 import threading
 from storage import atomic_write_json
 from scenarios import DEFAULT_SCENARIOS, validate_scenarios
+from warframe_config import DEFAULT_WARFRAME, DEFAULT_EFFECTS, validate_game_settings
 
 CONFIG_PATH = Path(os.getenv("KREST_CONFIG_PATH", Path(__file__).resolve().parent / "config.json"))
 DEFAULT_CONFIG = {
     "schema_version": 2,
+    "warframe": DEFAULT_WARFRAME,
+    "visual_effects": DEFAULT_EFFECTS,
     "owner_name": "",
     "profile": {"onboarding_completed": False, "personality": "friendly"},
     "license": {"code": ""},
@@ -30,7 +33,10 @@ DEFAULT_CONFIG = {
     "file_policy": {"folders": [], "exclusions": [], "rules": []},
     "briefings": {"morning": "", "evening": ""},
     "accessibility": {"reduce_motion": False, "font_scale": 100},
-    "performance": {"mode": "auto", "game_processes": "cs2.exe,dota2.exe"},
+    "performance": {
+        "mode": "auto",
+        "game_processes": "cs2.exe,dota2.exe,Warframe.x64.exe,Warframe.exe",
+    },
     "notification_settings": {"mode": "all", "game_important_only": True},
     "selected_theme": "Amethyst Modern",
     "app_settings": {
@@ -38,6 +44,7 @@ DEFAULT_CONFIG = {
         "minimize_to_tray": True,
         "close_to_tray": True,
         "voice_enabled": True,
+        "voice_auto_start": True,
         "voice_volume": 80,
         "wake_word": "крест",
         "active_timeout": 6,
@@ -107,6 +114,7 @@ DEFAULT_CONFIG = {
             "windows",
             "gid",
             "steam",
+            "warframe",
         )
     },
 }
@@ -127,6 +135,7 @@ def merge(default, values):
 
 
 def validate(data):
+    validate_game_settings(data)
     validate_scenarios(data["scenarios"])
     remote = data["remote_control"]
     if (

@@ -101,6 +101,9 @@ _preroll = deque(maxlen=3)
 is_speaking = False
 stream = None
 last_mic_error_time = 0
+_microphone_setting = None
+_last_audio_at = 0
+_last_backend_refresh = 0
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -329,6 +332,9 @@ def interrupt():
 
 
 def audio_callback(indata, frames, time_info, status):
+    global _last_audio_at
+    _last_audio_at = time.monotonic()
+    metrics["connected"] = True
     if is_speaking:
         return
     data = bytes(indata)
@@ -344,16 +350,19 @@ def audio_callback(indata, frames, time_info, status):
 
 def start_microphone() -> bool:
     """Безопасная инициализация / перезапуск микрофона."""
-    global stream, last_mic_error_time
+    global stream, last_mic_error_time, _microphone_setting, _last_audio_at, _last_backend_refresh
 
     # Защита от слишком частых попыток перезапуска при сбое устройства
-    if time.time() - last_mic_error_time < 1.0:
+    if time.time() - last_mic_error_time < 3.0:
         return False
 
     try:
         if stream is not None:
             try:
                 stream.stop()
+            except Exception:
+                pass
+            try:
                 stream.close()
             except Exception:
                 pass
@@ -361,19 +370,34 @@ def start_microphone() -> bool:
 
         settings = _settings_getter().get("app_settings", {})
         selected = settings.get("microphone", "")
-        stream = sd.RawInputStream(
-            device=int(selected) if str(selected).isdigit() else (selected or None),
-            samplerate=SAMPLE_RATE,
-            blocksize=800,
-            dtype="int16",
-            channels=1,
-            callback=audio_callback,
+        from audio_devices import open_microphone, refresh_idle_backend
+
+        if (
+            last_mic_error_time
+            and not is_speaking
+            and time.monotonic() - _last_backend_refresh > 15
+        ):
+            with _play_lock:
+                if not is_speaking:
+                    refresh_idle_backend(sd)
+                    _last_backend_refresh = time.monotonic()
+        stream, info = open_microphone(sd, selected, audio_callback, SAMPLE_RATE)
+        _microphone_setting = str(selected)
+        _last_audio_at = time.monotonic()
+        metrics.update(
+            connected=True,
+            device_name=info["name"],
+            device_index=info["index"],
+            input_rate=info["input_rate"],
+            mic_error="",
         )
-        stream.start()
+        clear_audio_queue()
+        _reset_recognizer()
         return True
     except Exception as e:
         last_mic_error_time = time.time()
         print(f"\n--- [MIC ERROR]: Ошибка захвата микрофона: {e} ---")
+        metrics.update(connected=False, mic_error=str(e), rms=0, peak=0)
         stream = None
         return False
 
@@ -397,11 +421,21 @@ def listen():
     global last_recognition
     if rec is None or is_speaking:
         return ""
-    if stream is None or not stream.active:
+    selected = str(_settings_getter().get("app_settings", {}).get("microphone", ""))
+    try:
+        active = stream is not None and stream.active
+    except Exception:
+        active = False
+    if (
+        not active
+        or (_microphone_setting is not None and selected != _microphone_setting)
+        or (_last_audio_at and time.monotonic() - _last_audio_at > 5)
+    ):
         if not start_microphone():
             return ""
     cfg = _settings_getter().get("app_settings", {})
     _endpoint.threshold = int(cfg.get("speech_threshold", 200))
+    metrics["threshold"] = _endpoint.threshold
     _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
     with _recognizer_lock:
         if is_speaking:
