@@ -214,3 +214,121 @@ def test_overlay_survives_lost_foreground_window_and_exits_with_game(tmp_path, m
     monkeypatch.setattr(game_overlay, "draw_cross", draw)
     assert game_overlay.run_overlay(tmp_path / "config.json") == 0
     assert "listening" in states and len(calls) >= 3
+
+
+def test_effects_keep_animating_in_maximized_menu(app, monkeypatch):
+    app.switch_page("appearance")
+    app.update()
+    app.effect_mode.set("Снег")
+    app.update()
+    # Xvfb cannot maximize with Windows' WM state. Exercise the actual renderer
+    # with the exact state returned by Tk on a maximized Windows window.
+    monkeypatch.setattr(app, "state", lambda: "zoomed")
+    app.effects.refresh()
+    scene = app.effects.scenes[0]
+    assert scene.particles and scene.canvas.find_withtag("particles")
+    before = [p["y"] for p in scene.particles]
+    app.effects.last -= 0.1
+    app.after_cancel(app.effects.job)
+    app.effects.tick()
+    assert before != [p["y"] for p in scene.particles]
+    assert app.effects.job is not None
+    assert "включён" in app.effect_status.get()
+    app.effect_mode.set("Выключены")
+    assert not scene.particles and app.effects.job is None
+    assert not app.test_errors
+
+
+def test_effect_status_explains_game_pause_and_resumes_immediately(app):
+    app.switch_page("appearance")
+    app.update()
+    app.runtime.performance.set_mode("game")
+    app.effect_mode.set("Тлеющие искры")
+    assert "игровой профиль" in app.effect_status.get()
+    assert not app.effects.scenes[0].particles
+    app.effect_pause.set(False)
+    assert app.effects.scenes[0].particles
+    app.switch_page("security")
+    app.reduce_motion.set(True)
+    app.effects.refresh()
+    assert "Уменьшить движение" in app.effect_status.get()
+    assert not app.effects.scenes[0].particles
+    app.reduce_motion.set(False)
+    app.effects.refresh()
+    assert app.effects.scenes[0].particles
+    assert not app.test_errors
+
+
+def test_native_overlay_failure_keeps_in_menu_animation_alive(app, monkeypatch):
+    from unittest.mock import MagicMock
+    import menu_effects
+
+    app.update()
+    app.effects._disable_overlay("test setup")
+    native = MagicMock()
+    native.winfo_viewable.return_value = False
+    app.effects.window = native
+    monkeypatch.setattr(app, "focus_displayof", lambda: app)
+
+    def failed(window):
+        raise OSError("Transparent overlay is unavailable")
+
+    monkeypatch.setattr(menu_effects, "passthrough", failed)
+    app.effect_mode.set("Снег")
+    native.destroy.assert_called_once()
+    assert app.effects.window is None
+    assert app.effects.scenes[0].canvas.find_withtag("particles")
+    assert app.effects.job is not None
+    assert "Наложение по краям недоступно" in app.effect_status.get()
+    assert not app.test_errors
+
+
+def test_recycled_particles_stay_visible_and_at_borders():
+    from menu_effects import ParticleScene
+
+    root = tk.Tk()
+    canvas = tk.Canvas(root, width=600, height=400, highlightthickness=0)
+    canvas.pack()
+    root.update()
+    try:
+        scene = ParticleScene(canvas)
+        scene.random.seed(12)
+        for mode in ("snow", "blood", "embers", "stars"):
+            scene.draw(mode, 3, dt=0, border_only=True)
+            assert all(0 <= p["y"] <= 400 for p in scene.particles)
+            for _ in range(1800):  # Several complete screen traversals.
+                scene.draw(mode, 3, dt=0.15, border_only=True)
+            assert all(p["x"] <= 20 or p["x"] >= 580 for p in scene.particles)
+            assert sum(0 <= p["y"] <= 400 for p in scene.particles) >= 20
+            assert 26 <= len(canvas.find_withtag("particles")) <= 52
+    finally:
+        root.destroy()
+
+
+def test_saved_effect_restores_on_next_menu_launch(tmp_path):
+    from welcome_gui import ControlCenterApp, indicator_controller
+
+    path = tmp_path / "config.json"
+    for launch in range(2):
+        ui = ControlCenterApp(config_path=path)
+        try:
+            # Keep onboarding/runtime stopped; reveal the menu for rendering checks.
+            ui.onboarding.place_forget()
+            ui.update()
+            if launch == 0:
+                ui.effect_mode.set("Кровавые потёки")
+                ui.effect_intensity.set("3")
+                ui.effect_pause.set(False)
+                assert ui.save_all_settings()
+            else:
+                assert ui.effect_mode.get() == "Кровавые потёки"
+                assert ui.effect_intensity.get() == "3"
+                assert not ui.effect_pause.get()
+                ui.effects.refresh()
+                assert ui.effects.scenes[0].canvas.find_withtag("particles")
+        finally:
+            ui.runtime.close()
+            ui.integration.stop_all()
+            indicator_controller.stop()
+            logging.getLogger().removeHandler(ui._log_handler)
+            ui.destroy()

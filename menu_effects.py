@@ -30,6 +30,17 @@ class ParticleScene:
         self.particles = []
         self.mode = None
 
+    def _x(self, width, border_only):
+        if border_only:
+            # Keep recycled particles at the edges too, not behind the content mask.
+            return self.random.choice(
+                (
+                    self.random.uniform(6, min(20, width - 4)),
+                    self.random.uniform(max(4, width - 20), width - 6),
+                )
+            )
+        return self.random.uniform(4, width - 4)
+
     def draw(self, mode, intensity, dt=0.08, border_only=False):
         width, height = self.canvas.winfo_width(), self.canvas.winfo_height()
         if width < 4 or height < 4:
@@ -40,18 +51,11 @@ class ParticleScene:
             self.mode = mode
             self.size = (width, height)
             for _ in range(count):
-                x = self.random.uniform(4, width - 4)
-                if border_only and self.random.random() < 0.75:
-                    x = self.random.choice(
-                        [
-                            self.random.uniform(4, 22),
-                            self.random.uniform(max(4, width - 22), width - 4),
-                        ]
-                    )
+                x = self._x(width, border_only)
                 self.particles.append(
                     {
                         "x": x,
-                        "y": self.random.uniform(-height, height),
+                        "y": self.random.uniform(2, max(2, height - 2)),
                         "speed": self.random.uniform(10, 32),
                         "r": self.random.uniform(1, 2.8),
                         "phase": self.random.uniform(0, 6.28),
@@ -61,11 +65,12 @@ class ParticleScene:
         for p in self.particles:
             p["y"] += p["speed"] * dt * (-1 if mode == "embers" else 1)
             p["phase"] += dt
-            if p["y"] > height + 35:
-                p["y"] = -35
-                p["x"] = self.random.uniform(4, width - 4)
-            if p["y"] < -height:
-                p["y"] = height + 15
+            if mode == "embers" and p["y"] < -4:
+                p["y"] = height + 4
+                p["x"] = self._x(width, border_only)
+            elif mode != "embers" and p["y"] > height + 4:
+                p["y"] = -4
+                p["x"] = self._x(width, border_only)
             x = p["x"] + math.sin(p["phase"]) * 5
             y = p["y"]
             r = p["r"]
@@ -105,17 +110,35 @@ class MenuEffects:
         self.window = None
         self.job = None
         self.closed = False
+        self.overlay_error = ""
         if os.name == "nt":
-            self.window = tk.Toplevel(app)
-            self.window.withdraw()
-            self.window.overrideredirect(True)
-            self.window.configure(bg=TRANSPARENT)
-            self.window.attributes("-transparentcolor", TRANSPARENT)
-            canvas = tk.Canvas(self.window, bg=TRANSPARENT, highlightthickness=0)
-            canvas.pack(fill="both", expand=True)
-            self.scenes.append(ParticleScene(canvas))
+            try:
+                self.window = tk.Toplevel(app)
+                self.window.withdraw()
+                self.window.overrideredirect(True)
+                self.window.configure(bg=TRANSPARENT)
+                self.window.attributes("-transparentcolor", TRANSPARENT)
+                canvas = tk.Canvas(self.window, bg=TRANSPARENT, highlightthickness=0)
+                canvas.pack(fill="both", expand=True)
+                self.scenes.append(ParticleScene(canvas))
+            except (tk.TclError, OSError, AttributeError) as exc:
+                self._disable_overlay(exc)
         self.last = time.monotonic()
         self.refresh()
+
+    def _disable_overlay(self, error):
+        self.overlay_error = str(error)
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except tk.TclError:
+                pass
+            self.window = None
+        self.scenes = [scene for scene in self.scenes if scene.canvas.winfo_exists()]
+
+    def _status(self, text):
+        if self.app.effect_status.get() != text:
+            self.app.effect_status.set(text)
 
     def add_preview(self, canvas):
         self.scenes.append(ParticleScene(canvas))
@@ -139,8 +162,12 @@ class MenuEffects:
                 scene.clear()
         if self.window:
             self.window.withdraw()
-        if self.config()["mode"] != "off":
+        mode = self.config()["mode"]
+        self.header.configure(height=28 if mode != "off" else 14)
+        if mode != "off":
             self.tick()
+        else:
+            self._status("Эффекты выключены. Выберите вариант в списке.")
 
     def tick(self):
         self.job = None
@@ -155,34 +182,50 @@ class MenuEffects:
             if reduced
             else self.app.config_mgr.snapshot()["accessibility"]["reduce_motion"]
         )
-        active = self.app.state() == "normal" and self.app.winfo_viewable()
+        active = self.app.state() in ("normal", "zoomed") and self.app.winfo_viewable()
         game = self.app.runtime.performance.active == "game"
         paused = not motion or not active or (cfg["pause_in_game"] and game)
         now = time.monotonic()
         dt = min(0.15, now - self.last)
         self.last = now
         if paused:
+            self._status(
+                "Пауза: включено «Уменьшить движение» в разделе Система → Доступ и восстановление."
+                if not motion
+                else "Пауза: меню скрыто."
+                if not active
+                else "Пауза: игровой профиль. Снимите переключатель ниже, чтобы видеть эффекты во время игры."
+            )
             for scene in self.scenes:
                 if scene.canvas.winfo_exists():
                     scene.clear()
             if self.window:
                 self.window.withdraw()
         else:
-            if self.window:
-                if self.app.focus_displayof() is not None:
-                    if not self.window.winfo_viewable():
-                        self.window.update_idletasks()
-                        passthrough(self.window)
-                        self.window.deiconify()
-                    move_overlay(
-                        self.window,
-                        self.app.winfo_rootx(),
-                        self.app.winfo_rooty(),
-                        self.app.winfo_width(),
-                        self.app.winfo_height(),
-                    )
-                else:
-                    self.window.withdraw()
+            try:
+                if self.window:
+                    if self.app.focus_displayof() is not None:
+                        if not self.window.winfo_viewable():
+                            self.window.update_idletasks()
+                            passthrough(self.window)
+                            self.window.deiconify()
+                        move_overlay(
+                            self.window,
+                            self.app.winfo_rootx(),
+                            self.app.winfo_rooty(),
+                            self.app.winfo_width(),
+                            self.app.winfo_height(),
+                        )
+                    else:
+                        self.window.withdraw()
+            except (tk.TclError, OSError, AttributeError) as exc:
+                # A failed native transparent window must not stop the in-menu animation.
+                self._disable_overlay(exc)
+            self._status(
+                "Эффект работает в меню и предпросмотре. Наложение по краям недоступно."
+                if self.overlay_error
+                else "Эффект включён · изменения видны сразу."
+            )
             for scene in self.scenes:
                 if scene.canvas.winfo_exists() and scene.canvas.winfo_viewable():
                     scene.draw(
@@ -216,6 +259,7 @@ class AppearancePages:
         )
         self.effect_intensity = tk.StringVar(self, value=str(cfg["intensity"]))
         self.effect_pause = tk.BooleanVar(self, value=cfg["pause_in_game"])
+        self.effect_status = tk.StringVar(self, value="Эффекты выключены.")
         self.effects = None
         for var in (self.effect_mode, self.effect_intensity, self.effect_pause):
             var.trace_add("write", self._effects_changed)
@@ -293,6 +337,9 @@ class AppearancePages:
             state="readonly",
             width=5,
         ).pack(side="left")
+        self.label(card, textvariable=self.effect_status, muted=True, wraplength=650).pack(
+            anchor="w", pady=6
+        )
         ttk.Checkbutton(
             card, text="Приостанавливать эффекты в игровом профиле", variable=self.effect_pause
         ).pack(anchor="w", pady=6)

@@ -220,7 +220,9 @@ class ControlCenterApp(
         self.bind("<Escape>", lambda e: voice.stop_speaking())
         self.bind("<Unmap>", self._on_minimize)
         indicator_controller.attach(self)
-        self._poll_job = self.after(150 if self.state() == "normal" else 600, self._poll)
+        self._poll_job = self.after(
+            150 if self.state() in ("normal", "zoomed") else 600, self._poll
+        )
         self._show_welcome()
         if self.setup_message:
             self._append_log(self.setup_message)
@@ -1831,7 +1833,7 @@ class ControlCenterApp(
     def _poll(self):
         if (
             self.current_page.startswith("wf_")
-            and self.state() == "normal"
+            and self.state() in ("normal", "zoomed")
             and time.monotonic() - self.wf_refreshed > 4
         ):
             self.wf_refresh()
@@ -1907,7 +1909,7 @@ class ControlCenterApp(
                         logger.warning("Уведомление трея недоступно; напоминание сохранено в меню")
             elif kind == "shutdown":
                 self._real_quit()
-        if self.state() == "normal" and self.current_page in ("actions", "voice"):
+        if self.state() in ("normal", "zoomed") and self.current_page in ("actions", "voice"):
             self._update_voice_meter()
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
@@ -2004,7 +2006,9 @@ class ControlCenterApp(
                 f"{len(self.integration.processes)} подключённых сервисов"
             )
         if self.winfo_exists():
-            self._poll_job = self.after(150 if self.state() == "normal" else 600, self._poll)
+            self._poll_job = self.after(
+                150 if self.state() in ("normal", "zoomed") else 600, self._poll
+            )
 
     def _real_quit(self):
         if self.closing:
