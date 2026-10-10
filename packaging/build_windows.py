@@ -13,6 +13,47 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.9.0"
 
 
+def run_checked(command, **kwargs):
+    """Keep live build output and a bounded error tail in public CI annotations."""
+    from collections import deque
+    import threading
+
+    timeout = kwargs.pop("timeout", None)
+    kwargs.pop("check", None)
+    tail = deque(maxlen=35)
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **kwargs,
+    ) as process:
+
+        def read():
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                tail.append(line)
+
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise
+        finally:
+            reader.join(timeout=3)
+        if code:
+            detail = "".join(tail)[-11000:]
+            print(
+                "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
+                flush=True,
+            )
+            raise subprocess.CalledProcessError(code, command)
+
+
 def compiler_command(output):
     # Only explicit public resources enter the release; no configs, sessions or signing keys.
     modules = [
@@ -90,7 +131,7 @@ def smoke_test(dist):
         root = Path(temp)
         cfg = root / "config.json"
         report = root / "skills.json"
-        subprocess.run(
+        run_checked(
             [str(executable), "--check", "--check-output", str(report), "--config", str(cfg)],
             check=True,
             timeout=180,
@@ -100,13 +141,13 @@ def smoke_test(dist):
         if data["errors"] or data["skills"] < 150:
             raise RuntimeError("Встроенные навыки не загрузились: " + str(data))
         # Exercise the real child-process launcher with the installed executable, not python main.py.
-        subprocess.run(
+        run_checked(
             [str(executable), "--release-smoke", "--config", str(cfg)],
             check=True,
             timeout=90,
             cwd=root,
         )
-        subprocess.run(
+        run_checked(
             [str(executable), "--release-model-check", "--config", str(cfg)],
             check=True,
             timeout=900,
@@ -131,7 +172,7 @@ def main():
     if struct.calcsize("P") != 8:
         raise SystemExit("Требуется 64-битный Python")
     output.mkdir(parents=True, exist_ok=True)
-    subprocess.run(command, cwd=ROOT, check=True)
+    run_checked(command, cwd=ROOT, check=True)
     dist = output / "main.dist"
     audit_distribution(dist)
     smoke_test(dist)
@@ -141,7 +182,7 @@ def main():
             / "Inno Setup 6"
             / "ISCC.exe"
         )
-        subprocess.run(
+        run_checked(
             [
                 iscc,
                 "/DAppVersion=" + VERSION,

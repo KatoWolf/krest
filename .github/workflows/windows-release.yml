@@ -26,8 +26,11 @@ jobs:
       - name: Check sources
         run: |
           python -m ruff check .
-          python -m pytest -q
+          python -m pytest -q --junitxml=test-results.xml
           python main.py --check
+      - name: Report failing test details
+        if: always()
+        run: python tools/ci_test_report.py test-results.xml
       - name: Ensure installer compiler
         shell: pwsh
         run: |

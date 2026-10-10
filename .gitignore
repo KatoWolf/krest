@@ -60,3 +60,4 @@ screenshots/
 build/
 dist/
 .build-venv/
+test-results.xml
