@@ -175,6 +175,7 @@ class AssistantRuntime:
                     notification = None
                 if notification:
                     voice.speak(f"Новое сообщение: {notification}")
+                    self.events.put(("notification", notification))
                 from skills import gid
 
                 self.state.dota_guide_active = gid.dota_state.is_active

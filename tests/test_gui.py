@@ -74,6 +74,47 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
         assert app.runtime.state.active_timers[0]["label"] == "Проверка списка"
         app._open_service_log("ds_session.py")
         assert app.current_page == "logs" and app.log_source.get() == "ds_session.py"
+        assert {"steam", "discord_bot", "discord_account", "scripts"} <= app.pages.keys()
+        from storage import atomic_write_json
+
+        atomic_write_json(
+            tmp_path / "steam_state.json",
+            {
+                "account": "",
+                "games": [{"appid": "730", "name": "Counter-Strike 2", "installed": True}],
+                "inventories": {
+                    "730:2": {
+                        "updated": 1700000000,
+                        "summary": {"total": 1, "tradable": 0, "locked": 1, "unknown": 0},
+                        "items": [
+                            {
+                                "assetid": "1",
+                                "name": "Item",
+                                "amount": 1,
+                                "tradable": False,
+                                "unlock_at": None,
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        app._update_steam(force=True)
+        assert app.steam_games.exists("730")
+        assert len(app.steam_items.get_children()) == 1
+        opened = []
+        import service_pages
+
+        monkeypatch.setattr(service_pages.webbrowser, "open", opened.append)
+        app.steam_games.selection_set("730")
+        app._launch_steam_selection()
+        assert opened == ["steam://rungameid/730"]
+        app.steam_search.set("nonexistent")
+        assert not app.steam_games.get_children()
+        app.service_autostart["steam_bot.py"].set(True)
+        app.save_all_settings()
+        assert app.config_mgr.snapshot()["services"]["steam_bot.py"]["autostart"]
+        assert not app.integration.processes
         app.after(1700, app.quit)
         app.mainloop()
         assert not errors, errors

@@ -17,19 +17,24 @@ from integrations import IntegrationManager
 from themes import THEMES
 from guikrest import indicator_controller
 from command_book import CommandBook
+from service_pages import ServicePages
 
 logger = logging.getLogger(__name__)
 BASE_DIR = str(Path(__file__).resolve().parent)
 TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
-class ControlCenterApp(tk.Tk):
+class ControlCenterApp(ServicePages, tk.Tk):
     NAV = [
         ("actions", "Обзор"),
         ("skills", "Навыки"),
         ("favorites", "Мои команды"),
         ("timers", "Таймеры"),
-        ("api", "Подключения"),
+        ("api", "Telegram"),
+        ("steam", "Steam / CS2"),
+        ("discord_account", "Мой Discord"),
+        ("discord_bot", "Discord-бот"),
+        ("scripts", "Скрипты и мосты"),
         ("dota", "Dota 2"),
         ("settings", "Настройки"),
         ("logs", "Журнал"),
@@ -60,6 +65,16 @@ class ControlCenterApp(tk.Tk):
             self.config_mgr.snapshot, data_dir=self.config_mgr.filepath.parent
         )
         self.integration = IntegrationManager(self)
+        self.service_configs = self.config_mgr.snapshot()["services"]
+        self.service_autostart = {}
+        self.steam_vars = {
+            k: (tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=v))
+            for k, v in self.config_mgr.config["steam"].items()
+        }
+        self.presence_vars = {
+            k: (tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=v))
+            for k, v in self.config_mgr.config["discord_presence"].items()
+        }
         self.owner_var = tk.StringVar(value=self.config_mgr.config["owner_name"])
         self.theme_var = tk.StringVar(value=self.config_mgr.config["selected_theme"])
         self.settings_vars = {}
@@ -93,6 +108,8 @@ class ControlCenterApp(tk.Tk):
             *self.api_vars.values(),
             *self.skill_vars.values(),
             *self.dota_vars.values(),
+            *self.steam_vars.values(),
+            *self.presence_vars.values(),
         ]:
             variable.trace_add("write", self._mark_dirty)
         self.theme = THEMES.get(self.theme_var.get(), THEMES["Amethyst Modern"])
@@ -109,6 +126,8 @@ class ControlCenterApp(tk.Tk):
         indicator_controller.attach(self)
         self.runtime.start()
         self._poll_job = self.after(100, self._poll)
+        self._background(self.integration.autostart)
+        self._background(self._startup_checks)
         if self.config_mgr.load_error:
             self._append_log(
                 "Настройки повреждены: "
@@ -222,8 +241,10 @@ class ControlCenterApp(tk.Tk):
         self.label(side, "Личный ассистент", muted=True).pack(anchor="w", pady=(0, 28))
         self.nav_buttons = {}
         for key, title in self.NAV:
-            button = ttk.Button(side, text=title, command=lambda k=key: self.switch_page(k))
-            button.pack(fill="x", pady=4)
+            button = ttk.Button(
+                side, text=title, padding=(8, 4), command=lambda k=key: self.switch_page(k)
+            )
+            button.pack(fill="x", pady=2)
             self.nav_buttons[key] = button
         ttk.Button(side, text="Завершить работу", command=self._real_quit).pack(
             side="bottom", fill="x"
@@ -275,6 +296,9 @@ class ControlCenterApp(tk.Tk):
         self.build_favorites_tab()
         self.build_timers_tab()
         self.build_api_tab()
+        self.build_steam_tab()
+        self.build_discord_tabs()
+        self.build_scripts_tab()
         self.build_dota_tab()
         self.build_settings_tab()
         self.build_logs_tab()
@@ -553,6 +577,7 @@ class ControlCenterApp(tk.Tk):
                 "webo": "Интернет и Steam",
                 "windows": "Управление Windows",
                 "gid": "Гид Dota 2",
+                "steam": "Steam: библиотека и инвентарь",
             }
             ttk.Checkbutton(card, text=names.get(name, name), variable=var).pack(anchor="w", pady=3)
         ttk.Button(
@@ -826,15 +851,6 @@ class ControlCenterApp(tk.Tk):
                 "krest_bot.py",
             ),
             (
-                "Discord",
-                "Используйте токен бота из Developer Portal. Автоответы работают в личных сообщениях боту.",
-                [
-                    ("discord_token", "Bot Token", True),
-                    ("discord_channel_id", "Channel ID", False),
-                ],
-                "ds_session.py",
-            ),
-            (
                 "Telegram User",
                 "Авторизация личного аккаунта: API ID, API Hash и номер телефона.",
                 [
@@ -843,15 +859,6 @@ class ControlCenterApp(tk.Tk):
                     ("telegram_phone", "Телефон", False),
                 ],
                 "tg_bridge.py",
-            ),
-            (
-                "Steam",
-                "Используется командами внутри Telegram Terminal.",
-                [
-                    ("steam_api_key", "Steam API Key", True),
-                    ("steam_id", "Steam ID64", False),
-                ],
-                None,
             ),
         ]
         for title, description, fields, filename in groups:
@@ -882,6 +889,8 @@ class ControlCenterApp(tk.Tk):
                 ttk.Button(
                     row, text="Журнал →", command=lambda f=filename: self._open_service_log(f)
                 ).pack(side="right")
+            if filename:
+                self.service_options(card, filename)
             credentials = tk.Frame(card, bg=self.theme["card"])
             ttk.Button(
                 card,
@@ -1071,7 +1080,7 @@ class ControlCenterApp(tk.Tk):
         )
         self.label(
             card,
-            "Подключено 10 модулей навыков, общий планировщик, голос, Telegram, Discord и Dota GSI.\n\n"
+            "Подключено 11 модулей навыков, планировщик, Steam, Telegram, Discord и Dota GSI.\n\n"
             "Системные команды Windows требуют запуска на Windows. Голос требует моделей Vosk/Silero и аудиоустройств.\n\n"
             "Ключи и Telegram-сессии хранятся локально. В журнале токены скрываются.\n\n"
             "README содержит запуск, зависимости, примеры команд и ограничения проверок.",
@@ -1086,6 +1095,11 @@ class ControlCenterApp(tk.Tk):
         data["owner_name"] = self.owner_var.get().strip()
         data["selected_theme"] = self.theme_var.get()
         data["command_aliases"] = dict(self.aliases)
+        data["steam"].update({key: var.get() for key, var in self.steam_vars.items()})
+        data["discord_presence"].update({key: var.get() for key, var in self.presence_vars.items()})
+        data["services"] = copy.deepcopy(self.service_configs)
+        for key, var in self.service_autostart.items():
+            data["services"].setdefault(key, {})["autostart"] = var.get()
         data["app_settings"].update({key: var.get() for key, var in self.settings_vars.items()})
         data["api_keys"].update({key: var.get().strip() for key, var in self.api_vars.items()})
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
@@ -1115,6 +1129,7 @@ class ControlCenterApp(tk.Tk):
         self.save_button.configure(text="Сохранить изменения")
         self.status_var.set("Настройки сохранены. Для ботов и моделей нужен перезапуск.")
         self.refresh_skills()
+        self._update_steam(force=True)
         if not self.config_mgr.config["skills"].get("gid", True):
             from skills import gid
 
@@ -1422,6 +1437,13 @@ class ControlCenterApp(tk.Tk):
                 self._report_error(value)
             elif kind == "automation":
                 self._append_log(value)
+            elif kind == "notification":
+                self.status_var.set(str(value)[:160])
+                if self.tray_icon:
+                    try:
+                        self.tray_icon.notify(str(value)[:500], "Крест")
+                    except Exception:
+                        logger.warning("Уведомление сохранено в журнале; трей недоступен")
             elif kind == "alarm":
                 self.status_var.set("Сработало напоминание: " + value.get("label", ""))
                 self.bell()
@@ -1455,9 +1477,20 @@ class ControlCenterApp(tk.Tk):
                             f"PID {detail['pid']} · Работает {seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}"
                             if detail["running"]
                             else detail["error"]
-                            or "Откройте «Настройка доступа», сохраните данные и запустите сервис."
+                            or "Заполните настройки сервиса, сохраните и нажмите «Запустить»."
                         )
                     )
+                    if detail["running"]:
+                        bridge = detail["bridge"]
+                        message = bridge.get(
+                            "text", "События моста ещё не получены; доступен журнал процесса."
+                        )
+                        if detail["error"]:
+                            message = detail["error"]
+                        self.service_details[filename].configure(
+                            text=f"PID {detail['pid']} · Работает {seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}\n"
+                            + message
+                        )
                 else:
                     detail = self.integration.details(filename)
                 for action, button in self.service_buttons[filename].items():
@@ -1468,6 +1501,7 @@ class ControlCenterApp(tk.Tk):
             self._update_timers()
             self._update_reminders()
             self.download_label.configure(text=self.runtime.download_status)
+            self._update_steam()
             current, pending = self.runtime.command_status()
             self.queue_var.set(
                 ("Выполняется: " + current[:100] if current else "Готов к командам")

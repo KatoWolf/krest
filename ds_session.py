@@ -14,7 +14,7 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-STATUS_FILE = os.path.join(BASE_DIR, "current_status.json")
+STATUS_FILE = os.path.join(os.getenv("KREST_DATA_DIR", BASE_DIR), "current_status.json")
 
 try:
     import config
@@ -94,11 +94,19 @@ class KrestDS(discord.Client):
         self.last_outgoing = {}  # Для отслеживания личной активности KatoWolf
 
     async def on_ready(self):
+        from bridge_sdk import emit
+
+        emit("ready", "Discord подтвердил вход обычного бота")
         print(f"--- [DS]: Сессия активна (Аккаунт: {self.user}). RAM Optimized. ---")
         if not getattr(self, "_background_started", False):
             self._background_started = True
             self.loop.create_task(self.status_rotator())
             self.loop.create_task(self.memory_cleaner())
+
+    async def on_disconnect(self):
+        from bridge_sdk import emit
+
+        emit("error", "Связь с Discord потеряна; клиент пытается переподключиться")
 
     async def memory_cleaner(self):
         """Очистка ОЗУ от мусора Discord-клиента раз в 15 минут"""

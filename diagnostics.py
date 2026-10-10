@@ -59,6 +59,8 @@ def validate_module(filename, cfg):
         if owner <= 0:
             raise ValueError("Telegram Owner ID должен быть положительным.")
     packages = {
+        "steam_bot.py": ("requests",),
+        "discord_presence.py": ("pypresence",),
         "ds_session.py": ("discord",),
         "tg_bridge.py": ("pyrogram",),
         "krest_bot.py": ("telebot", "psutil", "pyautogui", "requests", "pyperclip"),
@@ -67,6 +69,11 @@ def validate_module(filename, cfg):
     missing = [p for p in packages.get(filename, ()) if importlib.util.find_spec(p) is None]
     if missing:
         raise RuntimeError("Не установлены зависимости: " + ", ".join(missing))
+    if (
+        filename == "discord_presence.py"
+        and not str(cfg.get("discord_presence", {}).get("application_id", "")).isdigit()
+    ):
+        raise ValueError("Введите Application ID приложения Discord на странице «Мой Discord»")
     if filename == "main.py":
         if not (BASE_DIR / "model").is_dir() or not (BASE_DIR / "model_silero.pt").is_file():
             raise RuntimeError(

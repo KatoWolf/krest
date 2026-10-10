@@ -596,6 +596,10 @@ def start_tg_bridge(notifications_queue=None):
                     stop_reason["value"] = "UNAUTHORIZED"
                     return stop_reason["value"]
 
+                from bridge_sdk import emit
+
+                emit("ready", "Telegram подтвердил авторизацию аккаунта")
+
                 logger.info(
                     "Юзербот активен на аккаунте: %s (@%s)",
                     me.first_name,

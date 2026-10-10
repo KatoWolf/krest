@@ -7,3 +7,4 @@ discord.py==2.7.1
 Pyrogram==2.0.106
 PyAutoGUI==0.9.54
 pystray==0.19.5
+pypresence==4.3.0

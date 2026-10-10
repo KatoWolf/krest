@@ -1,6 +1,7 @@
 """Small cross-process notification queue for independently managed bridges."""
 
 from contextlib import contextmanager
+import os
 import queue
 import sqlite3
 import time
@@ -9,7 +10,11 @@ from pathlib import Path
 
 class NotificationQueue:
     def __init__(self, path=None):
-        self.path = str(path or Path(__file__).resolve().parent / "notifications.sqlite3")
+        self.path = str(
+            path
+            or Path(os.getenv("KREST_DATA_DIR", Path(__file__).resolve().parent))
+            / "notifications.sqlite3"
+        )
         with self._connect() as connection:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, created REAL, text TEXT)"

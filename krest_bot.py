@@ -702,6 +702,9 @@ def run_krest_service(shared_queue=None):
         raise RuntimeError("Заполните токен TGT и Telegram ID владельца в меню.")
     bot.initialize(TOKEN)
     bot.get_me()  # Fail on invalid authentication before starting background workers.
+    from bridge_sdk import emit
+
+    emit("ready", "Telegram подтвердил токен бота")
     for directory in [AESTHETICS_DIR, USED_AESTHETICS_DIR, TEMP_DIR, UPLOADS_DIR]:
         os.makedirs(directory, exist_ok=True)
     global SHARED_QUEUE

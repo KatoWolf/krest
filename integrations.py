@@ -9,11 +9,15 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 import logging
+import json
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
 def redact(text, settings):
+    for service in settings.get("services", {}).values():
+        if isinstance(service, dict) and service.get("token"):
+            text = text.replace(str(service["token"]), "[скрыто]")
     values = settings.get("api_keys", {})
     for key in (
         "krest_bot_token",
@@ -38,6 +42,8 @@ class IntegrationManager:
         "tg_user": ("tg_bridge.py", "Telegram User"),
         "tgt": ("krest_bot.py", "Telegram Terminal"),
         "discord": ("ds_session.py", "Discord Bot"),
+        "steam": ("steam_bot.py", "Steam"),
+        "presence": ("discord_presence.py", "Discord — мой статус"),
     }
 
     def __init__(self, app, base_dir=BASE_DIR):
@@ -46,9 +52,20 @@ class IntegrationManager:
         self.processes, self.errors, self.started_at, self.log_handles = {}, {}, {}, {}
         self._readers = {}
         self._lock = threading.RLock()
+        self._closed = False
+        self.bridge = {}
+        self.MODULES = dict(type(self).MODULES)
+        self.reload_registry()
+
+    def reload_registry(self):
+        builtins = {filename for filename, title in type(self).MODULES.values()}
+        for ident, cfg in self.app.config_mgr.snapshot().get("services", {}).items():
+            if ident not in builtins:
+                self.MODULES[ident] = (ident, cfg.get("title", ident))
 
     def path(self, filename):
-        return str(self.base_dir / filename)
+        custom = self.app.config_mgr.snapshot().get("services", {}).get(filename, {}).get("path")
+        return str(Path(custom).expanduser().resolve()) if custom else str(self.base_dir / filename)
 
     def exists(self, filename):
         return Path(self.path(filename)).is_file()
@@ -72,7 +89,55 @@ class IntegrationManager:
             if running
             else 0,
             "error": self.errors.get(filename, ""),
+            "bridge": self.bridge.get(filename, {}),
         }
+
+    def send(self, filename, command):
+        with self._lock:
+            proc = self.processes.get(filename)
+            capabilities = self.bridge.get(filename, {}).get("capabilities", [])
+            if proc is None or proc.poll() is not None or command not in capabilities:
+                raise RuntimeError("Скрипт не запущен или не объявил поддержку команды " + command)
+            proc.stdin.write(json.dumps({"command": command}) + "\n")
+            proc.stdin.flush()
+
+    def autostart(self):
+        for filename, cfg in self.app.config_mgr.snapshot().get("services", {}).items():
+            if cfg.get("autostart"):
+                try:
+                    self.start(filename)
+                except Exception as exc:
+                    self.errors[filename] = redact(str(exc), self.app.config_mgr.snapshot())
+
+    def _event(self, filename, line, settings):
+        from bridge_sdk import PREFIX
+
+        if not line.startswith(PREFIX) or len(line) > 8192:
+            return
+        try:
+            value = json.loads(line[len(PREFIX) :])
+        except ValueError:
+            return
+        if not isinstance(value, dict):
+            return
+        kind = value.get("type")
+        message = redact(str(value.get("text", ""))[:2000], settings)
+        if kind == "ready":
+            self.errors.pop(filename, None)
+            caps = value.get("capabilities", [])
+            self.bridge[filename] = {
+                "text": message,
+                "capabilities": [c for c in caps if c in ("refresh",)]
+                if isinstance(caps, list)
+                else [],
+            }
+        elif kind == "status":
+            self.errors.pop(filename, None)
+            self.bridge.setdefault(filename, {})["text"] = message
+        elif kind == "error":
+            self.errors[filename] = message
+        elif kind == "notification" and hasattr(self.app, "runtime"):
+            self.app.runtime.notifications.put(message)
 
     def refresh(self):
         if self._lock.acquire(blocking=False):
@@ -94,6 +159,7 @@ class IntegrationManager:
         handler = RotatingFileHandler(path, maxBytes=512_000, backupCount=2, encoding="utf-8")
         try:
             for line in proc.stdout:
+                self._event(filename, line, settings)
                 record = logging.LogRecord(
                     filename,
                     logging.INFO,
@@ -110,6 +176,8 @@ class IntegrationManager:
 
     def start(self, filename):
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Крест завершает работу; новые процессы не запускаются")
             if not self.exists(filename):
                 raise FileNotFoundError(filename)
             proc = self.processes.get(filename)
@@ -118,18 +186,27 @@ class IntegrationManager:
             from diagnostics import validate_module
 
             settings = self.app.config_mgr.snapshot()
-            validate_module(filename, settings)
+            custom = settings.get("services", {}).get(filename, {}).get("path")
+            if not custom:
+                validate_module(filename, settings)
+            if Path(self.path(filename)).suffix.lower() != ".py":
+                raise ValueError("Выберите Python-скрипт .py")
             (self.base_dir / "logs").mkdir(exist_ok=True)
             env = dict(
                 os.environ,
                 PYTHONIOENCODING="utf-8",
                 KREST_CONFIG_PATH=str(self.app.config_mgr.filepath),
+                KREST_DATA_DIR=str(self.app.config_mgr.filepath.parent),
+                KREST_SERVICE_ID=filename,
+                KREST_SERVICE_TOKEN=settings.get("services", {}).get(filename, {}).get("token", ""),
+                PYTHONPATH=str(self.base_dir) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             )
             proc = subprocess.Popen(
                 [sys.executable, "-u", self.path(filename)],
                 cwd=self.base_dir,
                 env=env,
                 stdout=subprocess.PIPE,
+                stdin=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
@@ -139,6 +216,7 @@ class IntegrationManager:
             self.processes[filename] = proc
             self.started_at[filename] = time.time()
             self.errors.pop(filename, None)
+            self.bridge.pop(filename, None)
             reader = threading.Thread(
                 target=self._capture, args=(filename, proc, settings), daemon=True
             )
@@ -161,6 +239,8 @@ class IntegrationManager:
             reader = self._readers.pop(filename, None)
             if reader:
                 reader.join(timeout=1)
+            if proc.stdin:
+                proc.stdin.close()
             return "Остановлен"
 
     def restart(self, filename):
@@ -169,8 +249,10 @@ class IntegrationManager:
             return self.start(filename)
 
     def stop_all(self):
-        for filename in list(self.processes):
-            self.stop(filename)
+        with self._lock:
+            self._closed = True
+            for filename in list(self.processes):
+                self.stop(filename)
 
     def log_tail(self, filename, limit=6000):
         path = self.base_dir / "logs" / (filename + ".log")

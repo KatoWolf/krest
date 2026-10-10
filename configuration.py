@@ -45,6 +45,19 @@ DEFAULT_CONFIG = {
         "",
     ),
     "command_aliases": {},
+    "steam": {
+        "poll_minutes": 15,
+        "install_path": "",
+        "inventories": "730:2",
+        "telegram_notifications": False,
+    },
+    "discord_presence": {
+        "application_id": "",
+        "details": "Крест — личный ассистент",
+        "state": "За компьютером",
+        "follow_activity": True,
+    },
+    "services": {},
     "dota_guide": {
         "process_name": "dota2.exe",
         "warning_lead_time": 30,
@@ -65,6 +78,7 @@ DEFAULT_CONFIG = {
             "webo",
             "windows",
             "gid",
+            "steam",
         )
     },
 }
@@ -83,6 +97,39 @@ def merge(default, values):
 
 
 def validate(data):
+    steam = data["steam"]
+    if not isinstance(steam["telegram_notifications"], bool):
+        raise ValueError("Уведомления Steam в Telegram: нужен переключатель")
+    if not str(steam["poll_minutes"]).isdigit() or not 5 <= int(steam["poll_minutes"]) <= 1440:
+        raise ValueError("Steam: интервал проверки от 5 до 1440 минут")
+    steam["poll_minutes"] = int(steam["poll_minutes"])
+    import re
+
+    if not isinstance(steam["inventories"], str) or not re.fullmatch(
+        r"\d+:\d+(?:\s*,\s*\d+:\d+){0,9}", steam["inventories"]
+    ):
+        raise ValueError("Инвентари Steam: AppID:ContextID через запятую, например 730:2,570:2")
+    if not isinstance(steam["install_path"], str):
+        raise ValueError("Путь Steam должен быть строкой")
+    presence = data["discord_presence"]
+    if presence["application_id"] and not str(presence["application_id"]).isdigit():
+        raise ValueError("Discord Application ID должен быть числом")
+    if not isinstance(presence["follow_activity"], bool):
+        raise ValueError("Автостатус Discord: нужен переключатель")
+    for key in ("details", "state"):
+        if not isinstance(presence[key], str) or not 2 <= len(presence[key]) <= 128:
+            raise ValueError("Текст Discord Rich Presence: от 2 до 128 символов")
+    for ident, service in data["services"].items():
+        if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", ident) or not isinstance(service, dict):
+            raise ValueError("Неверная запись сервиса")
+        if not isinstance(service.get("autostart", False), bool) or not isinstance(
+            service.get("path", ""), str
+        ):
+            raise ValueError("Укажите путь скрипта и переключатель автозапуска")
+        if not isinstance(service.get("token", ""), str) or not isinstance(
+            service.get("title", ident), str
+        ):
+            raise ValueError("Название сервиса и токен должны быть строками")
     aliases = data["command_aliases"]
     if len(aliases) > 100 or any(
         not isinstance(key, str)

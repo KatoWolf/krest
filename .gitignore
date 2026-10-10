@@ -19,6 +19,7 @@ assistant_state.json
 assistant_state.json.broken-*
 favorites.json
 favorites.json.broken-*
+steam_state.json
 config.json.broken-*
 commands_list.txt
 currency_rates.json

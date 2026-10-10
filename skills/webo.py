@@ -366,8 +366,11 @@ def launch_steam_game(text: str, game_name: str = ""):
         voice.speak("Какую именно игру вы хотите запустить?")
         return
 
-    voice.speak("Сканирую библиотеку игр Steam...")
-    games = scan_installed_steam_games()
+    voice.speak("Проверяю библиотеку игр Steam...")
+    from app_state import get_state
+    from steam_service import cached_catalog
+
+    games = cached_catalog(get_state())
 
     if not games:
         voice.speak("Установленные игры Steam не обнаружены или библиотека недоступна.")
@@ -384,7 +387,7 @@ def launch_steam_game(text: str, game_name: str = ""):
         # Запуск через родовой протокол Steam
         webbrowser.open(f"steam://rungameid/{appid}")
     else:
-        voice.speak(f"Не удалось найти установленную игру по запросу '{target_query}'.")
+        voice.speak(f"Не удалось найти игру в библиотеке по запросу '{target_query}'.")
 
 
 @skill(
