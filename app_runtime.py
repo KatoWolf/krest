@@ -47,7 +47,7 @@ class AssistantRuntime:
 
         self.automation = EventAutomation(self)
         self._execute_lock = threading.RLock()
-        self.manager = SkillManager(settings)
+        self.manager = SkillManager(settings, plugin_dir=Path(data_dir) / "imported_skills")
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
@@ -68,6 +68,28 @@ class AssistantRuntime:
 
     def _speech_event(self, text):
         self.events.put(("speech", text))
+
+    def skill_import(self, action, **args):
+        imports = self.manager.imports
+        if action == "list":
+            return imports.list()
+        if action == "preview":
+            return imports.preview(args["path"])
+        if action not in ("install", "enable", "disable", "remove"):
+            raise ValueError("Неизвестное действие импорта")
+        # Do not replace functions while a command is running; the caller can retry.
+        if not self._execute_lock.acquire(blocking=False):
+            raise ValueError("Дождитесь завершения текущей команды и повторите подключение")
+        try:
+            result = (
+                imports.install(args["path"], args["sha256"], args.get("bindings"))
+                if action == "install"
+                else imports.change(args["id"], action)
+            )
+            self.events.put(("skills_changed", None))
+            return result
+        finally:
+            self._execute_lock.release()
 
     def start(self):
         if self._threads:

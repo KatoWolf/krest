@@ -109,12 +109,21 @@ def skill(keywords=None, patterns=None, description="", category="Общие", e
 
 
 class SkillManager:
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, plugin_dir=None):
         self.base_dir = Path(__file__).resolve().parent
         self.settings = settings or (lambda: {})
         self.errors = {}
         self.load_skills()
         self.load_custom_plugins()
+        from skill_importer import SkillImports
+
+        root = (
+            plugin_dir
+            or Path(os.getenv("KREST_CONFIG_PATH", self.base_dir / "config.json")).parent
+            / "imported_skills"
+        )
+        self.imports = SkillImports(self, root)
+        self.imports.load_all()
 
     def _load(self, folder, reload=False):
         root = self.base_dir / folder
@@ -154,13 +163,23 @@ class SkillManager:
         gid.stop_service()
         self.load_skills(reload=True)
         self.load_custom_plugins(reload=True)
+        self.imports.load_all()
 
     def catalog(self):
         with _registry_lock:
-            return list(SKILL_REGISTRY)
+            prefix = self.imports.prefix if hasattr(self, "imports") else ""
+            return [
+                e
+                for e in SKILL_REGISTRY
+                if not e.func.__module__.startswith("krest_imported_")
+                or e.func.__module__.startswith(prefix)
+                and bool(prefix)
+            ]
 
     def availability(self, entry):
-        if self.settings().get("safe_mode", False) and entry.func.__module__.startswith("plugins."):
+        if self.settings().get("safe_mode", False) and entry.func.__module__.startswith(
+            ("plugins.", "krest_imported_")
+        ):
             return "Сторонние навыки отключены в безопасном режиме"
         if not self.settings().get("skills", {}).get(entry.module, True):
             return "Выключен в настройках"

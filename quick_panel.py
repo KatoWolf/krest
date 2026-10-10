@@ -35,13 +35,13 @@ def show_panel(app):
     tree.pack(fill="both", expand=True)
     index = []
     pages = [("page", code, title, "Страница") for code, title in app.NAV]
-    skills = [
-        ("command", example, example, item.category)
-        for item in app.runtime.manager.catalog()
-        for example in (item.examples or item.keywords)[:2]
-    ]
 
     def search(*args):
+        skills = [
+            ("command", example, example, item.category)
+            for item in app.runtime.manager.catalog()
+            for example in (item.examples or item.keywords)[:2]
+        ]
         query = variable.get().casefold().strip()
         index[:] = [row for row in [*pages, *skills] if not query or query in row[2].casefold()][
             :60

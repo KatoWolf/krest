@@ -293,7 +293,9 @@ class RemoteRuntime:
                 value = (
                     CommandResult(**item["value"]) if item["kind"] == "result" else item["value"]
                 )
-                if item["kind"] == "result" and value.skill_id == "skills.meta.reload_skills":
+                if item["kind"] == "skills_changed" or (
+                    item["kind"] == "result" and value.skill_id == "skills.meta.reload_skills"
+                ):
                     self.manager.refresh()
                 try:
                     self.events.put_nowait((item["kind"], value))
@@ -321,6 +323,9 @@ class RemoteRuntime:
                         pass
                     reported = True
                 self.stop_event.wait(2)
+
+    def skill_import(self, action, **args):
+        return self.client.call("skill_import", action=action, **args)
 
     @property
     def download_status(self):

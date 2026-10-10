@@ -40,6 +40,7 @@ kernel_endpoint.json
 .kernel.lock
 .ui.lock
 .krest-sort.lock
+imported_skills/
 
 update_rollback.json
 before-update-*.zip

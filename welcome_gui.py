@@ -13,6 +13,7 @@ import voice
 from tkinter import ttk, filedialog
 from ui_dialogs import messagebox, simpledialog
 from core_pages import CorePages
+from skill_import_pages import SkillImportPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -35,7 +36,14 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
-    CorePages, DesktopShell, WorkflowPages, ProductPages, VoicePages, ServicePages, tk.Tk
+    SkillImportPages,
+    CorePages,
+    DesktopShell,
+    WorkflowPages,
+    ProductPages,
+    VoicePages,
+    ServicePages,
+    tk.Tk,
 ):
     NAV = [
         ("actions", "Обзор"),
@@ -705,6 +713,7 @@ class ControlCenterApp(
         self._refresh_command_lists()
 
     def build_skills_tab(self):
+        self.build_skill_imports()
         card = self.card(
             self.page_bodies["skills"],
             "Каталог навыков",
@@ -1747,6 +1756,9 @@ class ControlCenterApp(
                 break
             if kind == "ui_open":
                 self.restore_window()
+            elif kind == "skills_changed":
+                self.refresh_skills()
+                self._refresh_skill_imports()
             elif kind == "quick_panel":
                 from quick_panel import show_panel
 

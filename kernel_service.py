@@ -220,6 +220,8 @@ class Kernel:
                     for entry in rt.manager.catalog()
                 ],
             }
+        if method == "skill_import":
+            return rt.skill_import(**args)
         if method == "match":
             result = rt.manager.match(str(args["text"])[:2000])
             return result[0].id if result else None
