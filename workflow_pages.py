@@ -11,6 +11,10 @@ ACTIONS = {
     "Пауза, секунды": "wait",
     "Профиль нагрузки": "profile",
     "Уведомления": "notifications",
+    "Ждать процесс": "wait_process",
+    "Ждать окно": "wait_window",
+    "Сообщение": "notice",
+    "Запустить сервис": "service",
 }
 MODES = {"Автоматически": "auto", "Обычный": "balanced", "Игра": "game", "Экономный": "economy"}
 NOTICE_MODES = {"Все": "all", "Только важные": "important", "Без озвучки": "silent"}
@@ -171,6 +175,20 @@ class WorkflowPages:
             self.step_value.set(
                 next((k for k, v in choices.items() if v == step["value"]), step["value"])
             )
+            if hasattr(self, "condition_kind"):
+                condition = step.get("condition", {})
+                self.condition_kind.set(
+                    {
+                        "process": "Процесс",
+                        "file": "Файл",
+                        "game": "Игра",
+                        "weekday": "Дни недели",
+                    }.get(condition.get("kind"), "Всегда")
+                )
+                self.condition_value.set(condition.get("value", ""))
+                self.condition_invert.set(condition.get("invert", False))
+                self.step_temporary.set(step.get("temporary", False))
+                self.step_timeout.set(str(step.get("timeout", 30)))
 
     def _add_scenario_step(self, replace=False):
         step = {"action": ACTIONS[self.step_action.get()], "value": self.step_value.get().strip()}
@@ -402,7 +420,7 @@ class WorkflowPages:
 
             try:
                 if action == "preview":
-                    result = DownloadSorter().scan(
+                    result = DownloadSorter(self.config_mgr.snapshot().get("file_policy", {})).scan(
                         folder, automatic=False, preview=True, stop=self.runtime.stop_event
                     )
                     rows = [
@@ -413,7 +431,7 @@ class WorkflowPages:
                         f"К перемещению: {len(rows)}; пока не готовы: {result['skipped_count']}"
                     )
                 elif action == "sort":
-                    result = DownloadSorter().scan(
+                    result = DownloadSorter(self.config_mgr.snapshot().get("file_policy", {})).scan(
                         folder, automatic=False, stop=self.runtime.stop_event
                     )
                     rows = []

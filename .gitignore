@@ -33,3 +33,16 @@ templates.json
 inbox.sqlite3*
 activity_profile.json
 .krest-sort-history.sqlite3*
+
+jobs.sqlite3*
+memory.sqlite3*
+kernel_endpoint.json
+.kernel.lock
+.ui.lock
+.krest-sort.lock
+
+update_rollback.json
+before-update-*.zip
+before-restore-*/
+*.restoring
+*.partial

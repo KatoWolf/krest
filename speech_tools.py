@@ -69,6 +69,25 @@ def normalize_command(text, aliases=None):
     }
     if key in fixed:
         return fixed[key]
+    # Only anchored templates rewrite commands; task contents stay verbatim.
+    match = re.fullmatch(
+        r"(?:можешь |можно )?(?:поставить|поставь|заведи|установи) (.+?) таймер", text, re.I
+    )
+    if match:
+        return "таймер на " + match[1].removeprefix("на ")
+    match = re.fullmatch(
+        r"(?:звук|громкость)(?: музыки)? (?:сделай |поставь |установи )?(?:на )?(\d{1,3})(?: процентов|%)?",
+        text,
+        re.I,
+    )
+    if match:
+        return "громкость на " + match[1]
+    match = re.fullmatch(r"(?:через) (.+?) напомни (.+)", text, re.I)
+    if match:
+        from skills.timers_alarms import parse_timer_duration
+
+        if parse_timer_duration(match[1])[0] > 0:
+            return f"напомни через {match[1]}: {match[2]}"
     # Capture the task verbatim; corrections never rewrite reminder contents.
     match = re.fullmatch(r"напомни\s+(?!через\b)(.+?)\s+через\s+(.+)", text, re.I)
     if match:

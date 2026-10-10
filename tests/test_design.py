@@ -60,3 +60,22 @@ def test_cards_size_to_content_and_disclosures_expand_without_clipping():
         assert card.winfo_height() == collapsed
     finally:
         root.destroy()
+
+
+def test_indicator_has_no_idle_animation_and_stops_after_pulse():
+    from guikrest import CrossOverlayController
+
+    root = tk.Tk()
+    indicator = CrossOverlayController()
+    try:
+        indicator.attach(root)
+        assert indicator.job is None
+        indicator.pulse(0.05)
+        assert indicator.job is not None
+        root.after(120, root.quit)
+        root.mainloop()
+        assert indicator.job is None
+        assert indicator.root.state() == "withdrawn"
+    finally:
+        indicator.stop()
+        root.destroy()

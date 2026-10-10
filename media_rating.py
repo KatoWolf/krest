@@ -126,4 +126,10 @@ def find_player_window(data):
 
 
 def change_rating(data, action):
-    return apply_rating(find_player_window(data).descendants(control_type="Button"), action)
+    window = find_player_window(data)
+    from media_control import query
+
+    current = query(data["app_id"])
+    if (current["title"], current["artist"]) != (data["title"], data["artist"]):
+        raise MediaError("Трек сменился во время проверки. Повторите команду для нового трека.")
+    return apply_rating(window.descendants(control_type="Button"), action)

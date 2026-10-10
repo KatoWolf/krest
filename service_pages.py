@@ -67,6 +67,16 @@ class ServicePages:
         ttk.Checkbutton(
             parent, text="Запускать вместе с Крест", variable=self.service_autostart[filename]
         ).pack(anchor="w", pady=4)
+        if filename not in self.service_restart:
+            self.service_restart[filename] = tk.BooleanVar(
+                value=self.service_configs.get(filename, {}).get("auto_restart", False)
+            )
+            self.service_restart[filename].trace_add("write", self._mark_dirty)
+        ttk.Checkbutton(
+            parent,
+            text="Восстанавливать после сбоя (до 3 попыток за 10 минут)",
+            variable=self.service_restart[filename],
+        ).pack(anchor="w", pady=4)
         options = (
             parent
             if filename.startswith("custom-")
@@ -371,13 +381,17 @@ class ServicePages:
         def finish(result):
             record = self.service_configs.pop(filename, None)
             variable = self.service_autostart.pop(filename, None)
+            restart_variable = self.service_restart.pop(filename, None)
             if not self.save_all_settings():
                 if record is not None:
                     self.service_configs[filename] = record
                 if variable is not None:
                     self.service_autostart[filename] = variable
+                if restart_variable is not None:
+                    self.service_restart[filename] = restart_variable
                 return
             self.integration.MODULES.pop(filename, None)
+            self.integration.reload_registry()
             self.apply_theme(self.theme_var.get())
             self.status_var.set("Скрипт отключён. Сам файл остался на диске.")
 

@@ -513,7 +513,17 @@ def organize_downloads(text: str = "") -> Dict[str, Any]:
         .get("downloads_path", str(Path.home() / "Downloads"))
     )
     try:
-        result = DownloadSorter().scan(folder, automatic=False)
+        state = get_state()
+        stop = state.runtime.command_stop if hasattr(state, "runtime") else None
+        result = DownloadSorter(state.config_getter().get("file_policy", {})).scan(
+            folder, automatic=False, stop=stop
+        )
+        if stop and stop.is_set():
+            return dict(
+                result,
+                status="error",
+                message=f"Сортировка остановлена. Перемещено: {result['moved_count']}; остальные файлы сохранены.",
+            )
         if result["errors"]:
             return dict(
                 result,

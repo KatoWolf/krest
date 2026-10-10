@@ -10,7 +10,9 @@ import threading
 import time
 import tkinter as tk
 import voice
-from tkinter import ttk, messagebox, simpledialog, filedialog
+from tkinter import ttk, filedialog
+from ui_dialogs import messagebox, simpledialog
+from core_pages import CorePages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -32,7 +34,9 @@ BASE_DIR = str(Path(__file__).resolve().parent)
 TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
-class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, ServicePages, tk.Tk):
+class ControlCenterApp(
+    CorePages, DesktopShell, WorkflowPages, ProductPages, VoicePages, ServicePages, tk.Tk
+):
     NAV = [
         ("actions", "Обзор"),
         ("voice", "Голос"),
@@ -52,22 +56,28 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         ("settings", "Настройки"),
         ("logs", "Журнал"),
         ("license", "Premium"),
+        ("kernel", "Состояние ядра"),
+        ("memory", "Память"),
+        ("events", "События"),
+        ("programs", "Программы и звук"),
+        ("security", "Доступ и восстановление"),
     ]
 
     NAV_GROUPS = [
         ("actions", "Главная", ("actions", "favorites", "skills")),
         ("music", "Музыка", ("music",)),
-        ("timers", "Дела и сценарии", ("timers", "scenarios")),
+        ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
         ("inbox", "Уведомления", ("inbox", "logs")),
         (
             "steam",
             "Подключения",
             ("steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
         ),
-        ("settings", "Настройки", ("settings", "voice", "maintenance", "license")),
+        ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
+        ("settings", "Настройки", ("settings", "voice", "license")),
     ]
 
-    def __init__(self):
+    def __init__(self, remote=None, config_path=None):
         set_process_identity()
         super().__init__()
         self._window_icons = install_window_icon(self)
@@ -78,7 +88,7 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self.minsize(min(1020, width), min(700, height))
         self.protocol("WM_DELETE_WINDOW", self.on_close_window)
         self.bind("<Control-s>", lambda event: self.save_all_settings())
-        self.config_mgr = ConfigManager()
+        self.config_mgr = ConfigManager(config_path) if config_path else ConfigManager()
         from local_setup import discover_settings, readiness
 
         self.setup_message = ""
@@ -103,15 +113,16 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self.last_command = ""
         self._timer_rows = None
         self._reminder_rows = None
-        self.runtime = AssistantRuntime(
+        self.runtime = remote or AssistantRuntime(
             self.config_mgr.snapshot, data_dir=self.config_mgr.filepath.parent
         )
-        self.integration = IntegrationManager(self)
+        self.integration = remote.integrations if remote else IntegrationManager(self)
         self.init_voice_page()
         self.init_product_pages()
         self.init_workflows()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
+        self.service_restart = {}
         self.steam_vars = {
             k: (tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=v))
             for k, v in self.config_mgr.config["steam"].items()
@@ -173,7 +184,19 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
 
         self._log_handler = UILogHandler(level=logging.WARNING)
         logging.getLogger().addHandler(self._log_handler)
+        self._base_scaling = float(self.tk.call("tk", "scaling"))
+        self.tk.call(
+            "tk",
+            "scaling",
+            self._base_scaling * self.config_mgr.snapshot()["accessibility"]["font_scale"] / 100,
+        )
+        from ui_design import MotionController
+
+        self.motion = MotionController(self)
         self.build_ui()
+        from quick_panel import show_panel
+
+        self.bind("<Control-k>", lambda e: show_panel(self))
         self.bind("<Control-l>", lambda e: self._focus_command())
         self.bind("<F8>", lambda e: self._arm_voice())
         self.bind("<Escape>", lambda e: voice.stop_speaking())
@@ -189,6 +212,8 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
                 + self.config_mgr.load_error
                 + ". При сохранении исходный файл будет скопирован в .broken."
             )
+        for warning in getattr(self.config_mgr, "secret_errors", []):
+            self._append_log(warning)
         for error in (self.runtime.state.load_error, self.command_book.load_error):
             if error:
                 self._report_error(error + ". Исходный файл будет сохранён в .broken при записи.")
@@ -253,9 +278,10 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self._brand_image = ImageTk.PhotoImage(load_image(44), master=self)
         brand = tk.Frame(side, bg=self.theme["sidebar"])
         brand.pack(fill="x", pady=(0, 8))
-        tk.Label(brand, image=self._brand_image, bg=self.theme["sidebar"]).pack(
-            side="left", padx=(0, 10)
-        )
+        from ui_design import BrandMark
+
+        self.brand_mark = BrandMark(brand, self._brand_image, self.theme, self.motion.enabled)
+        self.brand_mark.pack(side="left", padx=(0, 10))
         self.label(brand, "КРЕСТ", large=True).pack(side="left")
         self.label(side, "Личный помощник", muted=True).pack(anchor="w", padx=2, pady=(0, 28))
         self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
@@ -295,6 +321,9 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         body.pack(side="left", fill="both", expand=True)
         header = tk.Frame(body, bg=self.theme["bg"])
         header.pack(fill="x", pady=(0, 18))
+        ttk.Button(
+            header, text="Поиск  Ctrl+K", command=lambda: __import__("quick_panel").show_panel(self)
+        ).pack(side="right", anchor="n")
         self.page_title = tk.StringVar()
         self.page_subtitle = tk.StringVar()
         title = self.label(header, textvariable=self.page_title)
@@ -360,6 +389,10 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self.build_settings_tab()
         self.build_logs_tab()
         self.build_premium_tab()
+        self.build_core_pages()
+        from ui_design import style_titlebar
+
+        self.after_idle(lambda: style_titlebar(self, self.theme))
         self.switch_page(self.current_page)
 
     def _wheel(self, event):
@@ -396,6 +429,7 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
             "timers": "Освободите голову. Крест напомнит и выполнит привычные действия.",
             "inbox": "События, которые важно не пропустить.",
             "steam": "Игры, боты и ваши сервисы.",
+            "kernel": "Крест работает рядом — даже когда меню закрыто.",
             "settings": "Настройте под себя. Остальное Крест подберёт автоматически.",
         }
         self.page_subtitle.set(subtitles[group[0]])
@@ -421,6 +455,14 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
             self._refresh_music()
         if code == "inbox":
             self._refresh_inbox()
+        if code == "kernel":
+            self._refresh_core()
+        if code == "memory":
+            self._refresh_memory()
+        if code == "events":
+            self.event_scenario_combo.configure(
+                values=list(self.config_mgr.snapshot()["scenarios"])
+            )
 
     def build_actions_tab(self):
         page = self.page_bodies["actions"]
@@ -718,6 +760,8 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         ).pack(anchor="w", pady=10)
 
     def refresh_skills(self):
+        if hasattr(self.runtime.manager, "refresh"):
+            self.runtime.manager.refresh()
         if not hasattr(self, "skill_tree"):
             return
         selected = self.skill_tree.selection()
@@ -1349,10 +1393,14 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         data["services"] = copy.deepcopy(self.service_configs)
         for key, var in self.service_autostart.items():
             data["services"].setdefault(key, {})["autostart"] = var.get()
+        for key, var in self.service_restart.items():
+            data["services"].setdefault(key, {})["auto_restart"] = var.get()
         data["app_settings"].update({key: var.get() for key, var in self.settings_vars.items()})
         data["api_keys"].update({key: var.get().strip() for key, var in self.api_vars.items()})
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
         data["dota_guide"].update({key: var.get() for key, var in self.dota_vars.items()})
+        if hasattr(self, "core_settings_draft"):
+            data.update(self.core_settings_draft())
         return data
 
     def save_all_settings(self, quiet=False):
@@ -1383,7 +1431,9 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         if not self.config_mgr.config["skills"].get("gid", True):
             from skills import gid
 
-            self._background(gid.stop_service)
+            self._background(lambda: self.runtime.client.call("dota", action="stop")) if hasattr(
+                self.runtime, "client"
+            ) else self._background(gid.stop_service)
         indicator_controller.enabled = self.config_mgr.config["app_settings"]["indicator_enabled"]
         return True
 
@@ -1411,10 +1461,12 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
                 "alias_target",
             )
         }
+        core_pending = self.core_draft_values()
         self.shell.destroy()
         self._timer_rows = None
         self._reminder_rows = None
         self.build_ui()
+        self.restore_core_draft(core_pending)
         self.command_entry.insert(0, pending_command)
         for key, value in pending_fields.items():
             target = getattr(self, key)
@@ -1558,6 +1610,9 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         settings = self.config_mgr.snapshot()["dota_guide"]
 
         def operation():
+            if hasattr(self.runtime, "client"):
+                result = self.runtime.client.call("dota", action=action)
+                return f"Dota GSI: {result}"
             from skills import gid
 
             if action == "start":
@@ -1668,6 +1723,12 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self.log_text.configure(state="disabled")
 
     def _poll(self):
+        if (
+            self.current_page == "music"
+            and self.state() != "withdrawn"
+            and time.monotonic() - self.music_refreshed_at >= 8
+        ):
+            self._refresh_music(quiet=True)
         for _ in range(100):
             try:
                 callback = self.ui_queue.get_nowait()
@@ -1684,7 +1745,13 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
                 kind, value = self.runtime.events.get_nowait()
             except queue.Empty:
                 break
-            if kind == "result":
+            if kind == "ui_open":
+                self.restore_window()
+            elif kind == "quick_panel":
+                from quick_panel import show_panel
+
+                show_panel(self)
+            elif kind == "result":
                 self.command_result.configure(
                     text=value.text[:2400],
                     fg=self.theme["text" if value.success else "danger"],
@@ -1693,6 +1760,7 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
                 if value.skill_id.startswith("skills.media."):
                     self.media_status_var.set(value.text)
             elif kind == "speech":
+                self.brand_mark.pulse()
                 self._append_log(value)
                 if self.config_mgr.config["app_settings"]["indicator_enabled"]:
                     indicator_controller.pulse(min(8, len(value) / 12))
@@ -1795,7 +1863,11 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
             )
             from skills import gid
 
-            info = gid.service_status()
+            info = (
+                self.runtime.cached["gid"]
+                if hasattr(self.runtime, "client")
+                else gid.service_status()
+            )
             self.dota_label.configure(
                 text=(f"GSI: порт {info['port']}" if info["running"] else "GSI выключен")
                 + f" · Время матча: {info['match_seconds'] // 60}:{info['match_seconds'] % 60:02}"
@@ -1827,13 +1899,31 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self.status_var.set("Завершение работы…")
 
         def close():
-            self.integration.stop_all()
-            self.runtime.close()
-            if self.tray_icon:
-                self.tray_icon.stop()
-            self.post_ui(self._destroy_window)
+            try:
+                if not hasattr(self.runtime, "client"):
+                    self.integration.stop_all()
+                self.runtime.close()
+            except (OSError, ValueError, RuntimeError):
+                logger.warning("Ядро уже завершилось или связь недоступна")
+            finally:
+                if self.tray_icon:
+                    self.tray_icon.stop()
+                self.post_ui(self._destroy_window)
 
         self._background(close)
+
+    def detach_window(self):
+        if not hasattr(self.runtime, "detach"):
+            self.on_close_window()
+            return
+        if self.dirty and not self.save_all_settings():
+            return
+        self.closing = True
+        self.microphone_test.stop.set()
+        if self.tray_icon:
+            self.tray_icon.stop()
+        self.runtime.detach()
+        self._destroy_window()
 
     def _destroy_window(self):
         self.after_cancel(self._poll_job)
@@ -1843,10 +1933,16 @@ class ControlCenterApp(DesktopShell, WorkflowPages, ProductPages, VoicePages, Se
         self.destroy()
 
 
-def open_menu_gui():
-    app = ControlCenterApp()
+def open_menu_gui(remote=None, config_path=None, quick=False):
+    app = ControlCenterApp(remote=remote, config_path=config_path)
+    if quick and app.onboarding is None:
+        from quick_panel import show_panel
+
+        app.after(100, lambda: show_panel(app))
     app.mainloop()
 
 
 if __name__ == "__main__":
-    open_menu_gui()
+    from main import main
+
+    raise SystemExit(main())

@@ -160,3 +160,60 @@ def test_notifications_expire(tmp_path):
         connection.execute('INSERT INTO notifications(created,text) VALUES (0,"old")')
     with pytest.raises(queue.Empty):
         consumer.get_nowait()
+
+
+def test_restart_budget_and_manual_stop_cancel_pending_restart(tmp_path, premium_config):
+    import time
+    from integrations import IntegrationManager
+
+    script = tmp_path / "crash.py"
+    script.write_text("raise SystemExit(3)\n")
+    cfg = premium_config.snapshot()
+    cfg["services"]["custom-crash.py"] = {"path": str(script), "auto_restart": True}
+    premium_config.save_config(cfg)
+    manager = IntegrationManager(SimpleNamespace(config_mgr=premium_config), base_dir=tmp_path)
+    try:
+        manager.start("custom-crash.py")
+        manager.processes["custom-crash.py"].wait(timeout=5)
+        manager.refresh()
+        assert "custom-crash.py" in manager.restart_due
+        manager.stop("custom-crash.py")
+        assert "custom-crash.py" not in manager.restart_due
+        manager._recover_service("custom-crash.py", 0)
+        assert not manager.processes
+        manager.restart_history["custom-crash.py"] = [time.monotonic()] * 3
+        manager.start("custom-crash.py")
+        manager.processes["custom-crash.py"].wait(timeout=5)
+        manager.refresh()
+        assert "custom-crash.py" not in manager.restart_due
+    finally:
+        manager.stop_all()
+
+
+def test_manifest_permissions_block_notification_and_ready_does_not_enable_extra_commands(
+    tmp_path, premium_config
+):
+    from notifications import NotificationQueue
+    import queue
+
+    manager = IntegrationManager(
+        SimpleNamespace(
+            config_mgr=premium_config,
+            runtime=SimpleNamespace(notifications=NotificationQueue(tmp_path / "queue.db")),
+        ),
+        base_dir=tmp_path,
+    )
+    manager.manifests["custom.py"] = {"permissions": []}
+    manager._event(
+        "custom.py",
+        'KREST_EVENT {"type":"ready","capabilities":["refresh","shell"]}',
+        premium_config.snapshot(),
+    )
+    assert manager.details("custom.py")["bridge"]["capabilities"] == []
+    manager._event(
+        "custom.py",
+        'KREST_EVENT {"type":"notification","text":"blocked"}',
+        premium_config.snapshot(),
+    )
+    with pytest.raises(queue.Empty):
+        manager.app.runtime.notifications.get_nowait()

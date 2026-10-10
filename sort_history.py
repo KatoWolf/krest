@@ -73,7 +73,12 @@ class SortHistory:
         result = {"restored": 0, "errors": []}
         if not _sort_lock.acquire(blocking=False):
             raise ValueError("Сортировка ещё выполняется")
+        from process_lock import ProcessLock
+
+        process_lock = ProcessLock(self.root / ".krest-sort.lock")
         try:
+            if not process_lock.acquire():
+                raise ValueError("Сортировка этой папки уже выполняется")
             with self.connect() as db:
                 batch = db.execute(
                     "SELECT batch FROM moves WHERE undone=0 ORDER BY id DESC LIMIT 1"
@@ -141,4 +146,5 @@ class SortHistory:
                     result["errors"].append(source.name + ": " + str(exc))
             return result
         finally:
+            process_lock.close()
             _sort_lock.release()

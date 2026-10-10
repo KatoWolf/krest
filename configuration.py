@@ -12,11 +12,24 @@ from scenarios import DEFAULT_SCENARIOS, validate_scenarios
 
 CONFIG_PATH = Path(os.getenv("KREST_CONFIG_PATH", Path(__file__).resolve().parent / "config.json"))
 DEFAULT_CONFIG = {
+    "schema_version": 2,
     "owner_name": "",
     "profile": {"onboarding_completed": False, "personality": "friendly"},
     "license": {"code": ""},
     "media": {"preferred_app": ""},
+    "remote_control": {
+        "enabled": False,
+        "block_when_locked": True,
+        "allow_uploads": False,
+        "allowed_commands": [],
+    },
+    "applications": [],
+    "application_aliases": {},
     "scenarios": DEFAULT_SCENARIOS,
+    "event_rules": [],
+    "file_policy": {"folders": [], "exclusions": [], "rules": []},
+    "briefings": {"morning": "", "evening": ""},
+    "accessibility": {"reduce_motion": False, "font_scale": 100},
     "performance": {"mode": "auto", "game_processes": "cs2.exe,dota2.exe"},
     "notification_settings": {"mode": "all", "game_important_only": True},
     "selected_theme": "Amethyst Modern",
@@ -115,6 +128,36 @@ def merge(default, values):
 
 def validate(data):
     validate_scenarios(data["scenarios"])
+    remote = data["remote_control"]
+    if (
+        type(remote["allow_uploads"]) is not bool
+        or type(remote["enabled"]) is not bool
+        or type(remote["block_when_locked"]) is not bool
+        or not isinstance(remote["allowed_commands"], list)
+        or len(remote["allowed_commands"]) > 200
+        or any(
+            not isinstance(v, str) or not 1 <= len(v) <= 2000 for v in remote["allowed_commands"]
+        )
+    ):
+        raise ValueError("Некорректный список удалённых команд")
+    from app_catalog import validate_apps
+
+    validate_apps(data)
+    from file_tools import validate_policy
+
+    validate_policy(data["file_policy"])
+    from automation import validate_rules
+
+    validate_rules(data["event_rules"], data["scenarios"])
+    from datetime import datetime
+
+    for value in data["briefings"].values():
+        if value:
+            datetime.strptime(value, "%H:%M")
+    if type(data["accessibility"]["reduce_motion"]) is not bool or data["accessibility"][
+        "font_scale"
+    ] not in (90, 100, 110, 125, 150):
+        raise ValueError("Некорректные настройки доступности")
     if data["performance"]["mode"] not in ("auto", "balanced", "game", "economy"):
         raise ValueError("Неизвестный профиль нагрузки")
     if (
@@ -165,6 +208,8 @@ def validate(data):
     for ident, service in data["services"].items():
         if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", ident) or not isinstance(service, dict):
             raise ValueError("Неверная запись сервиса")
+        if type(service.get("auto_restart", False)) is not bool:
+            raise ValueError("Автоперезапуск сервиса: нужен переключатель")
         if not isinstance(service.get("autostart", False), bool) or not isinstance(
             service.get("path", ""), str
         ):
@@ -242,7 +287,16 @@ class ConfigManager:
         self.filepath = Path(filepath)
         self._lock = threading.RLock()
         self.load_error = ""
+        self.future_version = False
         self.config = self.load_config()
+        self._disk_stamp = self._stamp()
+
+    def _stamp(self):
+        try:
+            info = self.filepath.stat()
+            return info.st_mtime_ns, info.st_size
+        except OSError:
+            return None
 
     def load_config(self):
         if not self.filepath.exists():
@@ -251,29 +305,53 @@ class ConfigManager:
             data = json.loads(self.filepath.read_text(encoding="utf-8-sig"))
             if not isinstance(data, dict):
                 raise ValueError("Ожидался объект JSON")
+            if data.get("schema_version", 1) not in (1, 2):
+                self.future_version = True
+                raise ValueError("Настройки созданы более новой версией Крест")
+            self.future_version = False
+            data["schema_version"] = 2
             if "profile" not in data and data.get("owner_name") in (
                 "Игорь",
                 "КатоВульф",
                 "KatoWolf",
             ):
                 data["owner_name"] = ""
-            return validate(merge(DEFAULT_CONFIG, data))
+            from secret_store import hydrate
+
+            self.secret_errors = []
+            return validate(merge(DEFAULT_CONFIG, hydrate(data, self.secret_errors)))
         except (ValueError, OSError) as exc:
             self.load_error = str(exc)
             return copy.deepcopy(DEFAULT_CONFIG)
 
     def snapshot(self):
         with self._lock:
+            stamp = self._stamp()
+            if stamp != self._disk_stamp:
+                self.load_error = ""
+                candidate = self.load_config()
+                if not self.load_error:
+                    self.config = candidate
+                self._disk_stamp = stamp
             return copy.deepcopy(self.config)
 
     def save_config(self, data=None):
         with self._lock:
+            if self.future_version:
+                raise ValueError(
+                    "Эта версия Крест не может перезаписывать настройки более новой версии"
+                )
             candidate = validate(merge(DEFAULT_CONFIG, data if data is not None else self.config))
             if self.load_error and self.filepath.exists():
                 backup = self.filepath.with_name(self.filepath.name + f".broken-{time.time_ns()}")
                 shutil.copy2(self.filepath, backup)
-            atomic_write_json(self.filepath, candidate)
+            from secret_store import protect_config
+
+            atomic_write_json(self.filepath, protect_config(candidate, self.filepath.resolve()))
+            if os.name != "nt":
+                self.filepath.chmod(0o600)
             self.config = candidate
+            self._disk_stamp = self._stamp()
             self.load_error = ""
 
     def is_premium(self):

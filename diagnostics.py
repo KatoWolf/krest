@@ -63,7 +63,7 @@ def validate_module(filename, cfg):
         "discord_presence.py": ("pypresence",),
         "ds_session.py": ("discord",),
         "tg_bridge.py": ("pyrogram",),
-        "krest_bot.py": ("telebot", "psutil", "pyautogui", "requests", "pyperclip"),
+        "krest_bot.py": ("telebot", "psutil", "requests"),
         "main.py": ("torch", "vosk", "sounddevice", "num2words", "numpy"),
     }
     missing = [p for p in packages.get(filename, ()) if importlib.util.find_spec(p) is None]

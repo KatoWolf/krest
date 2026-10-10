@@ -349,3 +349,98 @@ def test_profile_premium_themes_and_music_selection(tmp_path, monkeypatch, issue
         logging.getLogger().removeHandler(app._log_handler)
         welcome_gui.indicator_controller.stop()
         app.destroy()
+
+
+def test_new_pages_preserve_drafts_and_submit_real_memory_actions(tmp_path, monkeypatch):
+    import welcome_gui
+
+    original = welcome_gui.ConfigManager
+    monkeypatch.setattr(welcome_gui, "ConfigManager", lambda: original(tmp_path / "config.json"))
+    app = welcome_gui.ControlCenterApp()
+    errors = []
+    app.report_callback_exception = lambda *args: errors.append(str(args))
+    try:
+        app.owner_var.set("Тест")
+        app._complete_welcome()
+        app.memory_key.set("любимый плеер")
+        app.memory_value.set("Яндекс Музыка")
+        app._save_memory()
+        assert app.runtime.memory.recall("любимый плеер") == "Яндекс Музыка"
+        app.morning.set("09:30")
+        app.file_exclusions.set("*.keep; photo*.jpg")
+        app.remote_enabled.set(True)
+        app._default_remote_commands()
+        app.apply_theme("Emerald Cyber")
+        assert app.morning.get() == "09:30"
+        assert app.file_exclusions.get() == "*.keep; photo*.jpg"
+        assert "статус" in app.remote_commands.get("1.0", "end")
+        app.save_all_settings()
+        saved = original(tmp_path / "config.json").snapshot()
+        assert saved["briefings"]["morning"] == "09:30"
+        assert saved["file_policy"]["exclusions"] == ["*.keep", "photo*.jpg"]
+        assert saved["remote_control"]["enabled"]
+        app.event_scenario.set("Игра")
+        app._add_event()
+        assert len(original(tmp_path / "config.json").snapshot()["event_rules"]) == 1
+        for page in ("kernel", "memory", "events", "programs", "security"):
+            app.switch_page(page)
+            app.update()
+        from quick_panel import show_panel
+
+        show_panel(app)
+        app.update()
+        assert app._quick_panel.winfo_exists()
+        app._quick_panel.destroy()
+        button = app.save_button
+        button.event_generate("<Enter>")
+        app.after(160, lambda: button.event_generate("<Leave>"))
+        app.after(340, app.quit)
+        app.mainloop()
+        assert not app.motion.jobs
+        assert not errors
+    finally:
+        app.runtime.close()
+        app.integration.stop_all()
+        import logging
+
+        logging.getLogger().removeHandler(app._log_handler)
+        welcome_gui.indicator_controller.stop()
+        app.destroy()
+
+
+def test_menu_connects_to_real_kernel_and_can_detach(tmp_path):
+    from configuration import ConfigManager
+    from kernel_client import KernelClient, RemoteRuntime
+    import welcome_gui
+    import voice
+    cfg = ConfigManager(tmp_path / 'config.json')
+    data = cfg.snapshot()
+    data['owner_name'] = 'Тест'
+    data['profile']['onboarding_completed'] = True
+    cfg.save_config(data)
+    client = KernelClient(cfg.filepath).ensure_started()
+    remote = RemoteRuntime(client, cfg.snapshot)
+    voice.set_remote(remote)
+    app = None
+    errors = []
+    try:
+        app = welcome_gui.ControlCenterApp(remote=remote, config_path=cfg.filepath)
+        app.report_callback_exception = lambda *args: errors.append(str(args))
+        for page in app.pages:
+            app.switch_page(page)
+            app.update()
+        app.runtime.submit('таймер на пять минут')
+        app.after(800, app.quit)
+        app.mainloop()
+        assert len(client.call('snapshot')['state']['active_timers']) == 1
+        assert not errors
+        app.dirty = False
+        app.detach_window()
+        app = None
+        assert client.call('ping')['pid']
+        assert len(client.call('snapshot')['state']['active_timers']) == 1
+    finally:
+        if app:
+            remote.detach()
+            app._destroy_window()
+        client.call('shutdown')

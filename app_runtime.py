@@ -15,6 +15,7 @@ from performance import PerformancePolicy
 from scenarios import ScenarioRunner
 from notification_center import NotificationCenter, should_speak
 from command_context import CommandContext
+from platform_store import JobStore, MemoryStore
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,11 +33,19 @@ class AssistantRuntime:
         self.state = state or AssistantState(Path(data_dir) / "assistant_state.json")
         self.state.config_getter = settings
         self.state.runtime = self
+        self.jobs = JobStore(Path(data_dir) / "jobs.sqlite3")
+        self.memory = MemoryStore(Path(data_dir) / "memory.sqlite3")
+        self._job_local = threading.local()
+        self._active_jobs = {}
+        self._jobs_lock = threading.RLock()
         self.performance = PerformancePolicy(settings, Path(data_dir) / "activity_profile.json")
         self.center = NotificationCenter(Path(data_dir) / "inbox.sqlite3")
         self.context = CommandContext(self.state)
         self.notification_mode = None
         self.scenarios = ScenarioRunner(self)
+        from automation import EventAutomation
+
+        self.automation = EventAutomation(self)
         self._execute_lock = threading.RLock()
         self.manager = SkillManager(settings)
         self.state.skill_manager = self.manager
@@ -71,7 +80,7 @@ class AssistantRuntime:
         for thread in self._threads:
             thread.start()
 
-    def submit(self, text, source="text", confidence=None):
+    def submit(self, text, source="text", confidence=None, request_key=None):
         text = text.strip()
         if not text:
             return False
@@ -81,11 +90,17 @@ class AssistantRuntime:
         with self._request_lock:
             if self.stop_event.is_set():
                 return False
+            if self.requests.full():
+                self.events.put(("error", "Очередь заполнена"))
+                return False
+            job_id, fresh = self.jobs.create(text, source, request_key)
+            if not fresh:
+                return True
             try:
-                self.requests.put_nowait((text, source, confidence))
+                self.requests.put_nowait((text, source, confidence, job_id))
                 return True
             except queue.Full:
-                pass
+                self.jobs.transition(job_id, "cancelled", "Очередь заполнена")
         self.events.put(("error", "Очередь команд заполнена. Дождитесь завершения текущих команд."))
         return False
 
@@ -95,7 +110,8 @@ class AssistantRuntime:
             count = 0
             while True:
                 try:
-                    self.requests.get_nowait()
+                    item = self.requests.get_nowait()
+                    self.jobs.transition(item[3], "cancelled", "Отменено до начала выполнения")
                     self.requests.task_done()
                     count += 1
                 except queue.Empty:
@@ -107,7 +123,48 @@ class AssistantRuntime:
 
     def execute(self, text, source="text", confidence=None):
         with self._execute_lock:
-            return self._execute(text, source, confidence)
+            ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
+            if not self.jobs.transition(ident, "running"):
+                return CommandResult(True, False, "Задание отменено или уже завершено")
+            from execution import ExecutionToken
+
+            token = ExecutionToken(self.stop_event)
+            self._job_local.token = token
+            with self._jobs_lock:
+                self._active_jobs[ident] = token
+            try:
+                result = self._execute(text, source, confidence)
+                status = (
+                    "completed" if result.success else "cancelled" if token.is_set() else "failed"
+                )
+                self.jobs.transition(ident, status, result.text)
+                return result
+            except Exception as exc:
+                self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
+                raise
+            finally:
+                with self._jobs_lock:
+                    self._active_jobs.pop(ident, None)
+                self._job_local.token = None
+
+    @property
+    def command_stop(self):
+        return getattr(self._job_local, "token", None) or self.stop_event
+
+    def cancel_job(self, ident):
+        with self._jobs_lock:
+            token = self._active_jobs.get(ident)
+            if token:
+                token.set()
+                return "Остановка запрошена. Уже отправленные действия не отменяются; проверяйте результат."
+        job = self.jobs.get(ident)
+        if (
+            job
+            and job["status"] == "queued"
+            and self.jobs.transition(ident, "cancelled", "Отменено до выполнения")
+        ):
+            return "Задание отменено до выполнения"
+        return "Задание уже завершено или не поддерживает остановку"
 
     def _execute(self, text, source="text", confidence=None):
         cfg = self.settings().get("app_settings", {})
@@ -193,7 +250,7 @@ class AssistantRuntime:
                 if self.stop_event.is_set():
                     break
                 try:
-                    text, source, confidence = self.requests.get_nowait()
+                    text, source, confidence, job_id = self.requests.get_nowait()
                 except queue.Empty:
                     text = None
                 if text is not None:
@@ -202,6 +259,7 @@ class AssistantRuntime:
                 self.stop_event.wait(0.1)
                 continue
             try:
+                self._job_local.current = job_id
                 if confidence is None:
                     self.execute(text, source)
                 else:
@@ -210,6 +268,7 @@ class AssistantRuntime:
                 logger.exception("Сбой обработки команды")
                 self.events.put(("error", str(exc)))
             finally:
+                self._job_local.current = None
                 with self._request_lock:
                     self.current_command = ""
                 self.requests.task_done()
@@ -242,6 +301,7 @@ class AssistantRuntime:
                     else:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
+                self.automation.tick()
                 from skills import gid
 
                 self.state.dota_guide_active = gid.dota_state.is_active
@@ -271,7 +331,7 @@ class AssistantRuntime:
     def _downloads(self):
         from downloads import DownloadSorter
 
-        sorter = DownloadSorter()
+        sorters = {}
         last_run = 0
         previous = None
         last_error = ""
@@ -280,9 +340,13 @@ class AssistantRuntime:
             enabled = cfg.get("downloads_auto_sort", False) and self.settings().get(
                 "skills", {}
             ).get("system_mon", True)
-            signature = (enabled, cfg.get("downloads_path", ""))
+            policy = self.settings().get("file_policy", {})
+            folders = tuple(
+                dict.fromkeys([cfg.get("downloads_path", ""), *policy.get("folders", [])])
+            )
+            signature = (enabled, folders)
             if signature != previous:
-                sorter = DownloadSorter()
+                sorters = {folder: DownloadSorter(policy) for folder in folders}
                 last_run = 0
                 previous = signature
                 last_error = ""
@@ -291,7 +355,17 @@ class AssistantRuntime:
             elif enabled and time.monotonic() - last_run >= 30:
                 last_run = time.monotonic()
                 try:
-                    result = sorter.scan(signature[1], stop=self.stop_event)
+                    result = {"moved_count": 0, "skipped_count": 0, "errors": []}
+                    for folder in folders:
+                        sorter = sorters[folder]
+                        sorter.policy = policy
+                        try:
+                            item = sorter.scan(folder, stop=self.stop_event)
+                            result["moved_count"] += item["moved_count"]
+                            result["skipped_count"] += item["skipped_count"]
+                            result["errors"].extend(item["errors"])
+                        except (OSError, ValueError) as exc:
+                            result["errors"].append(str(exc))
                     self.download_status = f"Проверено в {time.strftime('%H:%M:%S')} · перемещено: {result['moved_count']} · ожидают: {result['skipped_count']}"
                     if result["moved_count"]:
                         self.publish_notice("Загрузки: " + self.download_status, "Файлы", "low")

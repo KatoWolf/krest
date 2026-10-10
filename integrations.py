@@ -55,16 +55,29 @@ class IntegrationManager:
         self.processes, self.errors, self.started_at, self.log_handles = {}, {}, {}, {}
         self._readers = {}
         self._lock = threading.RLock()
+        self._health_lock = threading.Lock()
         self._closed = False
         self.bridge = {}
+        self.manifests = {}
+        self.restart_history = {}
+        self.restart_due = {}
+        self._generation = {}
+        self.resources = {}
+        self._last_resources = 0
         self.MODULES = dict(type(self).MODULES)
         self.reload_registry()
 
     def reload_registry(self):
-        builtins = {filename for filename, title in type(self).MODULES.values()}
+        updated = dict(type(self).MODULES)
+        builtins = {filename for filename, title in updated.values()}
         for ident, cfg in self.app.config_mgr.snapshot().get("services", {}).items():
             if ident not in builtins:
-                self.MODULES[ident] = (ident, cfg.get("title", ident))
+                updated[ident] = (ident, cfg.get("title", ident))
+        valid = {filename for filename, title in updated.values()}
+        for filename in list(self.processes):
+            if filename not in valid:
+                self.stop(filename)
+        self.MODULES = updated
 
     def path(self, filename):
         custom = self.app.config_mgr.snapshot().get("services", {}).get(filename, {}).get("path")
@@ -93,6 +106,16 @@ class IntegrationManager:
             else 0,
             "error": self.errors.get(filename, ""),
             "bridge": self.bridge.get(filename, {}),
+            "health": "error"
+            if self.errors.get(filename)
+            else "ready"
+            if self.bridge.get(filename, {}).get("ready") and running
+            else "starting"
+            if running
+            else "stopped",
+            "resources": self.resources.get(filename, {}),
+            "manifest": self.manifests.get(filename, {}),
+            "restarts": len(self.restart_history.get(filename, [])),
         }
 
     def send(self, filename, command):
@@ -128,12 +151,18 @@ class IntegrationManager:
             return
         kind = value.get("type")
         message = redact(str(value.get("text", ""))[:2000], settings)
+        permissions = self.manifests.get(filename, {}).get(
+            "permissions", ["notifications", "refresh"]
+        )
+        self.bridge.setdefault(filename, {})["last_event"] = time.time()
         if kind == "ready":
             self.errors.pop(filename, None)
             caps = value.get("capabilities", [])
             self.bridge[filename] = {
                 "text": message,
-                "capabilities": [c for c in caps if c in ("refresh",)]
+                "ready": True,
+                "last_event": time.time(),
+                "capabilities": [c for c in caps if c in ("refresh",) and c in permissions]
                 if isinstance(caps, list)
                 else [],
             }
@@ -142,13 +171,28 @@ class IntegrationManager:
             self.bridge.setdefault(filename, {})["text"] = message
         elif kind == "error":
             self.errors[filename] = message
-        elif kind == "notification" and hasattr(self.app, "runtime"):
+        elif (
+            kind == "notification"
+            and "notifications" in permissions
+            and hasattr(self.app, "runtime")
+        ):
             priority = value.get("priority", "normal")
             if priority not in ("low", "normal", "high"):
                 priority = "normal"
             self.app.runtime.notifications.put(message, source=filename, priority=priority)
 
     def refresh(self):
+        if not self._health_lock.acquire(blocking=False):
+            return {
+                key: self._module_status(filename)
+                for key, (filename, _) in list(self.MODULES.items())
+            }
+        try:
+            return self._refresh()
+        finally:
+            self._health_lock.release()
+
+    def _refresh(self):
         if self._lock.acquire(blocking=False):
             try:
                 for filename, proc in list(self.processes.items()):
@@ -159,22 +203,85 @@ class IntegrationManager:
                                 f"Процесс завершился с кодом {code}; подробности в журнале"
                             )
                         self.processes.pop(filename, None)
+                        if proc.stdin:
+                            proc.stdin.close()
+                        cfg = self.app.config_mgr.snapshot().get("services", {}).get(filename, {})
+                        if code and cfg.get("auto_restart", False) and not self._closed:
+                            now = time.monotonic()
+                            history = [
+                                v for v in self.restart_history.get(filename, []) if now - v < 600
+                            ]
+                            self.restart_history[filename] = history
+                            if len(history) < 3:
+                                self.restart_due[filename] = now + 5 * 3 ** len(history)
             finally:
                 self._lock.release()
-        return {key: self._module_status(filename) for key, (filename, _) in self.MODULES.items()}
+        now = time.monotonic()
+        if self._lock.acquire(blocking=False):
+            try:
+                for filename, deadline in list(self.restart_due.items()):
+                    if now < deadline or self._closed:
+                        continue
+                    self.restart_due.pop(filename, None)
+                    generation = self._generation.get(filename, 0)
+                    self.restart_history.setdefault(filename, []).append(now)
+                    threading.Thread(
+                        target=self._recover_service, args=(filename, generation), daemon=True
+                    ).start()
+            finally:
+                self._lock.release()
+        if now - self._last_resources >= 10:
+            self._last_resources = now
+            import psutil
+
+            for filename, proc in list(self.processes.items()):
+                try:
+                    process = psutil.Process(proc.pid)
+                    self.resources[filename] = {
+                        "memory_mb": round(process.memory_info().rss / 1024**2, 1),
+                        "threads": process.num_threads(),
+                    }
+                except psutil.Error:
+                    self.resources.pop(filename, None)
+        return {
+            key: self._module_status(filename) for key, (filename, _) in list(self.MODULES.items())
+        }
+
+    def _recover_service(self, filename, generation):
+        with self._lock:
+            if (
+                self._closed
+                or self._generation.get(filename, 0) != generation
+                or not self.app.config_mgr.snapshot()
+                .get("services", {})
+                .get(filename, {})
+                .get("auto_restart", False)
+            ):
+                return
+            try:
+                self.start(filename)
+            except Exception as exc:
+                self.errors[filename] = redact(str(exc), self.app.config_mgr.snapshot())
 
     def _capture(self, filename, proc, settings):
         path = self.base_dir / "logs" / (filename + ".log")
         handler = RotatingFileHandler(path, maxBytes=512_000, backupCount=2, encoding="utf-8")
         try:
-            for line in proc.stdout:
+            while True:
+                line = proc.stdout.readline(8193)
+                if not line:
+                    break
+                if len(line) > 8192:
+                    while line and not line.endswith("\n"):
+                        line = proc.stdout.readline(8193)
+                    line = "[слишком длинная строка сервиса пропущена]\n"
                 self._event(filename, line, settings)
                 record = logging.LogRecord(
                     filename,
                     logging.INFO,
                     "",
                     0,
-                    redact(line.rstrip(), settings),
+                    redact(redact(line.rstrip(), settings), self.app.config_mgr.snapshot()),
                     (),
                     None,
                 )
@@ -201,6 +308,9 @@ class IntegrationManager:
             custom = settings.get("services", {}).get(filename, {}).get("path")
             if not custom:
                 validate_module(filename, settings)
+            from plugin_manifest import inspect_plugin
+
+            self.manifests[filename] = inspect_plugin(self.path(filename))
             if Path(self.path(filename)).suffix.lower() != ".py":
                 raise ValueError("Выберите Python-скрипт .py")
             (self.base_dir / "logs").mkdir(exist_ok=True)
@@ -225,6 +335,7 @@ class IntegrationManager:
                 errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
             )
+            self.restart_due.pop(filename, None)
             self.processes[filename] = proc
             self.started_at[filename] = time.time()
             self.errors.pop(filename, None)
@@ -238,6 +349,8 @@ class IntegrationManager:
 
     def stop(self, filename):
         with self._lock:
+            self._generation[filename] = self._generation.get(filename, 0) + 1
+            self.restart_due.pop(filename, None)
             proc = self.processes.pop(filename, None)
             if proc is None:
                 return "Не запущен"

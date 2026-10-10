@@ -33,6 +33,19 @@ class DesktopShell:
         return pystray.Icon("krest", load_image(64), "КРЕСТ — личный помощник", menu)
 
     def ensure_tray(self, hide=False):
+        if hasattr(getattr(self, "runtime", None), "client"):
+            tray = self.runtime.cached.get("tray", {})
+            if tray.get("ready"):
+                self.tray_state = "ready"
+                if hide:
+                    self.withdraw()
+                return True
+            if hide:
+                self._report_error(
+                    "Трей ядра ещё не готов. Окно оставлено открытым."
+                    + (" " + tray["error"] if tray.get("error") else "")
+                )
+            return False
         self._tray_hide_requested |= hide
         if self.tray_state == "ready":
             if self._tray_hide_requested:

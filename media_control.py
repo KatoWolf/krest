@@ -4,6 +4,12 @@ import asyncio
 import importlib
 import re
 from datetime import timedelta
+import threading
+import time
+
+_last_source = ""
+_last_used = 0
+_selection_lock = threading.RLock()
 
 
 class MediaError(RuntimeError):
@@ -37,7 +43,7 @@ def _manager_type():
         ) from exc
 
 
-def choose_session(sessions, current, preferred=""):
+def choose_session(sessions, current, preferred="", sticky=""):
     if preferred:
         matches = [s for s in sessions if s.source_app_user_model_id == preferred]
         if len(matches) == 1:
@@ -49,6 +55,10 @@ def choose_session(sessions, current, preferred=""):
     if len(playing) == 1:
         return playing[0]
     candidates = playing or sessions
+    if sticky:
+        previous = [s for s in candidates if s.source_app_user_model_id == sticky]
+        if len(previous) == 1:
+            return previous[0]
     if current:
         same = [
             s for s in candidates if s.source_app_user_model_id == current.source_app_user_model_id
@@ -99,19 +109,35 @@ async def _metadata(session):
 async def _query(preferred="", all_sessions=False):
     sessions, current = await _sessions()
     if all_sessions:
+        try:
+            with _selection_lock:
+                sticky = _last_source if time.monotonic() - _last_used < 120 else ""
+                selected_id = choose_session(
+                    sessions, current, preferred, sticky
+                ).source_app_user_model_id
+        except MediaError:
+            selected_id = ""
         rows = []
         for session in sessions:
             try:
-                rows.append(await _metadata(session))
+                row = await _metadata(session)
+                row["selected"] = row["app_id"] == selected_id
+                rows.append(row)
             except Exception:
                 continue  # One closing session must not hide the other players.
         return rows
-    return await _metadata(choose_session(sessions, current, preferred))
+    with _selection_lock:
+        sticky = _last_source if time.monotonic() - _last_used < 120 else ""
+        selected = choose_session(sessions, current, preferred, sticky)
+    return await _metadata(selected)
 
 
 async def _control(action, preferred="", seconds=10):
     sessions, current = await _sessions()
-    session = choose_session(sessions, current, preferred)
+    global _last_source, _last_used
+    with _selection_lock:
+        sticky = _last_source if time.monotonic() - _last_used < 120 else ""
+        session = choose_session(sessions, current, preferred, sticky)
     playback = session.get_playback_info()
     methods = {
         "play": ("is_play_enabled", "try_play_async"),
@@ -123,6 +149,8 @@ async def _control(action, preferred="", seconds=10):
     if (action == "pause" and playback.playback_status == 5) or (
         action == "play" and playback.playback_status == 4
     ):
+        with _selection_lock:
+            _last_source, _last_used = session.source_app_user_model_id, time.monotonic()
         return {
             "success": True,
             "message": "Уже на паузе." if action == "pause" else "Музыка уже играет.",
@@ -149,6 +177,8 @@ async def _control(action, preferred="", seconds=10):
         raise MediaError("Неизвестное действие плеера.")
     if not ok:
         raise MediaError("Плеер отклонил команду. Проверьте его состояние.")
+    with _selection_lock:
+        _last_source, _last_used = session.source_app_user_model_id, time.monotonic()
     return {
         "success": True,
         "message": {

@@ -485,23 +485,6 @@ def owner_identity(state):
     category="Сценарии",
 )
 def daily_briefing(state):
-    pending = state.reminders()
-    today = datetime.datetime.now().date()
-    snapshot = state.snapshot()
-    tasks = [
-        task
-        for task in snapshot["daily_tasks"]
-        if datetime.datetime.fromtimestamp(task["end_time"]).date() == today
-    ]
-    completed = sum(
-        datetime.datetime.fromtimestamp(task["completed_at"]).date() == today
-        for task in snapshot["completed_tasks"]
-    )
-    lines = [
-        f"Дел по расписанию до конца дня: {len(tasks)}. Непрочитанных напоминаний: {len(pending)}. Выполнено сегодня: {completed}."
-    ]
-    lines.extend(
-        f"{datetime.datetime.fromtimestamp(t['end_time']).strftime('%H:%M')}: {t['label']}"
-        for t in sorted(tasks, key=lambda x: x["end_time"])
-    )
-    return "\n".join(lines)
+    from assistant_memory import briefing
+
+    return briefing(state)

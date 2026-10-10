@@ -1,5 +1,6 @@
 """Conservative downloads sorting, shared by manual and background commands."""
 
+import fnmatch
 import os
 import hashlib
 import uuid
@@ -25,7 +26,8 @@ class _CancellableReader:
 
 
 class DownloadSorter:
-    def __init__(self):
+    def __init__(self, policy=None):
+        self.policy = policy or {}
         self.observed = {}
         self.root = None
 
@@ -48,7 +50,12 @@ class DownloadSorter:
         }
         if not _sort_lock.acquire(blocking=False):
             return result
+        from process_lock import ProcessLock
+
+        process_lock = ProcessLock(root / ".krest-sort.lock")
         try:
+            if not preview and not process_lock.acquire():
+                raise ValueError("Сортировка этой папки уже выполняется")
             from sort_history import SortHistory
 
             journal = None if preview else SortHistory(root)
@@ -60,6 +67,12 @@ class DownloadSorter:
                 seen.add(path.name)
                 try:
                     if path.is_symlink() or not path.is_file() or path.name.startswith("."):
+                        continue
+                    if any(
+                        fnmatch.fnmatch(path.name.casefold(), pattern.casefold())
+                        for pattern in self.policy.get("exclusions", [])
+                    ):
+                        result["skipped_count"] += 1
                         continue
                     ext = path.suffix.lower()
                     if not ext or ext in INCOMPLETE_DOWNLOAD_EXTENSIONS:
@@ -79,6 +92,17 @@ class DownloadSorter:
                         result["skipped_count"] += 1
                         continue
                     folder_name = get_category_for_extension(ext)
+                    for rule in self.policy.get("rules", []):
+                        if ext in rule["extensions"]:
+                            folder_name = rule["category"]
+                            break
+                    if (
+                        Path(folder_name).name != folder_name
+                        or folder_name in (".", "..")
+                        or "/" in folder_name
+                        or "\\" in folder_name
+                    ):
+                        raise ValueError("Категория должна быть названием папки")
                     target_dir = root / folder_name
                     if target_dir.is_symlink():
                         raise ValueError("Папка категории является ссылкой: " + folder_name)
@@ -87,6 +111,8 @@ class DownloadSorter:
                             {"source": str(path), "category": folder_name, "bytes": info.st_size}
                         )
                         continue
+                    if shutil.disk_usage(root).free < info.st_size + 10 * 1024 * 1024:
+                        raise OSError("Недостаточно свободного места для безопасного копирования")
                     target_dir.mkdir(exist_ok=True)
                     target = None
                     # Exclusive creation preserves existing same-name files on every OS.
@@ -134,4 +160,5 @@ class DownloadSorter:
             self.observed = {k: v for k, v in self.observed.items() if k in seen}
             return result
         finally:
+            process_lock.close()
             _sort_lock.release()

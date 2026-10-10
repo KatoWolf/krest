@@ -24,6 +24,12 @@ _engine_lock = threading.RLock()
 _audio_queue = queue.Queue(maxsize=50)
 _audio_thread = None
 _generation = 0
+_remote = None
+
+
+def set_remote(remote):
+    global _remote
+    _remote = remote
 
 
 def configure(output=None, settings=None, state=None):
@@ -63,6 +69,8 @@ def _playback():
 
 def speak(text):
     global _audio_thread
+    if _remote is not None:
+        return _remote.client.call("voice.speak", text=str(text))
     text = str(text).strip()
     if not text:
         return
@@ -157,11 +165,15 @@ def listen():
 
 
 def is_enabled():
+    if _remote is not None:
+        return _remote.cached["voice"]["enabled"]
     return _engine is not None
 
 
 def stop_speaking():
     global _generation
+    if _remote is not None:
+        return _remote.client.call("voice.interrupt")
     _generation += 1
     engine = _engine
     if engine is not None:
@@ -175,6 +187,8 @@ def stop_speaking():
 
 
 def telemetry():
+    if _remote is not None:
+        return _remote.cached["voice"]["telemetry"]
     engine = _engine
     return dict(engine.metrics) if engine else {}
 

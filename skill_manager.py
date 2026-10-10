@@ -143,6 +143,8 @@ class SkillManager:
         self._load("skills", reload)
 
     def load_custom_plugins(self, reload=False):
+        if self.settings().get("safe_mode", False):
+            return
         self._load("plugins", reload)
 
     def reload(self):
@@ -158,6 +160,8 @@ class SkillManager:
             return list(SKILL_REGISTRY)
 
     def availability(self, entry):
+        if self.settings().get("safe_mode", False) and entry.func.__module__.startswith("plugins."):
+            return "Сторонние навыки отключены в безопасном режиме"
         if not self.settings().get("skills", {}).get(entry.module, True):
             return "Выключен в настройках"
         if entry.requires_windows and os.name != "nt":
@@ -173,8 +177,8 @@ class SkillManager:
             for keyword in entry.keywords:
                 if clean == keyword:
                     candidates.append((10000 + len(keyword), entry, {}))
-                elif re.search(r"(?<!\w)" + re.escape(keyword) + r"(?!\w)", clean):
-                    candidates.append((2000 + len(keyword), entry, {}))
+                # Commands embedded inside narration or a negated sentence must
+                # never execute. Flexible phrasing belongs in anchored templates.
             for pattern in entry.patterns:
                 match = pattern.fullmatch(clean)
                 if match:

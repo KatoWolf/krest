@@ -1,6 +1,7 @@
 """Profile onboarding, music controls, and Premium UI."""
 
 from datetime import datetime
+import time
 import tkinter as tk
 from tkinter import ttk
 import licensing
@@ -18,6 +19,7 @@ class ProductPages:
             value="Нажмите «Найти плееры». Крест выбирает играющую медиасессию автоматически."
         )
         self.music_busy = False
+        self.music_refreshed_at = 0
         self.media_track_var = tk.StringVar(value="Включите музыку в любимом плеере")
         self.diagnostics_busy = False
         self.media_diagnostics = tk.StringVar(value="Проверка ничего не нажимает в плеере.")
@@ -39,6 +41,8 @@ class ProductPages:
 
         if os.name == "nt":
             self.ensure_tray()
+            if not self.config_mgr.snapshot().get("applications"):
+                self._scan_apps()
 
     def _show_welcome(self):
         if self.config_mgr.snapshot()["profile"]["onboarding_completed"]:
@@ -199,17 +203,27 @@ class ProductPages:
             self.runtime.submit(command)
             self.media_status_var.set("Команда отправлена. Результат появится здесь и в журнале.")
 
-    def _refresh_music(self):
+    def _refresh_music(self, quiet=False):
         if self.music_busy:
             return
         self.music_busy = True
-        self.media_status_var.set("Ищу активные медиасессии…")
+        self.music_refreshed_at = time.monotonic()
+        if not quiet:
+            self.media_status_var.set("Ищу активные медиасессии…")
 
         def work():
             import media_control
 
             try:
-                rows = media_control.query(all_sessions=True)
+                client = getattr(self.runtime, "client", None)
+                rows = (
+                    client.call("media_query")
+                    if client
+                    else media_control.query(
+                        preferred=self.config_mgr.snapshot()["media"]["preferred_app"],
+                        all_sessions=True,
+                    )
+                )
 
                 def done():
                     self.music_tree.delete(*self.music_tree.get_children())
@@ -225,14 +239,7 @@ class ProductPages:
                                 "Играет" if data["is_playing"] else "На паузе",
                             ),
                         )
-                    preferred = self.media_source_var.get()
-                    candidates = (
-                        [v for v in rows if v["app_id"] == preferred]
-                        if preferred
-                        else [v for v in rows if v["is_playing"]]
-                    )
-                    if not candidates and not preferred and len(rows) == 1:
-                        candidates = rows
+                    candidates = [v for v in rows if v.get("selected")]
                     if len(candidates) == 1:
                         current = candidates[0]
                         self.media_track_var.set(current["artist"] + " — " + current["title"])
@@ -240,11 +247,12 @@ class ProductPages:
                         self.media_track_var.set(
                             "Выберите источник ниже" if rows else "Включите музыку в любимом плеере"
                         )
-                    self.media_status_var.set(
-                        f"Найдено источников: {len(rows)}. Автовыбор включён."
-                        if not self.media_source_var.get()
-                        else f"Найдено источников: {len(rows)}. Источник закреплён."
-                    )
+                    if not quiet:
+                        self.media_status_var.set(
+                            f"Найдено источников: {len(rows)}. Автовыбор включён."
+                            if not self.media_source_var.get()
+                            else f"Найдено источников: {len(rows)}. Источник закреплён."
+                        )
 
                 self.post_ui(done)
             except Exception as exc:

@@ -322,3 +322,19 @@ def test_microphone_overflow_does_not_propose_bad_threshold(monkeypatch):
         probe.record(calibrate=True)
     assert probe.noise_threshold is None
     assert not probe.busy
+
+
+def test_embedded_or_negated_dangerous_keywords_never_dispatch():
+    from skill_manager import SkillManager
+
+    manager = SkillManager()
+    for phrase in (
+        "я не хочу чтобы ты закрой окно",
+        "объясни команду очисти корзину",
+        "ты вчера сказала выключись",
+        "не надо закрой окно",
+        "не выключись",
+    ):
+        assert manager.match(phrase) is None, phrase
+    assert manager.match("очисти корзину") is not None
+    assert manager.match("напомни через пять минут не закрывать окно") is not None

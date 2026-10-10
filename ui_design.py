@@ -256,3 +256,143 @@ class Disclosure(tk.Frame):
     def toggle(self):
         self.opened = not self.opened
         self._draw()
+
+
+def colour_mix(a, b, progress):
+    channels = [
+        round(int(a[i : i + 2], 16) * (1 - progress) + int(b[i : i + 2], 16) * progress)
+        for i in (1, 3, 5)
+    ]
+    return "#" + "".join(f"{v:02x}" for v in channels)
+
+
+def style_titlebar(window, colours):
+    """Keep native drag, snap, keyboard and system menu; tint on supported Windows."""
+    import os
+
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user = ctypes.WinDLL("user32")
+        user.GetParent.argtypes = [wintypes.HWND]
+        user.GetParent.restype = wintypes.HWND
+        hwnd = user.GetParent(window.winfo_id()) or window.winfo_id()
+        api = ctypes.WinDLL("dwmapi")
+        api.DwmSetWindowAttribute.argtypes = [
+            wintypes.HWND,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+
+        def put(attribute, value):
+            data = ctypes.c_uint(value)
+            api.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data))
+
+        put(20, 1)
+        for attribute, key in ((35, "sidebar"), (36, "text"), (34, "border")):
+            hex_value = colours[key].lstrip("#")
+            put(attribute, int(hex_value[4:6] + hex_value[2:4] + hex_value[:2], 16))
+        put(33, 2)  # Windows 11 rounded window corners.
+    except (OSError, AttributeError, tk.TclError):
+        pass
+
+
+class MotionController:
+    """Five frames on interaction, zero timers at rest. Respects reduced motion."""
+
+    def __init__(self, root):
+        self.root = root
+        self.jobs = {}
+        self.styles = {}
+        root.bind_class("TButton", "<Enter>", self._enter, add="+")
+        root.bind_class("TButton", "<Leave>", self._leave, add="+")
+        root.bind_class("TButton", "<Destroy>", self._destroy, add="+")
+
+    def enabled(self):
+        return (
+            not self.root.config_mgr.snapshot().get("accessibility", {}).get("reduce_motion", False)
+        )
+
+    def _enter(self, event):
+        self._animate(event.widget, True)
+
+    def _leave(self, event):
+        self._animate(event.widget, False)
+
+    def _destroy(self, event):
+        job = self.jobs.pop(event.widget, None)
+        if job:
+            self.root.after_cancel(job)
+        self.styles.pop(event.widget, None)
+
+    def _animate(self, widget, entering):
+        if not isinstance(widget, ttk.Button) or not self.enabled() or widget.instate(["disabled"]):
+            return
+        previous = self.jobs.pop(widget, None)
+        if previous:
+            self.root.after_cancel(previous)
+        style = ttk.Style(self.root)
+        current = str(widget.cget("style")) or "TButton"
+        old = self.styles.get(widget)
+        base = old[0] if old and current == old[1] else current
+        name = f"KrestMotion{widget.winfo_id()}." + base
+        self.styles[widget] = (base, name)
+        normal = style.lookup(base, "background", ("!active", "!pressed"))
+        active = style.lookup(base, "background", ("active",))
+        if not normal.startswith("#") or not active.startswith("#"):
+            return
+        widget.configure(style=name)
+        start, end = (normal, active) if entering else (active, normal)
+
+        def frame(index=0):
+            self.jobs.pop(widget, None)
+            if not widget.winfo_exists() or str(widget.cget("style")) != name:
+                return
+            colour = colour_mix(start, end, index / 5)
+            style.configure(name, background=colour)
+            style.map(
+                name,
+                background=[
+                    ("disabled", self.root.theme["card"]),
+                    ("pressed", active),
+                    ("!disabled", colour),
+                ],
+            )
+            if index < 5:
+                self.jobs[widget] = self.root.after(24, frame, index + 1)
+            elif not entering:
+                widget.configure(style=base)
+
+        frame()
+
+
+class BrandMark(tk.Canvas):
+    def __init__(self, parent, image, colours, motion=lambda: True):
+        super().__init__(parent, width=56, height=56, bg=colours["sidebar"], highlightthickness=0)
+        self.colours, self.motion, self.job = colours, motion, None
+        self.ring = self.create_oval(2, 2, 54, 54, outline=colours["border"], width=1)
+        self.create_image(28, 28, image=image)
+        self.bind("<Enter>", lambda e: self.pulse())
+        self.bind("<Destroy>", self._stop)
+
+    def _stop(self, event=None):
+        if self.job:
+            self.after_cancel(self.job)
+            self.job = None
+
+    def pulse(self, index=0):
+        if not self.motion():
+            return
+        if index == 0:
+            self._stop()
+        factor = 1 - abs(index - 5) / 5
+        self.itemconfigure(
+            self.ring,
+            outline=colour_mix(self.colours["border"], self.colours["accent"], factor),
+            width=1 + factor,
+        )
+        self.job = self.after(35, self.pulse, index + 1) if index < 10 else None

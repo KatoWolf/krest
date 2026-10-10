@@ -3,36 +3,11 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 import os
 import psutil
 
-
-class DesktopAPI:
-    """Load desktop bindings only when a desktop command is actually requested."""
-
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pyautogui"), name)
-
-
-pyautogui = DesktopAPI()
 import requests
 import json
-import subprocess
-import threading
 import time
-import pyperclip
-import random
 import shutil
-import re
-import ctypes
-import webbrowser
 from datetime import datetime
-import sys
-
-# --- ИМПОРТЫ ДЛЯ НОВЫХ ФУНКЦИЙ ---
-try:
-    import yt_dlp
-except ImportError:
-    yt_dlp = None
 
 # --- ИНИЦИАЛИЗАЦИЯ КОНФИГА ---
 try:
@@ -75,21 +50,15 @@ class BotProxy:
 
 bot = BotProxy()
 
-AFK_MODE = False
 START_TIME = datetime.now()
 LOGS = []
 SHARED_QUEUE = None
 
 # --- СИСТЕМА ФАЙЛОВ И КЭША ---
-if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from configuration import ConfigManager
 
-AESTHETICS_DIR = os.path.join(BASE_DIR, "aesthetics")
-USED_AESTHETICS_DIR = os.path.join(AESTHETICS_DIR, "used")
+BASE_DIR = str(ConfigManager().filepath.parent)
 CACHE_FILE = os.path.join(BASE_DIR, "steam_cache.json")
-TEMP_DIR = os.path.join(BASE_DIR, "temp")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 
 
@@ -102,7 +71,7 @@ def add_log(text):
         LOGS.pop(0)
 
 
-# --- ФУНКЦИИ АНТИ-БАН КЭША STEAM ---
+# --- КЭШ STEAM: ОГРАНИЧЕНИЕ ПОВТОРНЫХ ЗАПРОСОВ ---
 def get_cached_data(key, max_age_seconds):
     try:
         if os.path.exists(CACHE_FILE):
@@ -132,8 +101,8 @@ def save_cached_data(key, data):
 # --- ИНТЕРФЕЙС (ПАНЕЛЬ КНОПОК) ---
 def get_main_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(KeyboardButton("📊 Статус"), KeyboardButton("📸 Скрин ПК"))
-    markup.add(KeyboardButton("🖥 Активное окно"), KeyboardButton("💾 Диски"))
+    markup.add(KeyboardButton("📊 Статус"), KeyboardButton("План на сегодня"))
+    markup.add(KeyboardButton("Список таймеров"), KeyboardButton("💾 Диски"))
     markup.add(KeyboardButton("📦 Инвентарь CS2"), KeyboardButton("🤝 Трейды"))
     markup.add(KeyboardButton("🎵 Плей / Пауза"), KeyboardButton("🧠 Меню команд"))
     return markup
@@ -297,6 +266,17 @@ def check_active_trades():
     func=lambda m: getattr(m.from_user, "id", None) == MY_ID,
 )
 def handle_remote_upload(message):
+    from configuration import ConfigManager
+
+    if (
+        getattr(message.from_user, "id", None) != MY_ID
+        or getattr(message.chat, "type", "private") != "private"
+    ):
+        return
+    if not ConfigManager().snapshot().get("remote_control", {}).get("allow_uploads", False):
+        bot.reply_to(message, "Приём файлов выключен в меню Крест.")
+        return
+
     try:
         bot.send_chat_action(message.chat.id, "upload_document")
         file_info = None
@@ -320,6 +300,9 @@ def handle_remote_upload(message):
             file_name += ".mp3"
 
         if file_info:
+            if not 0 <= (file_info.file_size or 0) <= 20 * 1024 * 1024:
+                bot.reply_to(message, "Размер файла превышает 20 МБ.")
+                return
             downloaded_file = bot.download_file(file_info.file_path)
             save_path = os.path.join(UPLOADS_DIR, file_name)
             if os.path.exists(save_path):
@@ -341,362 +324,78 @@ def handle_remote_upload(message):
     content_types=["text"], func=lambda m: getattr(m.from_user, "id", None) == MY_ID
 )
 def terminal_handler(message):
-    global AFK_MODE
-    if SHARED_QUEUE is not None:
-        SHARED_QUEUE.put_nowait("Telegram Terminal")
-    text = message.text.lower().strip()
+    from configuration import ConfigManager
+    from integrations import redact
+    from remote_policy import authorize
 
-    # --- СКАЧИВАНИЕ МУЗЫКИ ИЗ ВИДЕО (НОВОЕ) ---
-    if text.startswith("аудио ") or text.startswith("музыка "):
-        if yt_dlp is None:
-            bot.reply_to(message, "Установите yt-dlp и FFmpeg для скачивания аудио.")
-            return
-        url = message.text.split(" ", 1)[1].strip()
-        m = bot.reply_to(message, "🎵 Инициирую перехват аудиодорожки...")
-        try:
-            ydl_opts = {
-                "format": "m4a/bestaudio/best",  # Качаем чистый звук m4a (Идеально для ТГ)
-                "outtmpl": os.path.join(TEMP_DIR, "downloaded_audio.%(ext)s"),
-                "quiet": True,
-                "noplaylist": True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-
-            with open(filename, "rb") as audio:
-                bot.send_audio(message.chat.id, audio, caption="💠 Аудио успешно извлечено.")
-            os.remove(filename)
-        except Exception as e:
-            bot.edit_message_text(f"❌ Ошибка загрузки аудио: {e}", message.chat.id, m.message_id)
+    if (
+        getattr(message.from_user, "id", None) != MY_ID
+        or getattr(message.chat, "type", "private") != "private"
+    ):
         return
-
-    # --- СКАЧИВАНИЕ ВИДЕО (TikTok, YT, Insta) ---
-    media_regex = r"(https?://(?:www\.)?(?:tiktok\.com|youtube\.com|youtu\.be|instagram\.com|pinterest\.com|pin\.it)[^\s]+)"
-    match = re.search(media_regex, message.text)
-
-    # Условие: качаем видео ТОЛЬКО если это просто ссылка, а не команда "открой" или "ссылка"
-    if match and not (text.startswith("ссылка ") or text.startswith("открой ")):
-        url = match.group(1)
-        m = bot.reply_to(message, "💠 Обнаружен медиа-линк. Инициирую перехват видео...")
-        try:
-            ydl_opts = {
-                "outtmpl": os.path.join(TEMP_DIR, "downloaded_video.%(ext)s"),
-                "format": "best[ext=mp4]/best",  # Строго mp4, чтобы ТГ не ругался
-                "quiet": True,
-                "noplaylist": True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-
-            with open(filename, "rb") as video:
-                bot.send_video(
-                    message.chat.id,
-                    video,
-                    caption="💠 Видео успешно извлечено из сети.",
-                )
-            os.remove(filename)
-        except Exception as e:
-            bot.edit_message_text(f"❌ Ошибка загрузки медиа: {e}", message.chat.id, m.message_id)
+    settings = ConfigManager()
+    cfg = settings.snapshot()
+    text = (message.text or "").strip().casefold()
+    if text in ("/start", "help", "команды", "меню", "🧠 меню команд"):
+        remote = cfg["remote_control"]
+        body = "Крест · доступ владельца\n"
+        body += (
+            "Удалённые команды включены.\n"
+            if remote["enabled"]
+            else "Включите удалённые команды в Система → Доступ и восстановление.\n"
+        )
+        body += "Разрешённые команды:\n" + (
+            "\n".join(remote["allowed_commands"]) or "Список пока пуст."
+        )
+        bot.reply_to(message, body[:4000], reply_markup=get_main_keyboard())
         return
-
-    # 1. Меню
-    if text in ["/start", "help", "команды", "меню", "🧠 меню команд"]:
-        menu = (
-            "💠 **KREST TERMINAL OS V3.0**\n───\n"
-            "🕹 **Инфо и Удаленный Контроль:**\n"
-            "● `статус` — Состояние ПК\n"
-            "● `топ` или `процессы` — Топ-5 жрущих ОЗУ процессов\n"
-            "● `диски` — Инфо о свободном месте\n"
-            "● `окно` — Показать активное окно на экране\n"
-            "● `ip` — Текущий IP и гео\n"
-            "● `пинг [домен]` — Проверка сети\n"
-            "───\n"
-            "⚡ **Файлы, Ссылки и Медиа-перехват:**\n"
-            "● `[Просто кинь ссылку на TikTok/YT]` — Скачает видео\n"
-            "● `аудио [ссылка]` — Вырежет и скачает музыку из видео\n"
-            "● `буфер` / `в буфер [текст]` — Управление буфером обмена\n"
-            "● `папка [путь]` — Посмотреть файлы в папке\n"
-            "● `файл [путь]` — Скачать файл с ПК на телефон\n"
-            "● `загрузи [url]` — Заставить ПК скачать файл по ссылке\n"
-            "───\n"
-            "🖥 **Управление системой:**\n"
-            "● `блок пк` / `рестарт пк` / `выключи пк`\n"
-            "● `скажи [текст]` — Озвучить текст через колонки ПК\n"
-            "● `напиши [текст]` — Имитация ввода с клавиатуры\n"
-            "● `ссылка [url]` / `поиск [запрос]` — Открыть браузер на ПК\n"
-            "● `запусти [steam/cs2]` / `убей [имя.exe]`\n"
-            "● `алерт [текст]` / `cmd [код]`\n"
-            "───\n"
-            "🎵 **Разное:**\n"
-            "● `пауза` / `громче` / `тише` / `некст`\n"
-            "● `не спи` — AFK-защита мыши"
-        )
-        bot.reply_to(message, menu, parse_mode="Markdown", reply_markup=get_main_keyboard())
-
-    # 2. Кнопки и Базовая Телеметрия
-    elif "статус" in text:
-        bot.reply_to(
-            message,
-            f"📊 **ОТЧЕТ ДЛЯ KATOWOLF:**\n{get_sys_info()}",
-        )
-    elif text in ["топ", "процессы", "нагрузка"]:
-        bot.reply_to(message, get_top_processes(), parse_mode="Markdown")
-    elif text == "диски" or text == "💾 диски":
-        bot.reply_to(message, get_disk_info(), parse_mode="Markdown")
-    elif text == "окно" or text == "🖥 активное окно":
-        try:
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-            buf = ctypes.create_unicode_buffer(length + 1)
-            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-            active_title = buf.value if buf.value else "Рабочий стол / Скрыто"
-            bot.reply_to(
-                message,
-                f"🖥 **АКТИВНОЕ ОКНО НА ПК:**\n`{active_title}`",
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка чтения активного окна: {e}")
-    elif text == "буфер" or text == "📋 буфер":
-        try:
-            cb = pyperclip.paste()
-            res = cb[:4000] if cb else "Пусто"
-            bot.reply_to(message, f"📋 **БУФЕР ОБМЕНА ПК:**\n`{res}`", parse_mode="Markdown")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка буфера: {e}")
-    elif text.startswith("в буфер "):
-        cb_text = message.text[8:]
-        pyperclip.copy(cb_text)
-        bot.reply_to(message, "✅ Текст скопирован в буфер обмена на ПК.")
-    elif "инвентарь" in text:
-        bot.send_chat_action(message.chat.id, "typing")
-        bot.reply_to(message, check_cs2_inventory(force_update=False), parse_mode="Markdown")
-    elif "трейды" in text:
-        bot.send_chat_action(message.chat.id, "typing")
-        bot.reply_to(message, check_active_trades(), parse_mode="Markdown")
-    elif "крипта" in text or "курс" in text:
-        bot.reply_to(message, get_crypto_rates(), parse_mode="Markdown")
-
-    elif "скрин" in text:
-        try:
-            screen_name = f"Krest_View_{int(time.time())}.png"
-            screen_path = os.path.join(TEMP_DIR, screen_name)
-            pyautogui.screenshot(screen_path)
-            with open(screen_path, "rb") as f:
-                bot.send_photo(message.chat.id, f, caption="💠 Визуальный контакт.")
-            os.remove(screen_path)
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка захвата: {e}")
-
-    elif "блок пк" in text or text == "блок":
-        bot.reply_to(message, "💠 Блокирую систему. Увидимся, Wolf.")
-        os.system("rundll32.exe user32.dll,LockWorkStation")
-
-    # 3. Медиа, Файлы, Алерты, Утилиты
-    elif text in ["пауза", "плей", "стоп", "🎵 плей / пауза"]:
-        pyautogui.press("playpause")
-        bot.reply_to(message, "🎵 Медиа: Пауза/Плей")
-    elif text in ["громче", "звук +"]:
-        pyautogui.press("volumeup", presses=5)
-        bot.reply_to(message, "🔊 Громкость увеличена")
-    elif text in ["тише", "звук -"]:
-        pyautogui.press("volumedown", presses=5)
-        bot.reply_to(message, "🔉 Громкость уменьшена")
-    elif text in ["некст", "следующий"]:
-        pyautogui.press("nexttrack")
-        bot.reply_to(message, "⏭ Следующий трек")
-
-    elif text.startswith("скажи "):
-        phrase = message.text[6:].replace('"', " ").replace("'", " ")
-        cmd = f"powershell -Command \"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{phrase}');\""
-        threading.Thread(target=lambda: os.system(cmd)).start()
-        bot.reply_to(message, f"🗣 На терминале озвучено:\n_{phrase}_", parse_mode="Markdown")
-
-    elif text.startswith("алерт "):
-        alert_msg = message.text[6:]
-        threading.Thread(
-            target=lambda: ctypes.windll.user32.MessageBoxW(
-                0, alert_msg, "ВНИМАНИЕ! (KREST SYSTEM)", 0x1000
-            )
-        ).start()
-        bot.reply_to(message, "💠 Сообщение выведено на монитор ПК.")
-
-    elif text.startswith("ссылка ") or text.startswith("открой "):
-        url = text.replace("ссылка ", "").replace("открой ", "").strip()
-        if not url.startswith("http"):
-            url = "https://" + url
-        webbrowser.open(url)
-        bot.reply_to(message, f"💠 Открываю `{url}` на терминале.", parse_mode="Markdown")
-
-    elif text.startswith("поиск "):
-        query = message.text[6:].strip().replace(" ", "+")
-        webbrowser.open(f"https://www.google.com/search?q={query}")
-        bot.reply_to(
-            message,
-            f"💠 Ищу в браузере: `{message.text[6:].strip()}`",
-            parse_mode="Markdown",
-        )
-
-    elif text.startswith("папка ") or text.startswith("ls "):
-        folder_path = message.text.split(" ", 1)[1].strip()
-        if os.path.exists(folder_path) and os.path.isdir(folder_path):
-            try:
-                items = os.listdir(folder_path)
-                if not items:
-                    bot.reply_to(message, "📂 Папка пуста.")
-                else:
-                    files_list = "\n".join([f"📄 `{i}`" for i in items[:40]])
-                    if len(items) > 40:
-                        files_list += f"\n...и еще {len(items) - 40} файлов"
-                    bot.reply_to(
-                        message,
-                        f"📂 **Содержимое папки:**\n`{folder_path}`\n\n{files_list}",
-                        parse_mode="Markdown",
-                    )
-            except Exception as e:
-                bot.reply_to(message, f"❌ Ошибка доступа: {e}")
-        else:
-            bot.reply_to(message, "❌ Папка не найдена или это файл.")
-
-    elif text.startswith("загрузи "):
-        url = message.text[8:].strip()
-        bot.reply_to(message, f"⏳ Начинаю скачивание файла на ПК из сети...")
-        try:
-            r = requests.get(url, stream=True, timeout=30)
-            filename = url.split("/")[-1] or f"download_{int(time.time())}"
-            save_path = os.path.join(UPLOADS_DIR, filename)
-            with open(save_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            bot.reply_to(
-                message,
-                f"✅ Файл загружен на диск!\n📂 Путь: `{save_path}`",
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка скачивания: {e}")
-
-    elif text.startswith("пинг "):
-        host = message.text[5:].strip()
-        bot.send_chat_action(message.chat.id, "typing")
-        try:
-            if not re.fullmatch(r"[A-Za-z0-9.-]+", host) or host.startswith("-"):
-                raise ValueError("Некорректный адрес")
-            output = subprocess.check_output(
-                ["ping", "-n" if os.name == "nt" else "-c", "4", host],
-                text=True,
-                errors="replace",
-                timeout=15,
-            )
-            bot.reply_to(
-                message,
-                f"🌐 **Пинг {host}:**\n```\n{output}\n```",
-                parse_mode="Markdown",
-            )
-        except (subprocess.SubprocessError, ValueError, OSError):
-            bot.reply_to(message, f"❌ Не удалось пропинговать `{host}`.", parse_mode="Markdown")
-
-    elif text.startswith("файл "):
-        file_path = message.text[5:].strip()
-        if os.path.exists(file_path):
-            bot.send_chat_action(message.chat.id, "upload_document")
-            try:
-                with open(file_path, "rb") as doc:
-                    bot.send_document(message.chat.id, doc, caption="💠 Файл извлечен.")
-            except Exception as e:
-                bot.reply_to(message, f"❌ Ошибка чтения файла: {e}")
-        else:
-            bot.reply_to(message, "❌ Файл не найден. Проверь путь.")
-
-    elif text.startswith("запусти "):
-        app = text.replace("запусти ", "").strip()
-        apps_map = {
-            "steam": "start steam://open/main",
-            "cs2": "start steam://rungameid/730",
-            "калькулятор": "calc.exe",
-            "блокнот": "notepad.exe",
-        }
-        cmd_run = apps_map.get(app, app)
-        try:
-            subprocess.Popen(cmd_run, shell=True)
-            bot.reply_to(message, f"💠 Инициирован запуск: {app}")
-        except:
-            bot.reply_to(message, "❌ Не удалось запустить.")
-
-    # 4. Доп. Команды управления
-    elif text == "выключи пк":
-        os.system("shutdown /s /t 30")
-        bot.reply_to(
-            message,
-            "⚠️ Инициировано выключение ПК через 30 секунд. Чтобы отменить, напиши `отмени выключение`.",
-            parse_mode="Markdown",
-        )
-    elif text == "рестарт пк" or text == "перезагрузи пк":
-        os.system("shutdown /r /t 10")
-        bot.reply_to(message, "⚠️ Инициирована перезагрузка терминала.", parse_mode="Markdown")
-    elif text == "отмени выключение":
-        os.system("shutdown /a")
-        bot.reply_to(message, "✅ Процесс выключения/перезагрузки прерван.")
-    elif text.startswith("напиши ") or text.startswith("введи "):
-        text_to_type = message.text.split(" ", 1)[1]
-        pyperclip.copy(text_to_type)
-        pyautogui.hotkey("ctrl", "v")
-        bot.reply_to(
-            message,
-            f"💠 Текст вставлен на ПК:\n_{text_to_type}_",
-            parse_mode="Markdown",
-        )
-
-    elif text.startswith("cmd "):
-        try:
-            bot.send_chat_action(message.chat.id, "typing")
-            output = subprocess.check_output(
-                message.text[4:],
-                shell=True,
-                text=True,
-                stderr=subprocess.STDOUT,
-                timeout=10,
-            )
-            res_out = output[:4000] if output else "✅ Успешно"
-            bot.reply_to(message, f"💻 **ТЕРМИНАЛ:**\n```\n{res_out}\n```", parse_mode="Markdown")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка консоли:\n```\n{e}\n```", parse_mode="Markdown")
-    elif text == "ip":
-        try:
-            ip_data = requests.get("http://ip-api.com/json/", timeout=5).json()
-            bot.reply_to(
-                message,
-                f"🌍 **СЕТЬ:**\nIP: `{ip_data['query']}`\nЛокация: {ip_data['city']}, {ip_data['country']}",
-                parse_mode="Markdown",
-            )
-        except:
-            bot.reply_to(message, "❌ Не удалось получить IP.")
-    elif "не спи" in text:
-        AFK_MODE = not AFK_MODE
-        bot.reply_to(message, f"💠 AFK-защита: **{'АКТИВИРОВАНА' if AFK_MODE else 'ВЫКЛЮЧЕНА'}**")
-    elif text.startswith("убей "):
-        proc_name = text.replace("убей ", "").strip()
-        c = 0
-        if not proc_name:
-            bot.reply_to(message, "Укажите точное имя процесса.")
+    allowed, reason = authorize(text, cfg)
+    if not allowed:
+        bot.reply_to(message, reason)
+        return
+    readers = {
+        "статус": get_sys_info,
+        "📊 статус": get_sys_info,
+        "диски": get_disk_info,
+        "💾 диски": get_disk_info,
+        "топ": get_top_processes,
+        "процессы": get_top_processes,
+        "крипта": get_crypto_rates,
+        "📦 инвентарь cs2": check_cs2_inventory,
+        "инвентарь": check_cs2_inventory,
+        "🤝 трейды": check_active_trades,
+        "трейды": check_active_trades,
+    }
+    try:
+        if text in readers:
+            bot.reply_to(message, redact(str(readers[text]()), cfg)[:4000])
             return
-        for process in psutil.process_iter(["name"]):
-            try:
-                name = (process.info["name"] or "").lower().removesuffix(".exe")
-                if process.pid != os.getpid() and name == proc_name.removesuffix(".exe"):
-                    process.terminate()
-                    c += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        bot.reply_to(message, f"💠 Убито процессов `{proc_name}`: {c}")
+        from kernel_client import KernelClient
+        import uuid
 
-    else:
-        bot.reply_to(message, "Команда не распознана. Откройте «Меню команд».")
+        client = KernelClient(settings.filepath)
+        key = (
+            "telegram:"
+            + str(message.chat.id)
+            + ":"
+            + str(getattr(message, "message_id", uuid.uuid4().hex))
+        )
+        accepted = client.call("remote_submit", original=text, request_key=key)
+        if not accepted:
+            bot.reply_to(message, "Очередь заполнена. Повторите позже.")
+            return
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            job = client.call("job_result", request_key=key)
+            if job and job["status"] not in ("queued", "running"):
+                bot.reply_to(message, redact(job["result"], cfg)[:4000] or "Действие завершено.")
+                return
+            time.sleep(0.15)
+        bot.reply_to(message, "Действие ещё выполняется. Проверьте журнал ядра перед повтором.")
+    except (OSError, ValueError, RuntimeError) as exc:
+        bot.reply_to(message, "Не удалось выполнить: " + redact(str(exc), cfg)[:2000])
 
 
-# --- STARTUP LOGIC ---
 def run_krest_service(shared_queue=None):
     if not TOKEN or not MY_ID:
         raise RuntimeError("Заполните токен TGT и Telegram ID владельца в меню.")
@@ -705,24 +404,13 @@ def run_krest_service(shared_queue=None):
     from bridge_sdk import emit
 
     emit("ready", "Telegram подтвердил токен бота")
-    for directory in [AESTHETICS_DIR, USED_AESTHETICS_DIR, TEMP_DIR, UPLOADS_DIR]:
+    for directory in [UPLOADS_DIR]:
         os.makedirs(directory, exist_ok=True)
     global SHARED_QUEUE
     SHARED_QUEUE = shared_queue
     if shared_queue is not None:
         add_log("Connected to system notifications queue")
 
-    # Отключаем фоновые посты/wishlist по твоему запросу (Оставлен только AFK шифт)
-    def simple_bg():
-        global AFK_MODE
-        ticker = 0
-        while True:
-            time.sleep(1)
-            ticker += 1
-            if AFK_MODE and ticker % 40 == 0:
-                pyautogui.press("shift")
-
-    threading.Thread(target=simple_bg, daemon=True).start()
     print("--- [KREST TG TERMINAL]: STARTED ---")
 
     while True:

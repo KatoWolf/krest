@@ -175,3 +175,26 @@ def test_music_dispatch_parses_spoken_percentages(tmp_path, monkeypatch):
         assert app.manager.match("продолжи")[0].func.__name__ == "play_music"
     finally:
         app.close()
+
+
+def test_sticky_player_wins_over_current_only_if_no_other_player_started():
+    music, browser = session("YandexMusic.exe", 5), session("Chrome", 5)
+    assert media.choose_session([music, browser], browser, sticky="YandexMusic.exe") is music
+    playing_browser = session("Chrome", 4)
+    assert (
+        media.choose_session([music, playing_browser], playing_browser, sticky="YandexMusic.exe")
+        is playing_browser
+    )
+
+
+def test_music_overview_marks_same_source_as_command_after_pause(monkeypatch):
+    yandex, browser = session(), session("Chrome", 5)
+    monkeypatch.setattr(media, "_last_used", 0)
+    monkeypatch.setattr(media, "_sessions", AsyncMock(return_value=([yandex, browser], browser)))
+    media.control("pause")
+    yandex.get_playback_info = lambda: browser.get_playback_info()
+    rows = media.query(all_sessions=True)
+    assert [r["app_id"] for r in rows if r["selected"]] == ["YandexMusic.exe"]
+    assert [r["app_id"] for r in media.query("Chrome", all_sessions=True) if r["selected"]] == [
+        "Chrome"
+    ]

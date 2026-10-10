@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+import copy
 import json
 import math
 import logging
@@ -129,7 +130,7 @@ class AssistantState:
     def _change(self):
         """Do not report success or lose a reminder when saving fails."""
         with self._lock:
-            previous = {key: [dict(v) for v in getattr(self, key)] for key in _COLLECTIONS}
+            previous = {key: copy.deepcopy(getattr(self, key)) for key in _COLLECTIONS}
             previous_target = self.last_target
             try:
                 yield
@@ -246,6 +247,41 @@ class AssistantState:
             self.completed_tasks.append(dict(item, completed_at=time.time()))
             self.completed_tasks[:] = self.completed_tasks[-500:]
             self.pending_reminders.remove(item)
+
+    def move_occurrence(self, item_id, timestamp):
+        """Move just the next daily occurrence; subsequent days keep their clock."""
+        if (
+            type(timestamp) not in (int, float)
+            or not time.time() < timestamp <= time.time() + 365 * 86400
+        ):
+            raise ValueError("Выберите будущую дату в пределах года")
+        with self._change():
+            item = next(
+                (
+                    v
+                    for k in ("daily_tasks", "active_alarms", "active_timers")
+                    for v in getattr(self, k)
+                    if v["id"] == item_id
+                ),
+                None,
+            )
+            if item is None:
+                raise ValueError("Задача уже завершилась")
+            item["end_time"] = timestamp
+            self.last_target = (item_id, time.monotonic())
+
+    def skip_occurrence(self, item_id):
+        with self._change():
+            item = next((v for v in self.daily_tasks if v["id"] == item_id), None)
+            if item is None:
+                raise ValueError("Выберите повторяющуюся задачу")
+            clock = datetime.strptime(item["time_str"], "%H:%M")
+            target = datetime.fromtimestamp(max(time.time(), item["end_time"])).replace(
+                hour=clock.hour, minute=clock.minute, second=0, microsecond=0
+            ) + timedelta(days=1)
+            while target.weekday() not in item.get("weekdays", list(range(7))):
+                target += timedelta(days=1)
+            item["end_time"] = target.timestamp()
 
     def take_due(self, now=None):
         now = time.time() if now is None else now

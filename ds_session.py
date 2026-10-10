@@ -223,7 +223,7 @@ class KrestDS(discord.Client):
                         reply_text = (
                             f"💠 **KREST_V3.0: Ошибка обработки**\n"
                             f"───\n"
-                            f"KatoWolf сейчас недоступен.\n"
+                            f"{config.get_owner_name()} сейчас недоступен.\n"
                             f"Я — автоматический помощник. Вложения и голосовые сообщения в данный момент не распознаются.\n"
                             f"Пожалуйста, изложите суть текстом."
                         )
@@ -233,7 +233,7 @@ class KrestDS(discord.Client):
                             f"───\n"
                             f"● `Статус:` Сон 🌙\n"
                             f"───\n"
-                            f"KatoWolf сейчас спит. Уведомления отключены, он прочтет ваше сообщение утром."
+                            f"{config.get_owner_name()} сейчас спит. Уведомления отключены, он прочтет ваше сообщение утром."
                         )
                     elif is_playing or activity_type in [
                         "GAME",
@@ -241,7 +241,9 @@ class KrestDS(discord.Client):
                         "REST",
                         "SOCIAL",
                     ]:
-                        context_msg = full_msg if full_msg else "KatoWolf сейчас занят."
+                        context_msg = (
+                            full_msg if full_msg else f"{config.get_owner_name()} сейчас занят."
+                        )
                         if is_urgent:
                             context_msg = f"⚠️ Зафиксирован приоритетный сигнал.\n{context_msg}\nЯ поставила пометку «СРОЧНО» на твое сообщение."
 
@@ -254,7 +256,7 @@ class KrestDS(discord.Client):
                             f"───\n"
                             f"● `Статус:` Ожидание\n"
                             f"───\n"
-                            f"KatoWolf отошел от терминала. Я передам ему сообщение, как только он вернется."
+                            f"{config.get_owner_name()} отошел от терминала. Я передам ему сообщение, как только он вернется."
                         )
 
                     # Формируем финальный текст с припиской об автоудалении

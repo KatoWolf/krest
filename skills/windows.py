@@ -471,3 +471,76 @@ def lock_workstation(text: str = ""):
     if not ctypes.windll.user32.LockWorkStation():
         return {"status": "error", "message": "Windows не разрешила блокировку сеанса."}
     return "Сеанс заблокирован."
+
+
+@skill(
+    keywords=["выключи пк", "выключи компьютер", "отключи системный блок"],
+    description="Запланировать выключение Windows через 30 секунд",
+    category="Windows",
+)
+def shutdown_windows():
+    import subprocess
+
+    result = subprocess.run(
+        ["shutdown.exe", "/s", "/t", "30"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=5,
+    )
+    if result.returncode:
+        raise RuntimeError("Windows не запланировала выключение: " + result.stderr.strip())
+    return "Выключение запланировано через 30 секунд. Для отмены скажите «отмени выключение»."
+
+
+@skill(
+    keywords=["перезагрузи пк", "перезагрузи компьютер"],
+    description="Запланировать перезапуск Windows через 30 секунд",
+    category="Windows",
+)
+def restart_windows():
+    import subprocess
+
+    result = subprocess.run(
+        ["shutdown.exe", "/r", "/t", "30"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=5,
+    )
+    if result.returncode:
+        raise RuntimeError("Windows не запланировала перезапуск: " + result.stderr.strip())
+    return "Перезапуск запланирован через 30 секунд. Для отмены скажите «отмени выключение»."
+
+
+@skill(
+    keywords=["отмени выключение", "отмени перезагрузку"],
+    description="Отменить запланированное выключение или перезапуск",
+    category="Windows",
+)
+def cancel_shutdown_windows():
+    import subprocess
+
+    result = subprocess.run(
+        ["shutdown.exe", "/a"], capture_output=True, text=True, errors="replace", timeout=5
+    )
+    if result.returncode:
+        raise RuntimeError("Нет запланированного выключения или Windows отклонила отмену")
+    return "Запланированное выключение или перезапуск отменены."
+
+
+@skill(
+    keywords=["переведи компьютер в сон", "усыпи компьютер"],
+    description="Перевести Windows в спящий режим",
+    category="Windows",
+)
+def suspend_windows():
+    import ctypes
+    from ctypes import wintypes
+
+    api = ctypes.WinDLL("powrprof", use_last_error=True)
+    api.SetSuspendState.argtypes = [wintypes.BOOLEAN, wintypes.BOOLEAN, wintypes.BOOLEAN]
+    api.SetSuspendState.restype = wintypes.BOOLEAN
+    if not api.SetSuspendState(False, False, False):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return "Компьютер возобновил работу после сна."

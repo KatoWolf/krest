@@ -195,7 +195,8 @@ def test_missing_item_is_not_reported_as_unlocked(tmp_path, monkeypatch):
     monitor.refresh(cfg)
     FakeClient.items = []
     monitor.refresh(cfg)
-    assert not notifications
+    assert notifications and "исчезло 1" in notifications[-1]
+    assert not any("обмен стал доступен" in value for value in notifications)
 
 
 def test_presence_payload_uses_activity_without_user_token():

@@ -353,6 +353,14 @@ class SteamMonitor:
                             i["assetid"]: i
                             for i in cached["inventories"].get(inventory, {}).get("items", [])
                         }
+                        if inventory in cached["inventories"]:
+                            new_ids = {i["assetid"] for i in items}
+                            gained = [i for i in items if i["assetid"] not in old]
+                            removed = [i for ident, i in old.items() if ident not in new_ids]
+                            if gained or removed:
+                                notices.append(
+                                    f"Steam {appid}: инвентарь изменился · новых предметов {sum(v['amount'] for v in gained)}, исчезло {sum(v['amount'] for v in removed)}. Изменение ID после обмена также учитывается."
+                                )
                         released = [
                             i
                             for i in items
