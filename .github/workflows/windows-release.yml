@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'packaging/**'
+      - '**/*.py'
       - 'requirements-build.txt'
       - '.github/workflows/windows-release.yml'
 permissions:

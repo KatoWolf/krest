@@ -347,3 +347,14 @@ def test_atomic_reader_retries_sharing_error_but_does_not_hide_corrupt_json(monk
     reader.return_value = "not json"
     with pytest.raises(ValueError):
         storage.read_json("config.json")
+
+
+def test_windows_crt_access_errors_without_winerror_are_retried(monkeypatch):
+    import errno
+    import storage
+
+    error = PermissionError(errno.EACCES, "sharing conflict")
+    assert not hasattr(error, "winerror")
+    monkeypatch.setattr(storage, "os", SimpleNamespace(name="nt"))
+    assert storage._sharing_conflict(error)
+    assert not storage._sharing_conflict(OSError(errno.EIO, "disk failed"))
