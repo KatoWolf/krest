@@ -13,6 +13,11 @@ def main(argv=None):
         action="store_true",
         help="Проверить загрузку навыков без GUI и внешних запросов",
     )
+    parser.add_argument("--check-output", help=argparse.SUPPRESS)
+    parser.add_argument("--release-model-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--service", help=argparse.SUPPRESS)
+    parser.add_argument("--external-script", help=argparse.SUPPRESS)
     parser.add_argument("--command", help="Выполнить одну текстовую команду")
     parser.add_argument(
         "--voice-core", action="store_true", help="Запустить голосовой режим в консоли"
@@ -39,10 +44,28 @@ def main(argv=None):
 
     if args.config:
         os.environ["KREST_CONFIG_PATH"] = str(__import__("pathlib").Path(args.config).resolve())
+    from app_paths import data_dir
+
+    data_dir().mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("KREST_DATA_DIR", str(data_dir()))
+    if args.service or args.external_script:
+        from service_runner import run_service, run_external
+
+        return run_service(args.service) if args.service else run_external(args.external_script)
     from configuration import CONFIG_PATH, ConfigManager
     from app_runtime import AssistantRuntime
 
     settings = ConfigManager(args.config or CONFIG_PATH)
+    if args.release_model_check:
+        from release_smoke import check_models
+
+        check_models(settings.snapshot())
+        return 0
+    if args.release_smoke:
+        from release_smoke import check_kernel
+
+        check_kernel(settings.filepath)
+        return 0
     if args.game_overlay:
         from game_overlay import run_overlay
 
@@ -111,6 +134,12 @@ def main(argv=None):
         from skill_manager import SkillManager
 
         manager = SkillManager(settings.snapshot)
+        if args.check_output:
+            from storage import atomic_write_json
+
+            atomic_write_json(
+                args.check_output, {"skills": len(manager.catalog()), "errors": manager.errors}
+            )
         print(
             json.dumps(
                 {"skills": len(manager.catalog()), "errors": manager.errors},

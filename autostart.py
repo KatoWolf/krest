@@ -10,6 +10,10 @@ KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def startup_command(executable=sys.executable):
+    from app_paths import compiled
+
+    if compiled():
+        return subprocess.list2cmdline([sys.executable])
     executable = Path(executable)
     windowless = executable.with_name("pythonw.exe")
     if windowless.exists():

@@ -488,3 +488,88 @@ def daily_briefing(state):
     from assistant_memory import briefing
 
     return briefing(state)
+
+
+@skill(
+    keywords=["давай поговорим", "поговори со мной"],
+    description="Варианты короткого диалога",
+    category="Общение",
+)
+def conversation(state):
+    from personality import reply
+
+    return reply("conversation", state)
+
+
+@skill(
+    keywords=["мне скучно", "чем займемся", "чем займёмся"],
+    description="Идеи для перерыва",
+    category="Общение",
+)
+def bored(state):
+    from personality import reply
+
+    return reply("bored", state)
+
+
+@skill(
+    keywords=["добрый вечер", "доброй ночи"], description="Вечернее приветствие", category="Общение"
+)
+def evening(state):
+    from personality import reply
+
+    return reply("evening", state)
+
+
+@skill(
+    keywords=["расскажи факт", "интересный факт", "еще факт"],
+    description="Небольшой научный факт",
+    category="Общение",
+)
+def fact(state):
+    from personality import reply
+
+    return reply("fact", state)
+
+
+QUIZ = [
+    ("Какая планета самая большая в Солнечной системе?", "юпитер"),
+    ("Как называется спутник Земли?", "луна"),
+    ("Какой океан самый большой?", "тихий"),
+    ("Сколько сторон у шестиугольника?", "шесть"),
+    ("Какая планета известна как красная?", "марс"),
+]
+
+
+@skill(
+    keywords=["задай вопрос", "давай викторину", "следующий вопрос"],
+    description="Короткая голосовая викторина",
+    category="Общение",
+)
+def quiz(state):
+    previous = getattr(state, "_quiz_answer", None)
+    question, answer = random.choice([q for q in QUIZ if q[1] != previous])
+    state._quiz_answer = answer
+    return question + " Скажите: мой ответ, и ваш вариант."
+
+
+@skill(
+    patterns=[r"мой ответ (?P<answer>.+)"],
+    examples=["мой ответ юпитер"],
+    description="Ответить на вопрос викторины",
+    category="Общение",
+)
+def quiz_answer(state, answer):
+    expected = getattr(state, "_quiz_answer", None)
+    if expected is None:
+        return "Сначала скажите: задай вопрос."
+    state._quiz_answer = None
+    value = answer.casefold().strip(" .!?").replace("ё", "е")
+    correct = value in (
+        expected,
+        "тихий океан" if expected == "тихий" else expected,
+        "6" if expected == "шесть" else expected,
+    )
+    return (
+        "Верно!" if correct else "Правильный ответ: " + expected + "."
+    ) + " Для продолжения скажите: следующий вопрос."

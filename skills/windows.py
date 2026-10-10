@@ -310,15 +310,37 @@ def kill_frozen_processes(text=""):
         "сделай скриншот",
         "снимок экрана",
         "скриншот",
-        "ножницы",
         "сделай снимок",
     ],
-    description="Открыть область выделения скриншота Windows (Win + Shift + S)",
+    description="Сохранить снимок всех мониторов в папку screenshots",
     category="Windows",
 )
 def take_screenshot(text: str = ""):
+    from screenshots import capture_screen
+
+    path = capture_screen()
+    return "Скриншот сохранён: " + str(path)
+
+
+@skill(
+    keywords=["ножницы", "скриншот области", "выдели область экрана"],
+    description="Выделить область средствами Windows",
+    category="Windows",
+)
+def snip_region():
     press_key_combination([VK_LWIN, VK_SHIFT, VK_S])
-    voice.speak("Выделите область для скриншота.")
+    return "Выделите область. Windows поместит её в буфер обмена; сохраните снимок в окне Ножниц."
+
+
+@skill(
+    keywords=["открой скриншоты", "папка скриншотов", "где скриншоты"],
+    description="Открыть папку сохранённых снимков",
+    category="Windows",
+)
+def show_screenshots():
+    from screenshots import open_folder
+
+    return "Скриншоты: " + open_folder()
 
 
 @skill(

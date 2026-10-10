@@ -173,7 +173,9 @@ SAMPLE_RATE = (
     int(getattr(config, "SAMPLE_RATE", getattr(config, "SAMPLERATE", 16000))) if config else 16000
 )
 
-TTS_CACHE_DIR = os.path.join(BASE_DIR, "tts_cache")
+from app_paths import data_dir
+
+TTS_CACHE_DIR = str(data_dir() / "tts_cache")
 os.makedirs(TTS_CACHE_DIR, exist_ok=True)
 
 # --- Вспомогательные функции ---
@@ -285,58 +287,73 @@ def manage_disk_cache(max_files=200):
 
 # --- Инициализация нейросетей ---
 
-logging.getLogger(__name__).info(
-    "--- [VOICE ENGINE]: Загрузка нейронных связей слуха (Vosk)... ---"
-)
-rec = None
-try:
-    if os.path.exists(vosk_path):
-        if not os.path.exists(os.path.join(vosk_path, "am")) and not os.path.exists(
-            os.path.join(vosk_path, "conf")
-        ):
-            subdirs = [
-                os.path.join(vosk_path, d)
-                for d in os.listdir(vosk_path)
-                if os.path.isdir(os.path.join(vosk_path, d))
-            ]
-            if len(subdirs) == 1:
-                vosk_path = subdirs[0]
 
-    model_vosk = vosk.Model(vosk_path)
-    rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
-    rec.SetWords(True)
-except Exception as e:
-    metrics["model_error"] = str(e)
+def initialize_models(models=None):
+    global rec, model_vosk, model_tts, device, vosk_path, silero_path
+    if models:
+        vosk_path, silero_path = models["vosk_path"], models["silero_path"]
+    metrics.pop("model_error", None)
+    metrics.pop("tts_error", None)
     logging.getLogger(__name__).info(
-        f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---"
+        "--- [VOICE ENGINE]: Загрузка нейронных связей слуха (Vosk)... ---"
     )
-
-logging.getLogger(__name__).info("--- [VOICE ENGINE]: Инициализация вокального аппарата V4... ---")
-device = torch.device("cpu") if torch is not None else None
-model_tts = None
-
-if torch is not None and os.path.isfile(silero_path):
+    rec = None
+    model_vosk = None
     try:
-        model_tts = torch.package.PackageImporter(silero_path).load_pickle("tts_models", "model")
-        model_tts.to(device)
-    except Exception as exc:
-        metrics["tts_error"] = str(exc)[:300]
-        model_tts = None
+        if os.path.exists(vosk_path):
+            if not os.path.exists(os.path.join(vosk_path, "am")) and not os.path.exists(
+                os.path.join(vosk_path, "conf")
+            ):
+                subdirs = [
+                    os.path.join(vosk_path, d)
+                    for d in os.listdir(vosk_path)
+                    if os.path.isdir(os.path.join(vosk_path, d))
+                ]
+                if len(subdirs) == 1:
+                    vosk_path = subdirs[0]
 
-if model_tts is None:
-    logging.getLogger(__name__).info(
-        "--- [VOICE]: Добавьте доверенную модель Silero в model_silero.pt ---"
-    )
+        model_vosk = vosk.Model(vosk_path)
+        rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
+        rec.SetWords(True)
+    except Exception as e:
+        metrics["model_error"] = str(e)
+        logging.getLogger(__name__).info(
+            f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---"
+        )
 
-if model_tts is not None:
     logging.getLogger(__name__).info(
-        "--- [VOICE ENGINE]: Аппаратный прогрев нейросети (Pre-warming)... ---"
+        "--- [VOICE ENGINE]: Инициализация вокального аппарата V4... ---"
     )
-    try:
-        model_tts.apply_tts(text=".", speaker="xenia", sample_rate=24000)
-    except Exception:
-        pass
-    logging.getLogger(__name__).info("[VOICE ENGINE]: Системы готовы к мгновенному ответу!")
+    device = torch.device("cpu") if torch is not None else None
+    model_tts = None
+
+    if torch is not None and os.path.isfile(silero_path):
+        try:
+            model_tts = torch.package.PackageImporter(silero_path).load_pickle(
+                "tts_models", "model"
+            )
+            model_tts.to(device)
+        except Exception as exc:
+            metrics["tts_error"] = str(exc)[:300]
+            model_tts = None
+
+    if model_tts is None:
+        logging.getLogger(__name__).info(
+            "--- [VOICE]: Добавьте доверенную модель Silero в model_silero.pt ---"
+        )
+
+    if model_tts is not None:
+        logging.getLogger(__name__).info(
+            "--- [VOICE ENGINE]: Аппаратный прогрев нейросети (Pre-warming)... ---"
+        )
+        try:
+            model_tts.apply_tts(text=".", speaker="xenia", sample_rate=24000)
+        except Exception:
+            pass
+        logging.getLogger(__name__).info("[VOICE ENGINE]: Системы готовы к мгновенному ответу!")
+
+
+initialize_models()
 
 # --- Захват и обработка звука ---
 

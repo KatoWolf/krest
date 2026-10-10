@@ -55,3 +55,8 @@ before-restore-*/
 
 .setup.lock
 .krest-runtime/
+models/
+screenshots/
+build/
+dist/
+.build-venv/

@@ -11,7 +11,9 @@ from storage import atomic_write_json
 from scenarios import DEFAULT_SCENARIOS, validate_scenarios
 from warframe_config import DEFAULT_WARFRAME, DEFAULT_EFFECTS, validate_game_settings
 
-CONFIG_PATH = Path(os.getenv("KREST_CONFIG_PATH", Path(__file__).resolve().parent / "config.json"))
+from app_paths import data_dir
+
+CONFIG_PATH = data_dir() / "config.json"
 DEFAULT_CONFIG = {
     "schema_version": 2,
     "warframe": DEFAULT_WARFRAME,
@@ -45,6 +47,7 @@ DEFAULT_CONFIG = {
         "close_to_tray": True,
         "voice_enabled": True,
         "voice_auto_start": True,
+        "voice_auto_models": True,
         "voice_volume": 80,
         "wake_word": "крест",
         "active_timeout": 6,
@@ -251,7 +254,9 @@ def validate(data):
         raise ValueError("Некорректное состояние профиля")
     if data["profile"]["onboarding_completed"] and not name.strip():
         raise ValueError("Введите имя пользователя")
-    if data["profile"]["personality"] not in ("friendly", "concise", "lively"):
+    from personality import PERSONALITIES
+
+    if data["profile"]["personality"] not in PERSONALITIES:
         raise ValueError("Неизвестный стиль общения")
     if not isinstance(data["license"]["code"], str) or len(data["license"]["code"]) > 4096:
         raise ValueError("Некорректный код Premium")

@@ -127,16 +127,22 @@ class SkillManager:
 
     def _load(self, folder, reload=False):
         root = self.base_dir / folder
-        if not root.exists():
-            return
+        from app_paths import compiled
+
+        if folder == "skills" and compiled():
+            from skills import BUILTIN_MODULES
+
+            paths = [root / (name + ".py") for name in BUILTIN_MODULES]
+        else:
+            paths = sorted(root.glob("*.py"))
         with _registry_lock:
-            for path in sorted(root.glob("*.py")):
+            for path in paths:
                 if path.name.startswith("_"):
                     continue
                 name = f"{folder}.{path.stem}"
                 previous = [entry for entry in SKILL_REGISTRY if entry.func.__module__ == name]
                 try:
-                    if reload and name in sys.modules:
+                    if reload and name in sys.modules and not compiled():
                         SKILL_REGISTRY[:] = [e for e in SKILL_REGISTRY if e.func.__module__ != name]
                         importlib.reload(sys.modules[name])
                     else:

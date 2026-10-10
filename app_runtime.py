@@ -107,10 +107,7 @@ class AssistantRuntime:
             thread.start()
         self.warframe.start()
         cfg = self.settings()
-        if (
-            not cfg.get("safe_mode")
-            and cfg.get("app_settings", {}).get("voice_auto_start", True)
-        ):
+        if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
             self.start_voice()
 
     def submit(self, text, source="text", confidence=None, request_key=None):
@@ -448,6 +445,8 @@ class AssistantRuntime:
         return matched and matched[0].func.__name__ in ("run_scenario", "stop_scenario")
 
     def start_voice(self):
+        if self.stop_event.is_set():
+            return
         if self._voice_thread and self._voice_thread.is_alive():
             return
         self._voice_stop.clear()
@@ -457,14 +456,40 @@ class AssistantRuntime:
         self._voice_thread.start()
 
     def _voice_loop(self):
+        while not self.stop_event.is_set() and not self._voice_stop.is_set():
+            failure = self._voice_attempt()
+            if not failure:
+                return
+            self.voice_status = failure + " · Повторю подключение через 30 секунд"
+            self.events.put(("voice", self.voice_status))
+            for _ in range(30):
+                if self.stop_event.is_set() or self._voice_stop.wait(1):
+                    return
+
+    def _voice_attempt(self):
         failure = ""
         self.voice_status = "Подключаю голос: ищу модели и микрофон…"
         self.events.put(("voice", self.voice_status))
         try:
+            from model_setup import prepare
+
+            def report(text):
+                self.voice_status = text
+                self.events.put(("voice", text))
+
+            prepare(
+                self.settings(),
+                report,
+                lambda: self.stop_event.is_set() or self._voice_stop.is_set(),
+            )
+            if self.stop_event.is_set() or self._voice_stop.is_set():
+                return
             with self._voice_control:
                 voice.enable()
             connected = bool(voice.telemetry().get("connected"))
-            self.voice_status = "Слушаю обращение «Крест»" if connected else "Ищу доступный микрофон…"
+            self.voice_status = (
+                "Слушаю обращение «Крест»" if connected else "Ищу доступный микрофон…"
+            )
             self.events.put(
                 ("voice", "Микрофон активен" if connected else "Ищу доступный микрофон…")
             )
@@ -479,7 +504,9 @@ class AssistantRuntime:
                 now_connected = bool(voice.telemetry().get("connected"))
                 if now_connected != connected:
                     connected = now_connected
-                    self.voice_status = "Слушаю обращение «Крест»" if connected else "Переподключаю микрофон…"
+                    self.voice_status = (
+                        "Слушаю обращение «Крест»" if connected else "Переподключаю микрофон…"
+                    )
                     self.events.put(
                         (
                             "voice",
@@ -498,6 +525,7 @@ class AssistantRuntime:
                 voice.disable()
             self.voice_status = failure or "Микрофон на паузе"
             self.events.put(("voice", self.voice_status))
+        return failure
 
     def arm_voice(self):
         voice.stop_speaking()

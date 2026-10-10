@@ -21,3 +21,15 @@ def premium_config(tmp_path, issuer):
     draft["license"]["code"] = issuer[2]
     cfg.save_config(draft)
     return cfg
+
+
+@pytest.fixture(autouse=True)
+def no_automatic_model_network_during_tests(monkeypatch):
+    # Tests may start a runtime on Windows. Downloads are exercised with fixtures,
+    # never by silently fetching voice models on the CI runner.
+    import model_setup
+
+    def offline(*args, **kwargs):
+        raise OSError("Model downloads are disabled in tests")
+
+    monkeypatch.setattr(model_setup, "download", offline)

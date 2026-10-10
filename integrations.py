@@ -52,6 +52,9 @@ class IntegrationManager:
     def __init__(self, app, base_dir=BASE_DIR):
         self.app = app
         self.base_dir = Path(base_dir)
+        from app_paths import compiled, data_dir
+
+        self.log_dir = (data_dir() if compiled() else self.base_dir) / "logs"
         self.processes, self.errors, self.started_at, self.log_handles = {}, {}, {}, {}
         self._readers = {}
         self._lock = threading.RLock()
@@ -83,8 +86,15 @@ class IntegrationManager:
         custom = self.app.config_mgr.snapshot().get("services", {}).get(filename, {}).get("path")
         return str(Path(custom).expanduser().resolve()) if custom else str(self.base_dir / filename)
 
+    def is_builtin_release(self, filename):
+        from app_paths import compiled
+        from service_runner import BUILTIN_SERVICES
+
+        custom = self.app.config_mgr.snapshot().get("services", {}).get(filename, {}).get("path")
+        return compiled() and filename in BUILTIN_SERVICES and not custom
+
     def exists(self, filename):
-        return Path(self.path(filename)).is_file()
+        return self.is_builtin_release(filename) or Path(self.path(filename)).is_file()
 
     def _module_status(self, filename):
         if not self.exists(filename):
@@ -264,7 +274,7 @@ class IntegrationManager:
                 self.errors[filename] = redact(str(exc), self.app.config_mgr.snapshot())
 
     def _capture(self, filename, proc, settings):
-        path = self.base_dir / "logs" / (filename + ".log")
+        path = self.log_dir / (filename + ".log")
         handler = RotatingFileHandler(path, maxBytes=512_000, backupCount=2, encoding="utf-8")
         try:
             while True:
@@ -310,10 +320,14 @@ class IntegrationManager:
                 validate_module(filename, settings)
             from plugin_manifest import inspect_plugin
 
-            self.manifests[filename] = inspect_plugin(self.path(filename))
+            self.manifests[filename] = (
+                {"api_version": 1, "permissions": ["notifications", "refresh"], "manifest": False}
+                if self.is_builtin_release(filename)
+                else inspect_plugin(self.path(filename))
+            )
             if Path(self.path(filename)).suffix.lower() != ".py":
                 raise ValueError("Выберите Python-скрипт .py")
-            (self.base_dir / "logs").mkdir(exist_ok=True)
+            self.log_dir.mkdir(parents=True, exist_ok=True)
             env = dict(
                 os.environ,
                 PYTHONIOENCODING="utf-8",
@@ -323,8 +337,17 @@ class IntegrationManager:
                 KREST_SERVICE_TOKEN=settings.get("services", {}).get(filename, {}).get("token", ""),
                 PYTHONPATH=str(self.base_dir) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             )
+            from app_paths import compiled, app_command
+
+            command = (
+                app_command("--service", filename)
+                if self.is_builtin_release(filename)
+                else app_command("--external-script", self.path(filename))
+                if compiled()
+                else [sys.executable, "-u", self.path(filename)]
+            )
             proc = subprocess.Popen(
-                [sys.executable, "-u", self.path(filename)],
+                command,
                 cwd=self.base_dir,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -387,7 +410,7 @@ class IntegrationManager:
                 self.stop(filename)
 
     def log_tail(self, filename, limit=6000):
-        path = self.base_dir / "logs" / (filename + ".log")
+        path = self.log_dir / (filename + ".log")
         if not path.exists():
             return "Журнал пока пуст."
         with path.open("rb") as stream:

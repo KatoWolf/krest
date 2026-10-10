@@ -73,6 +73,7 @@ def test_workflow_pages_save_steps_weekdays_and_notification_preferences(tmp_pat
         app._add_scenario_step()
         app.apply_theme("Emerald Cyber")
         assert app.scenario_steps[-1]["value"] == "таймер пять минут"
+        app.switch_page("timers")
         app.reminder_label.set("Выходной")
         for i, var in enumerate(app.weekdays):
             var.set(i in (5, 6))
@@ -84,6 +85,7 @@ def test_workflow_pages_save_steps_weekdays_and_notification_preferences(tmp_pat
         assert app.runtime.notification_mode is None
         assert app.config_mgr.snapshot()["notification_settings"]["mode"] == "important"
         ident, _ = app.runtime.center.add("Проверка", "Система")
+        app.switch_page("inbox")
         app._refresh_inbox()
         app.inbox_tree.selection_set(str(ident))
         app._notice_details()
@@ -372,7 +374,9 @@ def test_new_pages_preserve_drafts_and_submit_real_memory_actions(tmp_path, monk
         app._save_memory()
         assert app.runtime.memory.recall("любимый плеер") == "Яндекс Музыка"
         app.morning.set("09:30")
+        app.switch_page("maintenance")
         app.file_exclusions.set("*.keep; photo*.jpg")
+        app.switch_page("security")
         app.remote_enabled.set(True)
         app._default_remote_commands()
         app.apply_theme("Emerald Cyber")
@@ -384,6 +388,7 @@ def test_new_pages_preserve_drafts_and_submit_real_memory_actions(tmp_path, monk
         assert saved["briefings"]["morning"] == "09:30"
         assert saved["file_policy"]["exclusions"] == ["*.keep", "photo*.jpg"]
         assert saved["remote_control"]["enabled"]
+        app.switch_page("events")
         app.event_scenario.set("Игра")
         app._add_event()
         assert len(original(tmp_path / "config.json").snapshot()["event_rules"]) == 1

@@ -185,69 +185,30 @@ def apply_style(root, colours):
     return style
 
 
-class RoundedCard(tk.Canvas):
+class RoundedCard(tk.Frame):
+    """Native opaque card: one layout pass, no Canvas surface under child widgets."""
+
     def __init__(self, parent, colours, padding=22):
-        super().__init__(parent, bg=parent.cget("bg"), highlightthickness=0, bd=0, height=1)
+        super().__init__(
+            parent,
+            bg=colours["card"],
+            highlightthickness=1,
+            highlightbackground=colours["border"],
+            bd=0,
+        )
         self.colours, self.padding = colours, padding
         self.inner = tk.Frame(self, bg=colours["card"])
-        self.window = self.create_window(padding, padding, anchor="nw", window=self.inner)
-        self.bind("<Configure>", self._resize)
-        self.inner.bind("<Configure>", self._content)
+        self.inner.pack(fill="both", expand=True, padx=padding, pady=padding)
         self._layout_job = self.after_idle(self._initial_layout)
         self.bind("<Destroy>", self._cancel_layout)
 
     def _initial_layout(self):
         self._layout_job = None
-        self._content()
 
     def _cancel_layout(self, event=None):
         if self._layout_job:
             self.after_cancel(self._layout_job)
             self._layout_job = None
-
-    def _content(self, event=None):
-        height = self.inner.winfo_reqheight() + 2 * self.padding
-        if int(self.cget("height")) != height:
-            self.configure(height=height)
-
-    def _resize(self, event=None):
-        width, height = self.winfo_width(), self.winfo_height()
-        self.itemconfigure(self.window, width=max(1, width - 2 * self.padding))
-        self._content()
-        self.delete("surface")
-        r = 18
-        self.create_polygon(
-            r,
-            1,
-            width - r,
-            1,
-            width - 1,
-            1,
-            width - 1,
-            r,
-            width - 1,
-            height - r,
-            width - 1,
-            height - 1,
-            width - r,
-            height - 1,
-            r,
-            height - 1,
-            1,
-            height - 1,
-            1,
-            height - r,
-            1,
-            r,
-            1,
-            1,
-            smooth=True,
-            splinesteps=24,
-            fill=self.colours["card"],
-            outline=self.colours["border"],
-            tags="surface",
-        )
-        self.tag_lower("surface")
 
 
 class Disclosure(tk.Frame):

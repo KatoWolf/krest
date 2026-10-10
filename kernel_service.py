@@ -3,6 +3,8 @@
 No pickle, shell evaluation or general object reflection is accepted over IPC.
 """
 
+from app_paths import app_command
+
 from collections import deque
 from dataclasses import asdict, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,12 +70,10 @@ class Kernel:
                     import sys
 
                     self._last_ui_spawn = time.monotonic()
-                    args = [
-                        sys.executable,
-                        str(Path(__file__).with_name("main.py")),
+                    args = app_command(
                         "--config",
                         str(self.config.filepath),
-                    ]
+                    )
                     if quick:
                         args.append("--quick")
                     subprocess.Popen(
@@ -200,6 +200,10 @@ class Kernel:
                 "command": rt.current_command,
                 "reduced": self.settings()["accessibility"]["reduce_motion"],
             }
+        if method == "command.parse":
+            from command_parser import parse_command
+
+            return parse_command(rt.manager, args.get("text", ""), self.settings())
         if method == "media_query":
             import media_control
 

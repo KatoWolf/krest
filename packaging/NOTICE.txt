@@ -1,0 +1,9 @@
+Крест / Krest
+This distribution contains compiled application modules and third-party components.
+Roboto: Copyright Google, Apache License 2.0; see assets/fonts/LICENSE.txt.
+Python and dependencies retain their respective licenses. Nuitka's compilation report lists included packages.
+Speech models are obtained from their official providers on first use if no local model is present.
+Vosk: https://alphacephei.com/vosk/models
+Silero: https://github.com/snakers4/silero-models
+Before commercial distribution, review model and third-party dependency license terms for the chosen versions.
+Compilation makes source inspection harder; it does not prevent reverse engineering.

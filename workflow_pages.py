@@ -118,8 +118,6 @@ class WorkflowPages:
             anchor="w", pady=10
         )
         self._draw_scenario()
-        self._build_inbox()
-        self._build_maintenance()
 
     def _draw_scenario(self):
         self.scenario_tree.delete(*self.scenario_tree.get_children())

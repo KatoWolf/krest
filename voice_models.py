@@ -18,6 +18,9 @@ def discover_models(settings, base_dir=None):
     }
     # Explicit existing choices win. Old absolute paths from another PC can recover.
     directories = [root, root / "model", root / "models", root / "voice", configured["vosk_path"]]
+    from app_paths import data_dir
+
+    directories.extend([data_dir(), data_dir() / "models", data_dir() / "model"])
     candidates = []
     for folder in dict.fromkeys(directories):
         try:
@@ -35,6 +38,8 @@ def discover_models(settings, base_dir=None):
             vosk = preferred[0]
         elif len(ready) == 1:
             vosk = ready[0]
+        elif data_dir() / "models" / "vosk-model-small-ru-0.22" in ready:
+            vosk = data_dir() / "models" / "vosk-model-small-ru-0.22"
     silero = configured["silero_path"] if configured["silero_path"].is_file() else None
     if silero is None:
         # Known Silero package names only; don't load arbitrary .pt files.
@@ -58,6 +63,8 @@ def discover_models(settings, base_dir=None):
             silero = preferred
         elif len(ready) == 1:
             silero = ready[0]
+        elif data_dir() / "models" / "v4_ru.pt" in ready:
+            silero = data_dir() / "models" / "v4_ru.pt"
     return {
         "vosk_path": str(vosk.resolve()) if vosk else "",
         "silero_path": str(silero.resolve()) if silero else "",

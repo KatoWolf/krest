@@ -1,5 +1,7 @@
 """Small out-of-process, click-through Windows game indicator; never hooks a game."""
 
+from app_paths import app_command
+
 from ui_fonts import UI_FONT, load_fonts
 
 import math
@@ -136,9 +138,7 @@ def draw_cross(canvas, size, state="idle", level=0, phase=0, reduced=False, labe
         cx - r, cy - size * 0.07 - r, cx + r, cy - size * 0.07 + r, fill=color, outline=""
     )
     if labels:
-        canvas.create_text(
-            cx, size + 12, text=LABELS[state], fill=color, font=(UI_FONT, 8, "bold")
-        )
+        canvas.create_text(cx, size + 12, text=LABELS[state], fill=color, font=(UI_FONT, 8, "bold"))
 
 
 class OverlayManager:
@@ -161,13 +161,11 @@ class OverlayManager:
         self.last_try = time.monotonic()
         try:
             self.process = subprocess.Popen(
-                [
-                    sys.executable,
-                    str(Path(__file__).with_name("main.py")),
+                app_command(
                     "--game-overlay",
                     "--config",
                     str(self.config_path),
-                ],
+                ),
                 cwd=Path(__file__).parent,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,

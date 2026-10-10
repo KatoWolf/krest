@@ -53,7 +53,7 @@ def normalize_command(text, aliases=None):
     text = re.sub(r"^пожалуйста[, ]+|[, ]+пожалуйста[.!?]*$", "", text, flags=re.I)
     key = text.casefold().strip(" .!?,")
     if key in (aliases or {}):
-        return aliases[key]
+        return normalize_command(aliases[key])
     fixed = {
         "сделай музыку потише": "тише",
         "сделай потише": "тише",

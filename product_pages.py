@@ -9,7 +9,7 @@ from tkinter import ttk
 import licensing
 from themes import THEMES, PREMIUM_THEMES
 
-PERSONALITIES = {"friendly": "Дружелюбная", "concise": "Краткая", "lively": "Живая"}
+from personality import PERSONALITIES
 
 
 class ProductPages:
@@ -191,6 +191,17 @@ class ProductPages:
         )
 
     def _install_music_components(self):
+        from app_paths import compiled
+
+        if compiled():
+            from ui_dialogs import messagebox
+
+            messagebox.showinfo(
+                "Управление музыкой",
+                "Компоненты уже входят в установленную Крест. Полностью завершите Крест и запустите снова. Если ошибка повторится, переустановите программу; настройки сохранятся.",
+                parent=self,
+            )
+            return
         import os
         import subprocess
         import sys

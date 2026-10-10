@@ -39,8 +39,12 @@ class VoicePages:
             ttk.Button(row, text=title, command=fn).pack(side="left", padx=(0, 5))
         ttk.Checkbutton(
             card,
-            text="Включать голос при запуске Крест, если модели найдены",
+            text="Включать голос при запуске Крест",
             variable=self.settings_vars["voice_auto_start"],
+        ).pack(anchor="w", pady=4)
+        ttk.Checkbutton(
+            card, text="Автоматически скачивать отсутствующие модели с официальных серверов",
+            variable=self.settings_vars["voice_auto_models"],
         ).pack(anchor="w", pady=4)
         self.label(card, textvariable=self.voice_var, muted=True).pack(anchor="w")
         self.mic_meter = ttk.Progressbar(card, maximum=100)
@@ -169,9 +173,7 @@ class VoicePages:
     def _microphone_action(self, action):
         if self.audio_test_busy:
             return
-        if self.runtime._voice_thread and self.runtime._voice_thread.is_alive():
-            self._report_error("Сначала выключите голос и дождитесь его остановки")
-            return
+        resume = bool(self.runtime._voice_thread and self.runtime._voice_thread.is_alive())
         device = self.settings_vars["microphone"].get()
         previous_threshold = self.settings_vars["speech_threshold"].get()
         self.audio_test_busy = True
@@ -183,6 +185,18 @@ class VoicePages:
 
         def work():
             try:
+                if resume:
+                    self.runtime.stop_voice()
+                    # RemoteRuntime proxies have no join; wait on their refreshed state.
+                    import time
+
+                    deadline = time.monotonic() + 30
+                    while self.runtime._voice_thread and self.runtime._voice_thread.is_alive():
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(
+                                "Голос ещё освобождает микрофон. Повторите проверку."
+                            )
+                        time.sleep(0.05)
                 if action == "play":
                     self.microphone_test.playback()
                     result = "Воспроизведение завершено"
@@ -202,6 +216,8 @@ class VoicePages:
                 self.post_ui(lambda: self.mic_test_status.set(message))
                 raise
             finally:
+                if resume and not self.closing:
+                    self.runtime.start_voice()
                 self.post_ui(lambda: setattr(self, "audio_test_busy", False))
 
         self._background(work)
@@ -345,5 +361,5 @@ class VoicePages:
                 widget.configure(
                     text=text
                     if data or self.audio_test_busy
-                    else "Микрофон ещё не подключён. Нажмите «Подключить голос»."
+                    else "Микрофон и модели подключаются автоматически. Ход подготовки показан выше."
                 )

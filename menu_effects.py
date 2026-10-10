@@ -3,7 +3,6 @@
 from ui_fonts import UI_FONT
 
 import math
-import os
 import random
 import time
 import tkinter as tk
@@ -113,18 +112,6 @@ class MenuEffects:
         self.job = None
         self.closed = False
         self.overlay_error = ""
-        if os.name == "nt":
-            try:
-                self.window = tk.Toplevel(app)
-                self.window.withdraw()
-                self.window.overrideredirect(True)
-                self.window.configure(bg=TRANSPARENT)
-                self.window.attributes("-transparentcolor", TRANSPARENT)
-                canvas = tk.Canvas(self.window, bg=TRANSPARENT, highlightthickness=0)
-                canvas.pack(fill="both", expand=True)
-                self.scenes.append(ParticleScene(canvas))
-            except (tk.TclError, OSError, AttributeError) as exc:
-                self._disable_overlay(exc)
         self.last = time.monotonic()
         self.refresh()
 

@@ -1,5 +1,7 @@
 """Small authenticated JSON client. Desktop state is cached off the Tk thread."""
 
+from app_paths import app_command
+
 from pathlib import Path
 from types import SimpleNamespace
 import http.client
@@ -50,17 +52,15 @@ class KernelClient:
         try:
             status = self.call("ping")
             if safe and not status["safe_mode"]:
-                raise RuntimeError("Сначала завершите обычное ядро: python main.py --stop-kernel")
+                raise RuntimeError("Сначала завершите обычную Крест через меню")
             return self
         except (OSError, ValueError, KeyError, http.client.HTTPException):
             pass
-        args = [
-            sys.executable,
-            str(Path(__file__).with_name("main.py")),
+        args = app_command(
             "--kernel",
             "--config",
             str(self.config_path),
-        ]
+        )
         if safe:
             args.append("--safe-mode")
         environment = dict(os.environ, KREST_CONFIG_PATH=str(self.config_path))
@@ -86,7 +86,8 @@ class KernelClient:
             except (OSError, ValueError, KeyError, http.client.HTTPException):
                 time.sleep(0.15)
         raise RuntimeError(
-            "Не удалось запустить ядро. Запустите python main.py --kernel для диагностики."
+            "Не удалось подключиться к ядру. Журнал запуска: "
+            + str(self.config_path.parent / "logs" / "kernel.log")
         )
 
 

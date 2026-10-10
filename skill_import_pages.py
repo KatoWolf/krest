@@ -14,7 +14,7 @@ class SkillImportPages:
         card = self.card(
             self.page_bodies["skills"],
             "Добавить свои навыки",
-            "Выберите Python-файл. Крест найдёт команды и подключит их без изменения main.py и перезапуска.",
+            "Выберите Python-файл. Крест найдёт команды и подключит их без редактирования программы и перезапуска.",
         )
         toolbar = tk.Frame(card, bg=self.theme["card"])
         toolbar.pack(fill="x", pady=(5, 10))

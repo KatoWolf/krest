@@ -347,6 +347,9 @@ class ControlCenterApp(
         ttk.Button(
             header, text="Поиск  Ctrl+K", command=lambda: __import__("quick_panel").show_panel(self)
         ).pack(side="right", anchor="n")
+        ttk.Button(header, text="Разбор команды", command=self._open_command_parser).pack(
+            side="right", anchor="n", padx=6
+        )
         self.page_title = tk.StringVar()
         self.page_subtitle = tk.StringVar()
         title = self.label(header, textvariable=self.page_title)
@@ -374,6 +377,9 @@ class ControlCenterApp(
         self.label(footer, textvariable=self.status_var, muted=True, wraplength=560).pack(
             side="left"
         )
+        self.transition_bar = tk.Canvas(body, height=2, bg=self.theme["bg"], highlightthickness=0)
+        self.transition_bar.pack(fill="x", pady=(0, 6))
+        self._transition_job = None
         self.content = tk.Frame(body, bg=self.theme["bg"])
         self.content.pack(fill="both", expand=True)
         self.pages = {}
@@ -381,7 +387,7 @@ class ControlCenterApp(
         self.canvases = {}
         for code, _ in self.NAV:
             page = tk.Frame(self.content, bg=self.theme["bg"])
-            canvas = tk.Canvas(page, bg=self.theme["bg"], highlightthickness=0)
+            canvas = tk.Canvas(page, bg=self.theme["bg"], highlightthickness=0, yscrollincrement=18)
             scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
             scroll.pack(side="right", fill="y")
             canvas.pack(side="left", fill="both", expand=True)
@@ -402,6 +408,7 @@ class ControlCenterApp(
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind_all("<Button-4>", self._wheel)
         self.bind_all("<Button-5>", self._wheel)
+        self.wf_trees, self.wf_output_widgets = {}, {}
         self._built_pages = set()
         self.api_entries = {}
         self.service_labels, self.service_details, self.service_buttons = {}, {}, {}
@@ -429,13 +436,13 @@ class ControlCenterApp(
         if code in self._built_pages:
             return
         if code in self.CORE_PAGES:
-            self._built_pages.update(self.CORE_PAGES)
-            self.build_workflows()
-            self.build_timers_tab()
-            self.build_core_pages()
+            self._built_pages.add(code)
+            self.build_core_pages(code)
         elif code.startswith("wf_"):
-            self._built_pages.update(k for k, _ in PAGE_NAMES)
-            self.build_warframe_pages()
+            self._built_pages.add(code)
+            if not hasattr(self, "wf_trees"):
+                self.wf_trees, self.wf_output_widgets = {}, {}
+            getattr(self, "build_" + code)()
         elif code in ("discord_account", "discord_bot"):
             self._built_pages.update(("discord_account", "discord_bot"))
             self.build_discord_tabs()
@@ -483,7 +490,9 @@ class ControlCenterApp(
                 self.nav_canvas.yview_scroll(units * 3, "units")
                 return
             widget = getattr(widget, "master", None)
-        self.canvases[self.current_page].yview_scroll(units * 3, "units")
+        canvas = self.canvases[self.current_page]
+        canvas.yview_scroll(units * 3, "units")
+        return "break"
 
     def switch_page(self, code):
         names = dict(self.NAV)
@@ -527,6 +536,7 @@ class ControlCenterApp(
             return
         self._ensure_page(code)
         self.pages[code].pack(fill="both", expand=True)
+        self._animate_transition()
         if code.startswith("wf_"):
             self.wf_refresh()
         if code == "skills":
@@ -545,6 +555,49 @@ class ControlCenterApp(
             self.event_scenario_combo.configure(
                 values=list(self.config_mgr.snapshot()["scenarios"])
             )
+
+    def _preview_personality(self):
+        from types import SimpleNamespace
+        from personality import reply
+
+        cfg = self._draft()
+        state = SimpleNamespace(owner_name=cfg["owner_name"], config_getter=lambda: cfg)
+        messagebox.showinfo(
+            "Характер Крест",
+            reply("greeting", state) + "\n\n" + reply("support", state),
+            parent=self,
+        )
+
+    def _open_command_parser(self):
+        from command_parser import open_parser
+
+        open_parser(self)
+
+    def _animate_transition(self):
+        if self._transition_job:
+            self.after_cancel(self._transition_job)
+            self._transition_job = None
+        self.transition_bar.delete("all")
+        if not self.motion.enabled():
+            return
+        bar = self.transition_bar
+        began = time.monotonic()
+        item = bar.create_rectangle(0, 0, 0, 2, fill=self.theme["accent"], outline="")
+
+        def frame():
+            self._transition_job = None
+            if not bar.winfo_exists():
+                return
+            elapsed = (time.monotonic() - began) / 0.18
+            if elapsed >= 1:
+                bar.delete("all")
+                return
+            width = bar.winfo_width()
+            x = width * (1 - (1 - elapsed) ** 3)
+            bar.coords(item, max(0, x - width * 0.3), 0, x, 2)
+            self._transition_job = self.after(16, frame)
+
+        frame()
 
     def build_actions_tab(self):
         page = self.page_bodies["actions"]
@@ -581,7 +634,7 @@ class ControlCenterApp(
         controls = tk.Frame(card, bg=self.theme["card"])
         controls.pack(fill="x", pady=(0, 12))
         ttk.Button(
-            controls, text="Подключить голос", style="Accent.TButton", command=self._start_voice
+            controls, text="Возобновить голос", style="Accent.TButton", command=self._start_voice
         ).pack(side="left")
         ttk.Button(controls, text="Пауза", command=self.runtime.stop_voice).pack(
             side="left", padx=8
@@ -618,6 +671,11 @@ class ControlCenterApp(
         self.overview_label.pack(anchor="w")
         ttk.Button(
             summary, textvariable=self.reminder_var, command=lambda: self.switch_page("timers")
+        ).pack(anchor="w", pady=(8, 0))
+        ttk.Button(
+            summary,
+            text="Открыть скриншоты",
+            command=lambda: self.runtime.submit("открой скриншоты"),
         ).pack(anchor="w", pady=(8, 0))
         manual = self.advanced(page, "Написать вместо голоса")
         self.manual_input = manual.master
@@ -1365,6 +1423,22 @@ class ControlCenterApp(
             values=list(PERSONALITIES.values()),
             state="readonly",
         ).pack(fill="x", pady=8)
+        from personality import CHARACTERS
+
+        character = tk.StringVar()
+
+        def describe(*_):
+            key = next(
+                (k for k, v in PERSONALITIES.items() if v == self.personality_var.get()), "friendly"
+            )
+            character.set(CHARACTERS[key])
+
+        self.personality_var.trace_add("write", describe)
+        describe()
+        self.label(card, textvariable=character, muted=True, wraplength=640).pack(
+            anchor="w", pady=8
+        )
+        ttk.Button(card, text="Пример ответа", command=self._preview_personality).pack(anchor="w")
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=6)
         self.label(row, "Тема", width=24).pack(side="left")
@@ -1501,7 +1575,7 @@ class ControlCenterApp(
         data["api_keys"].update({key: var.get().strip() for key, var in self.api_vars.items()})
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
         data["dota_guide"].update({key: var.get() for key, var in self.dota_vars.items()})
-        if "kernel" in self._built_pages:
+        if self.CORE_PAGES & self._built_pages:
             data.update(self.core_settings_draft())
         return data
 
@@ -1566,7 +1640,7 @@ class ControlCenterApp(
             if hasattr(self, key)
         }
         built_pages = set(self._built_pages)
-        core_pending = self.core_draft_values() if "kernel" in built_pages else None
+        core_pending = self.core_draft_values() if self.CORE_PAGES & built_pages else None
         self.wf_preserve()
         if self.effects:
             self.effects.close()

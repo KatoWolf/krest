@@ -36,6 +36,10 @@ else:
 from configuration import CONFIG_PATH
 
 CONFIG_FILE = str(CONFIG_PATH)
+from app_paths import data_dir
+
+BASE_DIR = str(data_dir())
+
 STATUS_FILE = os.path.join(BASE_DIR, "current_status.json")
 SESSION_NAME = "krest_user_session"
 SESSION_PATH = os.path.join(BASE_DIR, f"{SESSION_NAME}.session")

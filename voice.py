@@ -123,24 +123,32 @@ def enable():
             if importlib.util.find_spec(name) is None
         ]
         if missing:
-            raise RuntimeError(
-                "Установите requirements-voice.txt. Не найдены: " + ", ".join(missing)
+            from app_paths import compiled
+
+            action = (
+                "Переустановите Крест через установщик"
+                if compiled()
+                else "Откройте start.bat для подготовки голоса"
             )
+            raise RuntimeError(action + ". Не найдены: " + ", ".join(missing))
         if not models["vosk_path"]:
             raise RuntimeError(
                 "Не найдена модель распознавания. Положите распакованную папку Vosk в model "
-                "рядом с main.py. Внутри нужны am/final.mdl и conf/model.conf. Затем нажмите «Подключить голос»."
+                "рядом с программой. Внутри нужны am/final.mdl и conf/model.conf. Крест повторит подключение автоматически."
             )
         import config
 
-        importlib.reload(config)
+        from app_paths import compiled
+
+        if not compiled():
+            importlib.reload(config)
         # Pass discovered paths before import: the engine initializes its models once.
         config.MODEL_VOSK_PATH = models["vosk_path"]
         config.MODEL_SILERO_PATH = models["silero_path"]
         was_loaded = "voice_engine" in __import__("sys").modules
         engine = importlib.import_module("voice_engine")
         if was_loaded and (signature != _model_signature or engine.rec is None):
-            engine = importlib.reload(engine)
+            engine.initialize_models(models)
         _model_signature = signature
         engine.configure(_settings)
         if engine.rec is None:

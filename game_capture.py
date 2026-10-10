@@ -42,7 +42,10 @@ def save_screenshot(folder):
     path = root / (
         "warframe-" + time.strftime("%Y%m%d-%H%M%S") + "-" + str(time.time_ns() % 1000000) + ".png"
     )
-    ImageGrab.grab(bbox=bounds, all_screens=True).save(path)
+    with ImageGrab.grab(bbox=bounds, all_screens=True) as image:
+        if foreground_game_rect() != bounds:
+            raise ValueError("Окно игры изменилось; снимок не сохранён")
+        image.save(path)
     return str(path)
 
 

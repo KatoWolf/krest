@@ -232,7 +232,9 @@ class WarframePages:
         self._background(work)
 
     def wf_fill(self, key, rows, values):
-        tree = self.wf_trees[key]
+        tree = getattr(self, "wf_trees", {}).get(key)
+        if tree is None:
+            return
         selected = tree.selection()
         position = tree.yview()
         mapping = {}

@@ -43,10 +43,21 @@ async def _read_image(image):
 
     engine = OcrEngine.try_create_from_user_profile_languages()
     if engine is None:
+        languages = list(OcrEngine.available_recognizer_languages)
+        preferred = [
+            lang for lang in languages if lang.language_tag.lower().startswith(("ru", "en"))
+        ]
+        for language in preferred or languages:
+            engine = OcrEngine.try_create_from_language(language)
+            if engine is not None:
+                break
+    if engine is None:
         raise RuntimeError(
             "В Windows не установлен язык распознавания текста. Добавьте русский или английский язык в параметрах Windows."
         )
-    image.thumbnail((min(1600, engine.max_image_dimension), min(1600, engine.max_image_dimension)))
+    image.thumbnail(
+        (min(1600, OcrEngine.max_image_dimension), min(1600, OcrEngine.max_image_dimension))
+    )
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     stream = InMemoryRandomAccessStream()

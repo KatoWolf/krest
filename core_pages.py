@@ -34,15 +34,22 @@ STATUS_LABELS = {
 
 
 class CorePages:
-    def build_core_pages(self):
-        self._build_kernel()
-        self._build_memory()
-        self._build_events()
-        self._build_programs()
-        self._build_security()
-        self._extend_files()
-        self._extend_scenarios()
-        self._extend_task_controls()
+    def build_core_pages(self, code=None):
+        builders = {
+            "kernel": [self._build_kernel],
+            "memory": [self._build_memory],
+            "events": [self._build_events],
+            "programs": [self._build_programs],
+            "security": [self._build_security],
+            "scenarios": [self.build_workflows, self._extend_scenarios],
+            "inbox": [self._build_inbox],
+            "maintenance": [self._build_maintenance, self._extend_files],
+            "timers": [self.build_timers_tab, self._extend_task_controls],
+        }
+        before = {k: getattr(self, k, None) for k in self.CORE_VARIABLES}
+        for name in [code] if code else builders:
+            for build in builders[name]:
+                build()
         for key in (
             "morning",
             "evening",
@@ -54,8 +61,11 @@ class CorePages:
             "extra_folders",
             "file_exclusions",
         ):
-            getattr(self, key).trace_add("write", self._mark_dirty)
-        self.remote_commands.bind("<KeyRelease>", lambda e: self._mark_dirty())
+            variable = getattr(self, key, None)
+            if variable is not None and variable is not before[key]:
+                variable.trace_add("write", self._mark_dirty)
+        if code in (None, "security"):
+            self.remote_commands.bind("<KeyRelease>", lambda e: self._mark_dirty())
 
     def _table(self, parent, columns, height=4):
         tree = ttk.Treeview(parent, columns=tuple(columns), show="headings", height=height)
@@ -652,7 +662,11 @@ class CorePages:
         )
         self.label(
             card,
-            "Восстановление выполняется при остановленном ядре:\npython main.py --restore путь_к_копии.zip\nБезопасный запуск: python main.py --safe-mode",
+            (
+                "Восстановление выполняется при остановленном ядре:\nKrest.exe --restore путь_к_копии.zip\nБезопасный запуск: Krest.exe --safe-mode"
+                if __import__("app_paths").compiled()
+                else "Восстановление выполняется при остановленном ядре:\npython main.py --restore путь_к_копии.zip\nБезопасный запуск: python main.py --safe-mode"
+            ),
             muted=True,
             wraplength=680,
         ).pack(fill="x", pady=10)
@@ -707,6 +721,15 @@ class CorePages:
             )
 
     def _check_updates(self):
+        from app_paths import compiled
+
+        if compiled():
+            messagebox.showinfo(
+                "Обновление Крест",
+                "Для установленной программы используйте новый установщик от автора. Перед обновлением завершите Крест через меню. Настройки, модели и скриншоты сохранятся.",
+                parent=self,
+            )
+            return
         from source_update import SourceUpdater
 
         def finish(result):
@@ -1000,30 +1023,38 @@ class CorePages:
         import copy
 
         return {
-            "variables": {key: getattr(self, key).get() for key in self.CORE_VARIABLES},
-            "remote": self.remote_commands.get("1.0", "end-1c"),
-            "rules": copy.deepcopy(self._file_rules),
+            "variables": {
+                key: getattr(self, key).get() for key in self.CORE_VARIABLES if hasattr(self, key)
+            },
+            "remote": self.remote_commands.get("1.0", "end-1c")
+            if "security" in self._built_pages
+            else None,
+            "rules": copy.deepcopy(getattr(self, "_file_rules", None)),
         }
 
     def restore_core_draft(self, draft):
         for key, value in draft["variables"].items():
             getattr(self, key).set(value)
-        self.remote_commands.delete("1.0", "end")
-        self.remote_commands.insert("1.0", draft["remote"])
-        self._file_rules = draft["rules"]
-        self._draw_file_rules()
+        if draft["remote"] is not None:
+            self.remote_commands.delete("1.0", "end")
+            self.remote_commands.insert("1.0", draft["remote"])
+        if draft["rules"] is not None:
+            self._file_rules = draft["rules"]
+            self._draw_file_rules()
 
     def core_settings_draft(self):
-        return {
-            "briefings": {
+        result = {}
+        if "memory" in self._built_pages:
+            result["briefings"] = {
                 "morning": self.morning.get().strip(),
                 "evening": self.evening.get().strip(),
-            },
-            "accessibility": {
+            }
+        if "security" in self._built_pages:
+            result["accessibility"] = {
                 "reduce_motion": self.reduce_motion.get(),
                 "font_scale": int(self.font_scale.get()),
-            },
-            "remote_control": {
+            }
+            result["remote_control"] = {
                 "enabled": self.remote_enabled.get(),
                 "block_when_locked": self.remote_locked.get(),
                 "allow_uploads": self.remote_uploads.get(),
@@ -1032,12 +1063,13 @@ class CorePages:
                     for v in self.remote_commands.get("1.0", "end").splitlines()
                     if v.strip()
                 ],
-            },
-            "file_policy": {
+            }
+        if "maintenance" in self._built_pages:
+            result["file_policy"] = {
                 "folders": [v.strip() for v in self.extra_folders.get().split(";") if v.strip()],
                 "exclusions": [
                     v.strip() for v in self.file_exclusions.get().split(";") if v.strip()
                 ],
                 "rules": self._file_rules,
-            },
-        }
+            }
+        return result
