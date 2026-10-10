@@ -61,3 +61,5 @@ build/
 dist/
 .build-venv/
 test-results.xml
+
+nuitka-crash-report.xml

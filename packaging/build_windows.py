@@ -174,6 +174,9 @@ def main():
         raise SystemExit("Требуется 64-битный Python")
     output.mkdir(parents=True, exist_ok=True)
     run_checked(command, cwd=ROOT, check=True)
+    print(
+        "::notice::Compilation finished; auditing native libraries and packaged files.", flush=True
+    )
     dist = output / "main.dist"
     native = {p.name.lower() for p in dist.rglob("*.dll")}
     required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
@@ -182,7 +185,12 @@ def main():
             "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
         )
     audit_distribution(dist)
+    print(
+        "::notice::Distribution audit passed; checking the packaged kernel and speech models.",
+        flush=True,
+    )
     smoke_test(dist)
+    print("::notice::Packaged kernel and speech models passed their runtime checks.", flush=True)
     if not args.skip_installer:
         iscc = shutil.which("ISCC.exe") or str(
             Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
@@ -206,4 +214,13 @@ if __name__ == "__main__":
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    main()
+    try:
+        main()
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        print(
+            "::error::"
+            + message[-2500:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
+            flush=True,
+        )
+        raise
