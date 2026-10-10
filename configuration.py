@@ -28,6 +28,12 @@ DEFAULT_CONFIG = {
         "silero_path": "model_silero.pt",
         "downloads_auto_sort": False,
         "downloads_path": str(Path.home() / "Downloads"),
+        "speech_pause_ms": 700,
+        "speech_threshold": 200,
+        "speech_confidence": 60,
+        "tts_threads": 2,
+        "voice_effect": True,
+        "short_voice_answers": True,
     },
     "api_keys": dict.fromkeys(
         (
@@ -45,6 +51,7 @@ DEFAULT_CONFIG = {
         "",
     ),
     "command_aliases": {},
+    "pronunciations": {},
     "steam": {
         "poll_minutes": 15,
         "install_path": "",
@@ -97,6 +104,18 @@ def merge(default, values):
 
 
 def validate(data):
+    if len(data["pronunciations"]) > 100 or any(
+        not isinstance(k, str)
+        or not k.strip()
+        or not isinstance(v, str)
+        or not v.strip()
+        or len(k) > 80
+        or len(v) > 160
+        for k, v in data["pronunciations"].items()
+    ):
+        raise ValueError(
+            "Словарь произношения: до 100 слов, слово до 80, произношение до 160 символов"
+        )
     steam = data["steam"]
     if not isinstance(steam["telegram_notifications"], bool):
         raise ValueError("Уведомления Steam в Telegram: нужен переключатель")
@@ -157,6 +176,10 @@ def validate(data):
     for section, key, lo, hi in [
         ("app_settings", "voice_volume", 0, 100),
         ("app_settings", "active_timeout", 1, 60),
+        ("app_settings", "speech_pause_ms", 300, 2000),
+        ("app_settings", "speech_threshold", 20, 5000),
+        ("app_settings", "speech_confidence", 0, 100),
+        ("app_settings", "tts_threads", 1, 4),
         ("dota_guide", "gsi_port", 1024, 65535),
         ("dota_guide", "warning_lead_time", 0, 120),
     ]:

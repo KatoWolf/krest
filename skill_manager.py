@@ -198,10 +198,9 @@ class SkillManager:
         return sorted(scores, key=lambda k: (-scores[k], k))[:limit]
 
     def execute(self, text, state=None):
-        text = re.sub(r"\s+", " ", text).strip()
-        text = re.sub(r"^пожалуйста[, ]+|[, ]+пожалуйста[.!?]*$", "", text, flags=re.I)
-        # One explicit substitution, never recursive and never an inferred action.
-        text = self.settings().get("command_aliases", {}).get(text.casefold().strip(), text)
+        from speech_tools import normalize_command
+
+        text = normalize_command(text, self.settings().get("command_aliases", {}))
         match = self.match(text)
         if match is None:
             suggestions = self.suggest(text)

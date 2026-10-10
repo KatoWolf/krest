@@ -4,4 +4,3 @@ numpy>=1.26,<3
 sounddevice>=0.4.6,<1
 vosk==0.3.45
 num2words==0.5.14
-fuzzywuzzy==0.18.0

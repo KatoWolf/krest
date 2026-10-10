@@ -9,6 +9,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+import voice
 from tkinter import ttk, messagebox, simpledialog, filedialog
 
 from app_runtime import AssistantRuntime
@@ -18,15 +19,17 @@ from themes import THEMES
 from guikrest import indicator_controller
 from command_book import CommandBook
 from service_pages import ServicePages
+from voice_page import VoicePages
 
 logger = logging.getLogger(__name__)
 BASE_DIR = str(Path(__file__).resolve().parent)
 TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
-class ControlCenterApp(ServicePages, tk.Tk):
+class ControlCenterApp(VoicePages, ServicePages, tk.Tk):
     NAV = [
         ("actions", "Обзор"),
+        ("voice", "Голос"),
         ("skills", "Навыки"),
         ("favorites", "Мои команды"),
         ("timers", "Таймеры"),
@@ -65,6 +68,7 @@ class ControlCenterApp(ServicePages, tk.Tk):
             self.config_mgr.snapshot, data_dir=self.config_mgr.filepath.parent
         )
         self.integration = IntegrationManager(self)
+        self.init_voice_page()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
         self.steam_vars = {
@@ -122,6 +126,8 @@ class ControlCenterApp(ServicePages, tk.Tk):
         logging.getLogger().addHandler(self._log_handler)
         self.build_ui()
         self.bind("<Control-l>", lambda e: self._focus_command())
+        self.bind("<F8>", lambda e: self._arm_voice())
+        self.bind("<Escape>", lambda e: voice.stop_speaking())
         self.bind("<Unmap>", self._on_minimize)
         indicator_controller.attach(self)
         self.runtime.start()
@@ -195,6 +201,14 @@ class ControlCenterApp(ServicePages, tk.Tk):
             padding=8,
         )
         style.map("Treeview", background=[("selected", self.theme["accent"])])
+        style.configure(
+            "Horizontal.TProgressbar",
+            background=self.theme["accent"],
+            troughcolor=self.theme["sidebar"],
+            bordercolor=self.theme["sidebar"],
+            lightcolor=self.theme["accent"],
+            darkcolor=self.theme["accent"],
+        )
 
     def label(self, parent, text="", large=False, muted=False, **kwargs):
         return tk.Label(
@@ -292,6 +306,7 @@ class ControlCenterApp(ServicePages, tk.Tk):
         self.bind_all("<Button-4>", self._wheel)
         self.bind_all("<Button-5>", self._wheel)
         self.build_actions_tab()
+        self.build_voice_tab()
         self.build_skills_tab()
         self.build_favorites_tab()
         self.build_timers_tab()
@@ -338,7 +353,7 @@ class ControlCenterApp(ServicePages, tk.Tk):
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x")
         self.label(row, textvariable=self.voice_var).pack(side="left")
-        ttk.Button(row, text="Включить голос", command=self.runtime.start_voice).pack(side="right")
+        ttk.Button(row, text="Включить голос", command=self._start_voice).pack(side="right")
         ttk.Button(row, text="Выключить", command=self.runtime.stop_voice).pack(
             side="right", padx=6
         )
@@ -1095,6 +1110,7 @@ class ControlCenterApp(ServicePages, tk.Tk):
         data["owner_name"] = self.owner_var.get().strip()
         data["selected_theme"] = self.theme_var.get()
         data["command_aliases"] = dict(self.aliases)
+        data["pronunciations"] = dict(self.pronunciations)
         data["steam"].update({key: var.get() for key, var in self.steam_vars.items()})
         data["discord_presence"].update({key: var.get() for key, var in self.presence_vars.items()})
         data["services"] = copy.deepcopy(self.service_configs)
@@ -1431,6 +1447,8 @@ class ControlCenterApp(ServicePages, tk.Tk):
                 self._append_log(value)
                 if self.config_mgr.config["app_settings"]["indicator_enabled"]:
                     indicator_controller.pulse(min(8, len(value) / 12))
+            elif kind == "recognition":
+                self._show_recognition(value)
             elif kind == "voice":
                 self.voice_var.set(value)
             elif kind == "error":
@@ -1456,6 +1474,7 @@ class ControlCenterApp(ServicePages, tk.Tk):
                         logger.warning("Уведомление трея недоступно; напоминание сохранено в меню")
             elif kind == "shutdown":
                 self._real_quit()
+        self._update_voice_meter()
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
             self._last_refresh = now
@@ -1578,6 +1597,7 @@ class ControlCenterApp(ServicePages, tk.Tk):
             if answer and not self.save_all_settings():
                 return
         self.closing = True
+        self.microphone_test.stop.set()
         self.status_var.set("Завершение работы…")
 
         def close():

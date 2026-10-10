@@ -12,6 +12,9 @@ import logging
 import importlib
 import numpy as np
 import hashlib
+import threading
+from collections import deque
+from speech_tools import Endpoint, pcm_levels, verbalize_numbers
 
 # --- Индикатор и конфигурация ---
 
@@ -67,14 +70,9 @@ except ImportError:
     config = None
 
 
-try:
-    from fuzzywuzzy import fuzz
-
-    FUZZY_ENABLED = True
-except ImportError:
-    FUZZY_ENABLED = False
-
-torch.set_num_threads(4)
+torch.set_num_threads(
+    int(config.reload_config().get("app_settings", {}).get("tts_threads", 2)) if config else 2
+)
 try:
     torch.set_num_interop_threads(1)
 except RuntimeError:
@@ -89,7 +87,17 @@ if sys.platform == "win32":
         pass
 
 # Глобальное состояние
-q = queue.Queue()
+q = queue.Queue(maxsize=20)
+_recognizer_lock = threading.RLock()
+_play_lock = threading.Lock()
+_cancel_speech = threading.Event()
+_settings_getter = lambda: config.reload_config() if config else {}
+metrics = {"rms": 0, "peak": 0, "dropped": 0, "partial": ""}
+last_recognition = {}
+_endpoint = Endpoint()
+_segments = []
+_words = []
+_preroll = deque(maxlen=3)
 is_speaking = False
 stream = None
 last_mic_error_time = 0
@@ -231,9 +239,12 @@ def auto_accentuate_name(name: str = "", pronunciation: str = None) -> str:
 
 
 def clear_audio_queue():
-    """Полная очистка очереди аудиоданных."""
-    with q.mutex:
-        q.queue.clear()
+    while True:
+        try:
+            q.get_nowait()
+            q.task_done()
+        except queue.Empty:
+            break
 
 
 def manage_disk_cache(max_files=200):
@@ -272,7 +283,7 @@ try:
 
     model_vosk = vosk.Model(vosk_path)
     rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
-    rec.SetWords(False)
+    rec.SetWords(True)
 except Exception as e:
     print(f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---")
 
@@ -301,20 +312,34 @@ if model_tts is not None:
 # --- Захват и обработка звука ---
 
 
-def audio_callback(indata, frames, time_info, status):
-    """Callback-функция sounddevice для сбора аудио с микрофона."""
-    global is_speaking
+def configure(settings_getter):
+    global _settings_getter
+    _settings_getter = settings_getter
+    settings = _settings_getter().get("app_settings", {})
+    torch.set_num_threads(int(settings.get("tts_threads", 2)))
+    with _recognizer_lock:
+        clear_audio_queue()
+        _reset_recognizer()
 
+
+def interrupt():
+    with _play_lock:
+        _cancel_speech.set()
+        sd.stop()
+
+
+def audio_callback(indata, frames, time_info, status):
     if is_speaking:
         return
-
-    if q.qsize() > 15:
-        try:
-            q.get_nowait()
-        except Exception:
-            pass
-
-    q.put(bytes(indata))
+    data = bytes(indata)
+    rms, peak = pcm_levels(data)
+    metrics.update(rms=rms, peak=peak)
+    try:
+        q.put_nowait((data, rms))
+    except queue.Full:
+        metrics["dropped"] += 1
+    if status:
+        metrics["dropped"] += 1
 
 
 def start_microphone() -> bool:
@@ -334,12 +359,12 @@ def start_microphone() -> bool:
                 pass
             stream = None
 
-        settings = config.reload_config().get("app_settings", {})
+        settings = _settings_getter().get("app_settings", {})
         selected = settings.get("microphone", "")
         stream = sd.RawInputStream(
             device=int(selected) if str(selected).isdigit() else (selected or None),
             samplerate=SAMPLE_RATE,
-            blocksize=4000,
+            blocksize=800,
             dtype="int16",
             channels=1,
             callback=audio_callback,
@@ -353,154 +378,72 @@ def start_microphone() -> bool:
         return False
 
 
-def fix_wake_word(text: str) -> str:
-    """Коррекция фонетических ошибок при произношении WAKE_WORD."""
-    if not text:
-        return text
-
-    wake_word = get_wake_word()
-    phonetic_errors = [
-        "трест",
-        "арест",
-        "квест",
-        "крем",
-        "хлест",
-        "пресс",
-        "врез",
-        "крас",
-        "крэст",
-        "кресло",
-        "рез",
-        "тест",
-        "блеск",
-        "крес",
-        "кресс",
-        "лес",
-        "жест",
-        "перст",
-        "крепость",
-        "крекер",
-        "треск",
-        "вмест",
-        "крест",
-        "резь",
-        "вместе",
-        "вест",
-        "шерсть",
-        "шест",
-        "кредо",
-        "грех",
-        "кренит",
-        "лесть",
-        "весть",
-        "месть",
-        "рест",
-    ]
-    words = text.split()
-    first_word = words[0]
-
-    if first_word in phonetic_errors:
-        words[0] = wake_word
-        return " ".join(words)
-
-    if FUZZY_ENABLED:
-        if fuzz.ratio(first_word, wake_word) >= 75:
-            words[0] = wake_word
-            return " ".join(words)
-
+def fix_wake_word(text):
+    """Kept for compatibility; wake words are checked once by the runtime."""
     return text
 
 
-def listen() -> str:
-    """Главный цикл прослушивания входящего потока."""
-    global stream, rec
+def _reset_recognizer():
+    if rec is not None:
+        rec.Reset()
+    _endpoint.reset()
+    _segments.clear()
+    _words.clear()
+    _preroll.clear()
+    metrics["partial"] = ""
 
-    if rec is None:
-        time.sleep(0.1)
+
+def listen():
+    global last_recognition
+    if rec is None or is_speaking:
         return ""
-
-    # Автоматическое пересоздание упавшего/отключенного потока
     if stream is None or not stream.active:
         if not start_microphone():
-            time.sleep(0.5)
             return ""
-
-    while not q.empty():
-        try:
-            data = q.get_nowait()
+    cfg = _settings_getter().get("app_settings", {})
+    _endpoint.threshold = int(cfg.get("speech_threshold", 200))
+    _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
+    with _recognizer_lock:
+        if is_speaking:
+            return ""
+        if metrics.get("handled_drops", 0) != metrics["dropped"]:
+            clear_audio_queue()
+            _reset_recognizer()
+            metrics["handled_drops"] = metrics["dropped"]
+            return ""
+        for _ in range(20):
+            try:
+                data, rms = q.get_nowait()
+                q.task_done()
+            except queue.Empty:
+                break
+            if not _endpoint.started and rms < _endpoint.threshold:
+                _preroll.append(data)
+                continue
+            if not _endpoint.started:
+                for prefix in _preroll:
+                    rec.AcceptWaveform(prefix)
+                _preroll.clear()
+            finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
             if rec.AcceptWaveform(data):
-                text = json.loads(rec.Result()).get("text", "").strip()
-                if text:
-                    text = text.lower()
-                    text = fix_wake_word(text)
-
-                    replacements = {
-                        "я африка": "я афк",
-                        "я африку": "я афк",
-                        "крест я африка": f"{get_wake_word()} я афк",
-                        "африка режим": "афк режим",
-                        "африка": "афк",
-                        "я а ф к": "я афк",
-                        "я отелло": "я отошел",
-                        "я ушел": "я отошел",
-                        "протокол ходинг": "протокол кодинг",
-                        "режим программиста": "протокол кодинг",
-                        "забудь дискорд": "замуть дискорд",
-                        "замутить дискорд": "замуть дискорд",
-                        "верни дис": "верни дискорд",
-                        "закрой дис": "закрой дискорд",
-                        "убей дис": "закрой дискорд",
-                        "моя ванна": "моя волна",
-                        "мою ванну": "мою волну",
-                        "тише музыку": "тише",
-                        "громче музыку": "громче",
-                        "сделай тише": "тише",
-                        "заткнись": "без звука",
-                        "на паузу": "пауза",
-                        "продолжить": "продолжи",
-                        "запусти раз": "запусти раст",
-                        "открой раз": "запусти раст",
-                        "запусти дату": "запусти доту",
-                        "запусти dota": "запусти доту",
-                        "запусти cs": "запусти кс",
-                        "закрой steam": "закрой стим",
-                        "закрой с тем": "закрой стим",
-                        "блок нот": "блокнот",
-                        "нужницы": "ножницы",
-                        "открой об дату": "открой аппдату",
-                        "об дату": "аппдату",
-                        "локал ап дату": "локал аппдату",
-                        "убей зависещее": "убей зависшее",
-                        "альт таб": "сверни окно",
-                        "сверни всё": "рабочий стол",
-                        "орел или решка": "орёл или решка",
-                        "засеки время": "таймер",
-                    }
-
-                    custom_replacements = (
-                        getattr(config, "COMMAND_REPLACEMENTS", {}) if config else {}
-                    )
-                    if isinstance(custom_replacements, dict):
-                        replacements.update(custom_replacements)
-
-                    for wrong in sorted(replacements.keys(), key=len, reverse=True):
-                        if wrong in text:
-                            pattern = r"\b" + re.escape(wrong) + r"\b"
-                            text = re.sub(pattern, replacements[wrong], text)
-
-                    print(f"\r[Распознано]: {text:<40}")
-                    return text
-            else:
-                partial = json.loads(rec.PartialResult())
-                part_text = partial.get("partial", "").strip()
-                if part_text:
-                    print(f"\r[Слушаю...]: {part_text:<40}", end="", flush=True)
-        except queue.Empty:
-            break
-        except Exception as e:
-            print(f"\n--- [LISTEN ERROR]: {e} ---")
-            break
-
+                result = json.loads(rec.Result())
+                _segments.append(result.get("text", ""))
+                _words.extend(result.get("result", []))
+            if finished:
+                result = json.loads(rec.FinalResult())
+                _segments.append(result.get("text", ""))
+                _words.extend(result.get("result", []))
+                text = " ".join(v for v in _segments if v).strip()
+                confidences = [float(v["conf"]) for v in _words if "conf" in v]
+                last_recognition = {
+                    "text": text,
+                    "confidence": sum(confidences) / len(confidences) if confidences else None,
+                }
+                _reset_recognizer()
+                return text
+            metrics["partial"] = " ".join(
+                [*_segments, json.loads(rec.PartialResult()).get("partial", "")]
+            ).strip()
     return ""
 
 
@@ -598,16 +541,8 @@ def apply_cyberpunk_dsp(
     return audio_data
 
 
-def speak(text: str):
-    """Синтез речи и воспроизведение ответа."""
-    global is_speaking, model_tts, rec
-    if not text or model_tts is None:
-        return
-
-    is_speaking = True
-    clear_audio_queue()
-
-    clean_text = clean_text_for_tts(text)
+def prepare_text(text):
+    clean_text = clean_text_for_tts(verbalize_numbers(text))
 
     owner_name = str(getattr(config, "OWNER_NAME", "KatoWolf"))
     owner_pron = getattr(config, "OWNER_PRONUNCIATION", None)
@@ -635,6 +570,14 @@ def speak(text: str):
     if isinstance(extra_pronunciations, dict):
         dict_replacements.update(extra_pronunciations)
 
+    for word, pronunciation in _settings_getter().get("pronunciations", {}).items():
+        clean_text = re.sub(
+            r"(?<!\w)" + re.escape(word) + r"(?!\w)",
+            lambda match, value=pronunciation: value,
+            clean_text,
+            flags=re.I,
+        )
+
     for pattern, replacement in dict_replacements.items():
         clean_text = re.sub(pattern, replacement, clean_text, flags=re.IGNORECASE)
 
@@ -643,14 +586,38 @@ def speak(text: str):
     except Exception:
         pass
 
+    clean_text = re.sub(r"\bодин(?=\s+минута\b)", "одна", clean_text)
+    clean_text = re.sub(r"\bдва(?=\s+минуты\b)", "две", clean_text)
     clean_text = transliterate_english(clean_text)
     clean_text = clean_text.strip()
 
     if clean_text and clean_text[-1] not in [".", "!", "?"]:
         clean_text += "."
 
+    return clean_text
+
+
+def speak(text: str, cancelled=lambda: False):
+    """Синтез речи и воспроизведение ответа."""
+    global is_speaking, model_tts, rec
+    if not text or model_tts is None:
+        return
+
+    if cancelled():
+        return
+    _cancel_speech.clear()
+    is_speaking = True
+    with _recognizer_lock:
+        clear_audio_queue()
+        _reset_recognizer()
+
     try:
-        hash_name = hashlib.md5(clean_text.encode("utf-8")).hexdigest()
+        clean_text = prepare_text(text)
+        hash_name = hashlib.sha256(
+            (
+                str(silero_path) + ":xenia:24000:" + str(os.path.getmtime(silero_path)) + clean_text
+            ).encode("utf-8")
+        ).hexdigest()
         cache_file_path = os.path.join(TTS_CACHE_DIR, f"{hash_name}.npy")
 
         audio_np = None
@@ -689,14 +656,20 @@ def speak(text: str):
             except Exception:
                 pass
 
-        audio_np = apply_cyberpunk_dsp(audio_np, sr=24000, fade_time=0.03)
+        if cancelled() or _cancel_speech.is_set():
+            return
+        if _settings_getter().get("app_settings", {}).get("voice_effect", True):
+            audio_np = apply_cyberpunk_dsp(audio_np, sr=24000, fade_time=0.03)
 
-        volume = config.reload_config().get("app_settings", {}).get("voice_volume", 80) / 100
+        volume = _settings_getter().get("app_settings", {}).get("voice_volume", 80) / 100
         if volume != 1.0:
             audio_np = audio_np * volume
             audio_np = np.clip(audio_np, -1.0, 1.0)
 
-        sd.play(audio_np, 24000)
+        with _play_lock:
+            if cancelled() or _cancel_speech.is_set():
+                return
+            sd.play(audio_np, 24000)
         sd.wait()
 
     except Exception as e:
@@ -704,8 +677,8 @@ def speak(text: str):
     finally:
         # Пауза перед включением микрофона, чтобы колонки не перехватили хвост речи
         time.sleep(0.2)
-        if rec is not None:
-            rec.Reset()
+        with _recognizer_lock:
+            _reset_recognizer()
         clear_audio_queue()
         is_speaking = False
 

@@ -1,10 +1,8 @@
 """Shared command runtime; all UI callbacks consume events on the Tk thread."""
 
-from difflib import SequenceMatcher
 from pathlib import Path
 import logging
 import queue
-import re
 import threading
 import time
 
@@ -19,16 +17,9 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 def check_wake_word(text, wake_word):
-    match = re.match(r"\s*([\w]+)[\s,.:!?-]*(.*)", text, re.S)
-    if not match or not wake_word:
-        return False, text
-    first, remainder = match.groups()
-    if (
-        first.casefold() == wake_word.casefold()
-        or SequenceMatcher(None, first.casefold(), wake_word.casefold()).ratio() >= 0.8
-    ):
-        return True, remainder.strip()
-    return False, text
+    from speech_tools import split_wake
+
+    return split_wake(text, wake_word)
 
 
 class AssistantRuntime:
@@ -49,6 +40,7 @@ class AssistantRuntime:
         self._voice_control = threading.Lock()
         self._voice_stop = threading.Event()
         self._active_until = 0
+        self._arm_requested = threading.Event()
         self.download_status = "Автосортировка выключена"
         self.last_result = None
         self.status_path = Path(data_dir) / "current_status.json"
@@ -68,7 +60,7 @@ class AssistantRuntime:
         for thread in self._threads:
             thread.start()
 
-    def submit(self, text, source="text"):
+    def submit(self, text, source="text", confidence=None):
         text = text.strip()
         if not text:
             return False
@@ -79,7 +71,7 @@ class AssistantRuntime:
             if self.stop_event.is_set():
                 return False
             try:
-                self.requests.put_nowait((text, source))
+                self.requests.put_nowait((text, source, confidence))
                 return True
             except queue.Full:
                 pass
@@ -102,26 +94,57 @@ class AssistantRuntime:
         with self._request_lock:
             return self.current_command, self.requests.qsize()
 
-    def execute(self, text, source="text"):
+    def execute(self, text, source="text", confidence=None):
         cfg = self.settings().get("app_settings", {})
         wake, command = check_wake_word(text, cfg.get("wake_word", "крест"))
+        from speech_tools import normalize_command
+
+        def observed(status):
+            if source == "voice":
+                self.events.put(
+                    (
+                        "recognition",
+                        {
+                            "heard": text,
+                            "command": normalize_command(
+                                command, self.settings().get("command_aliases", {})
+                            ),
+                            "confidence": confidence,
+                            "status": status,
+                        },
+                    )
+                )
+
         if source == "voice":
             if not wake and time.monotonic() > self._active_until:
+                observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
+            if confidence is not None and confidence * 100 < cfg.get("speech_confidence", 60):
+                observed("Низкая уверенность — повторите фразу")
+                result = CommandResult(
+                    True, False, "Не уверена, что расслышала правильно. Повторите команду."
+                )
+                voice.speak(result.text)
+                self.events.put(("result", result))
+                return result
             if wake:
                 self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
             if not command and wake:
+                observed("Ожидаю команду")
                 voice.speak("Слушаю.")
                 return CommandResult(True, True, "Слушаю.")
         else:
             command = command if wake else text
-        if self.state.is_sleeping and command.casefold().strip() not in (
+        if self.state.is_sleeping and normalize_command(
+            command, self.settings().get("command_aliases", {})
+        ).casefold().strip() not in (
             "проснись",
             "активация",
             "вставай",
             "подъем",
             "подъём",
         ):
+            observed("Режим сна")
             result = CommandResult(True, False, "Ассистент спит. Скажите «крест проснись».")
             self.events.put(("result", result))
             return result
@@ -132,7 +155,9 @@ class AssistantRuntime:
                 command = "включи гид"
             elif command.strip().casefold() in ("нет", "не надо", "отмена"):
                 command = "отмена гида"
+        observed("Передано на выполнение")
         result = self.manager.execute(command, self.state)
+        observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         self.last_result = result
         if result.text and not result.responded:
             voice.speak(result.text)
@@ -145,7 +170,7 @@ class AssistantRuntime:
                 if self.stop_event.is_set():
                     break
                 try:
-                    text, source = self.requests.get_nowait()
+                    text, source, confidence = self.requests.get_nowait()
                 except queue.Empty:
                     text = None
                 if text is not None:
@@ -154,7 +179,10 @@ class AssistantRuntime:
                 self.stop_event.wait(0.1)
                 continue
             try:
-                self.execute(text, source)
+                if confidence is None:
+                    self.execute(text, source)
+                else:
+                    self.execute(text, source, confidence=confidence)
             except Exception as exc:
                 logger.exception("Сбой обработки команды")
                 self.events.put(("error", str(exc)))
@@ -250,9 +278,15 @@ class AssistantRuntime:
                 voice.enable()
             self.events.put(("voice", "Микрофон активен"))
             while not self.stop_event.is_set() and not self._voice_stop.wait(0.03):
+                if self._arm_requested.is_set():
+                    self._arm_requested.clear()
+                    self._active_until = time.monotonic() + self.settings().get(
+                        "app_settings", {}
+                    ).get("active_timeout", 6)
+                    self.events.put(("voice", "Слушаю команду без обращения"))
                 text = voice.listen()
                 if text:
-                    self.submit(text, "voice")
+                    self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
             self.events.put(("error", f"Голос: {exc}"))
         finally:
@@ -260,8 +294,16 @@ class AssistantRuntime:
                 voice.disable()
             self.events.put(("voice", "Голос остановлен"))
 
+    def arm_voice(self):
+        voice.stop_speaking()
+        self._arm_requested.set()
+        self.start_voice()
+
     def stop_voice(self):
         self._voice_stop.set()
+        self._arm_requested.clear()
+        self._active_until = 0
+        voice.stop_speaking()
 
     def close(self):
         with self._request_lock:

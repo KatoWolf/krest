@@ -23,6 +23,7 @@ _speech_lock = threading.RLock()
 _engine_lock = threading.RLock()
 _audio_queue = queue.Queue(maxsize=50)
 _audio_thread = None
+_generation = 0
 
 
 def configure(output=None, settings=None, state=None):
@@ -44,15 +45,16 @@ def capture():
 
 def _playback():
     while True:
-        text = _audio_queue.get()
+        generation, text = _audio_queue.get()
         try:
             with _speech_lock:
                 if (
                     _engine is not None
+                    and generation == _generation
                     and not getattr(_state, "is_muted", False)
                     and _settings().get("app_settings", {}).get("voice_enabled", True)
                 ):
-                    _engine.speak(text)
+                    _engine.speak(text, cancelled=lambda: generation != _generation)
         except Exception:
             logger.exception("Ошибка воспроизведения")
         finally:
@@ -80,7 +82,14 @@ def speak(text):
                     )
                     _audio_thread.start()
             try:
-                _audio_queue.put_nowait(text)
+                from speech_tools import spoken_summary
+
+                spoken = (
+                    spoken_summary(text)
+                    if _settings().get("app_settings", {}).get("short_voice_answers", True)
+                    else text
+                )
+                _audio_queue.put_nowait((_generation, spoken))
             except queue.Full:
                 logger.warning("Очередь озвучки заполнена; текст доступен в меню")
 
@@ -114,6 +123,7 @@ def enable():
         if _model_signature is not None and signature != _model_signature:
             engine = importlib.reload(engine)
         _model_signature = signature
+        engine.configure(_settings)
         if engine.rec is None or engine.model_tts is None:
             raise RuntimeError("Не загружены модели Vosk/Silero. Проверьте пути в настройках.")
         if engine.stream is None or not engine.stream.active:
@@ -124,6 +134,7 @@ def enable():
 
 def disable():
     global _engine
+    stop_speaking()
     with _engine_lock, _speech_lock:
         engine, _engine = _engine, None
         while True:
@@ -147,3 +158,27 @@ def listen():
 
 def is_enabled():
     return _engine is not None
+
+
+def stop_speaking():
+    global _generation
+    _generation += 1
+    engine = _engine
+    if engine is not None:
+        engine.interrupt()
+    while True:
+        try:
+            _audio_queue.get_nowait()
+            _audio_queue.task_done()
+        except queue.Empty:
+            break
+
+
+def telemetry():
+    engine = _engine
+    return dict(engine.metrics) if engine else {}
+
+
+def recognition():
+    engine = _engine
+    return dict(engine.last_recognition) if engine else {}

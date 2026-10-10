@@ -115,6 +115,51 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
         app.save_all_settings()
         assert app.config_mgr.snapshot()["services"]["steam_bot.py"]["autostart"]
         assert not app.integration.processes
+        assert "voice" in app.pages
+        app.switch_page("voice")
+        app._show_recognition(
+            {
+                "heard": "Крест, скока время",
+                "command": "скока время",
+                "confidence": 0.75,
+                "status": "Не выполнено",
+            }
+        )
+        app.correction_var.set("который час")
+        before = app.runtime.requests.qsize()
+        app._save_speech_correction()
+        assert app.config_mgr.snapshot()["command_aliases"]["скока время"] == "время"
+        assert app.runtime.requests.qsize() == before
+        assert app.runtime.execute("крест скока время", "voice", confidence=0.95).success
+        app.pron_word.set("Discord")
+        app.pron_reading.set("диск+орд")
+        app._add_pronunciation()
+        app.settings_vars["speech_pause_ms"].set("900")
+        app.apply_theme("Amethyst Modern")
+        app.update()
+        assert app.pron_tree.exists("Discord")
+        assert "скока время" in app.heard_var.get()
+        assert app.settings_vars["speech_pause_ms"].get() == "900"
+        app.microphone_test.noise_threshold = 275
+        app._apply_mic_threshold()
+        assert app.save_all_settings()
+        saved = original(str(tmp_path / "config.json")).snapshot()
+        assert saved["app_settings"]["speech_threshold"] == 275
+        assert saved["app_settings"]["speech_pause_ms"] == 900
+        assert saved["pronunciations"] == {"Discord": "диск+орд"}
+        # Probe failures must clear the busy flag and update the page, not leave it hanging.
+        monkeypatch.setattr(app, "_background", lambda work: work())
+
+        def fail_probe(*args, **kwargs):
+            raise RuntimeError("Микрофон недоступен")
+
+        monkeypatch.setattr(app.microphone_test, "record", fail_probe)
+        with pytest.raises(RuntimeError, match="Микрофон недоступен"):
+            app._microphone_action("record")
+        app.after(200, app.quit)
+        app.mainloop()
+        assert not app.audio_test_busy
+        assert "не удалась" in app.mic_test_status.get()
         app.after(1700, app.quit)
         app.mainloop()
         assert not errors, errors
