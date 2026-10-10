@@ -160,6 +160,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--skip-installer", action="store_true")
+    parser.add_argument("--stage", choices=("all", "compile", "verify", "installer"), default="all")
     args = parser.parse_args()
     output = ROOT / "build" / "windows"
     command = compiler_command(output)
@@ -173,25 +174,23 @@ def main():
     if struct.calcsize("P") != 8:
         raise SystemExit("Требуется 64-битный Python")
     output.mkdir(parents=True, exist_ok=True)
-    run_checked(command, cwd=ROOT, check=True)
-    print(
-        "::notice::Compilation finished; auditing native libraries and packaged files.", flush=True
-    )
     dist = output / "main.dist"
-    native = {p.name.lower() for p in dist.rglob("*.dll")}
-    required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
-    if required - native:
-        raise RuntimeError(
-            "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
+    if args.stage in ("all", "compile"):
+        run_checked(command, cwd=ROOT, check=True)
+        print("::notice::Compilation finished.", flush=True)
+    if args.stage in ("all", "verify"):
+        native = {p.name.lower() for p in dist.rglob("*.dll")}
+        required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
+        if required - native:
+            raise RuntimeError(
+                "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
+            )
+        audit_distribution(dist)
+        smoke_test(dist)
+        print(
+            "::notice::Packaged kernel and speech models passed their runtime checks.", flush=True
         )
-    audit_distribution(dist)
-    print(
-        "::notice::Distribution audit passed; checking the packaged kernel and speech models.",
-        flush=True,
-    )
-    smoke_test(dist)
-    print("::notice::Packaged kernel and speech models passed their runtime checks.", flush=True)
-    if not args.skip_installer:
+    if args.stage in ("all", "installer") and not args.skip_installer:
         iscc = shutil.which("ISCC.exe") or str(
             Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
             / "Inno Setup 6"
@@ -207,7 +206,7 @@ def main():
             ],
             check=True,
         )
-    print("Сборка и проверка завершены: " + str(output))
+    print("Этап " + args.stage + " завершён: " + str(output))
 
 
 if __name__ == "__main__":

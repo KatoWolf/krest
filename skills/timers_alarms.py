@@ -5,12 +5,7 @@ import re
 import logging
 from typing import Dict, Optional, Tuple, Any
 
-# Ensure root project directory is in sys.path for skill_manager import
-
-try:
-    from skill_manager import skill  # type: ignore # pyright: ignore
-except ImportError:
-    from ..skill_manager import skill  # type: ignore # pyright: ignore
+from skill_manager import skill  # type: ignore # pyright: ignore
 
 import voice
 

@@ -19,10 +19,7 @@ except ImportError:
     winreg = None
 
 
-try:
-    from skill_manager import skill  # type: ignore # pyright: ignore
-except ImportError:
-    from ..skill_manager import skill  # type: ignore # pyright: ignore
+from skill_manager import skill  # type: ignore # pyright: ignore
 
 import voice
 

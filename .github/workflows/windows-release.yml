@@ -40,8 +40,12 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress }
-      - name: Compile, check packaged kernel, and create installer
-        run: python packaging/build_windows.py
+      - name: Compile Windows executable
+        run: python packaging/build_windows.py --stage compile
+      - name: Verify packaged kernel and speech models
+        run: python packaging/build_windows.py --stage verify
+      - name: Create installer from verified distribution
+        run: python packaging/build_windows.py --stage installer
       - uses: actions/upload-artifact@v4
         with:
           name: Krest-Windows-installer

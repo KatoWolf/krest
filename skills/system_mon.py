@@ -11,12 +11,7 @@ from typing import Dict, List, Tuple, Any, Optional
 
 import psutil
 
-# Ensure root project directory is in sys.path for skill_manager import
-
-try:
-    from skill_manager import skill  # type: ignore # pyright: ignore
-except ImportError:
-    from ..skill_manager import skill  # type: ignore # pyright: ignore
+from skill_manager import skill  # type: ignore # pyright: ignore
 
 logger = logging.getLogger("SkillSystemMon")
 

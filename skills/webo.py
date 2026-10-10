@@ -16,10 +16,7 @@ import difflib
 from typing import Dict, List, Optional, Tuple, Any
 
 
-try:
-    from skill_manager import skill  # type: ignore # pyright: ignore
-except ImportError:
-    from ..skill_manager import skill  # type: ignore # pyright: ignore
+from skill_manager import skill  # type: ignore # pyright: ignore
 
 import voice
 

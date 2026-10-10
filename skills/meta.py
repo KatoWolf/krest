@@ -7,10 +7,7 @@ import re
 import voice
 
 
-try:
-    from skill_manager import skill, SKILL_REGISTRY, SkillManager  # type: ignore # pyright: ignore
-except ImportError:
-    from ..skill_manager import skill, SKILL_REGISTRY, SkillManager  # type: ignore # pyright: ignore
+from skill_manager import skill, SKILL_REGISTRY, SkillManager  # type: ignore # pyright: ignore
 
 logger = logging.getLogger("SkillMeta")
 

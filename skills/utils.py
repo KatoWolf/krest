@@ -10,12 +10,7 @@ import logging
 import urllib.request
 import urllib.parse
 
-# Подключение базовых путей проекта
-
-try:
-    from skill_manager import skill  # type: ignore # pyright: ignore
-except ImportError:
-    from ..skill_manager import skill  # type: ignore # pyright: ignore
+from skill_manager import skill  # type: ignore # pyright: ignore
 
 import voice
 
