@@ -1,5 +1,7 @@
 """Profile onboarding, music controls, and Premium UI."""
 
+from ui_fonts import UI_FONT
+
 from datetime import datetime
 import time
 import tkinter as tk
@@ -58,7 +60,7 @@ class ProductPages:
             "Буду помогать с компьютером, музыкой и повседневными делами.\nКак мне к вам обращаться?",
             wraplength=620,
         ).pack(anchor="w", pady=20)
-        self.welcome_name = ttk.Entry(frame, textvariable=self.owner_var, font=("Segoe UI", 16))
+        self.welcome_name = ttk.Entry(frame, textvariable=self.owner_var, font=(UI_FONT, 16))
         self.welcome_name.pack(fill="x", pady=10)
         self.welcome_name.focus_set()
         self.label(frame, "Стиль общения", muted=True).pack(anchor="w", pady=(20, 6))
@@ -106,7 +108,7 @@ class ProductPages:
             "Крест находит активный плеер автоматически.",
         )
         track = self.label(card, textvariable=self.media_track_var, wraplength=680)
-        track.configure(font=("Segoe UI", 20, "bold"))
+        track.configure(font=(UI_FONT, 20, "bold"))
         track.pack(anchor="w", pady=(8, 14))
         self.label(card, textvariable=self.media_status_var, muted=True, wraplength=680).pack(
             anchor="w", pady=(0, 16)
@@ -142,6 +144,15 @@ class ProductPages:
             "Плеер и подключение",
             "Если одновременно играют несколько источников, выберите нужный здесь.",
         )
+        ttk.Button(
+            card, text="Подключить управление музыкой", command=self._install_music_components
+        ).pack(anchor="w", pady=(0, 12))
+        self.label(
+            card,
+            "Если подключение недоступно, Крест сама проверит и установит нужные компоненты. Команды PowerShell не нужны.",
+            muted=True,
+            wraplength=680,
+        ).pack(anchor="w", pady=(0, 8))
         sources = self.advanced(card, "Выбрать плеер вручную")
         self.music_tree = ttk.Treeview(
             sources, columns=("app", "track", "state"), show="headings", height=3
@@ -177,6 +188,42 @@ class ProductPages:
         )
         self.label(diagnostics, textvariable=self.media_diagnostics, wraplength=680).pack(
             anchor="w"
+        )
+
+    def _install_music_components(self):
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        if os.name != "nt":
+            self.media_status_var.set("Прямое управление плеерами доступно в Windows.")
+            return
+        self.media_status_var.set("Открываю автоматическое подключение музыки…")
+
+        def work():
+            client = getattr(self.runtime, "client", None)
+            info = client.call("environment") if client else {"executable": sys.executable}
+            executable = Path(info["executable"])
+            windowless = executable.with_name("pythonw.exe")
+            python = windowless if windowless.exists() else executable
+            return subprocess.Popen(
+                [
+                    str(python),
+                    str(Path(__file__).with_name("setup_app.py")),
+                    "--music",
+                    "--python",
+                    str(executable),
+                ],
+                cwd=Path(__file__).parent,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+
+        self._background(
+            work,
+            done=lambda _: self.media_status_var.set(
+                "В открывшемся окне нажмите «Подключить музыку». После завершения — «Обновить трек»."
+            ),
         )
 
     def _diagnose_music(self):
@@ -330,7 +377,7 @@ class ProductPages:
                 text=name + (" · Premium" if name in PREMIUM_THEMES else ""),
                 bg=theme["sidebar"],
                 fg=theme["text"],
-                font=("Segoe UI", 10, "bold"),
+                font=(UI_FONT, 10, "bold"),
             ).pack(anchor="w")
             swatches = tk.Frame(tile, bg=theme["sidebar"])
             swatches.pack(anchor="w", pady=8)

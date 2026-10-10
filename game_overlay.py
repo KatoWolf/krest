@@ -1,5 +1,7 @@
 """Small out-of-process, click-through Windows game indicator; never hooks a game."""
 
+from ui_fonts import UI_FONT, load_fonts
+
 import math
 import os
 from pathlib import Path
@@ -135,7 +137,7 @@ def draw_cross(canvas, size, state="idle", level=0, phase=0, reduced=False, labe
     )
     if labels:
         canvas.create_text(
-            cx, size + 12, text=LABELS[state], fill=color, font=("Segoe UI", 8, "bold")
+            cx, size + 12, text=LABELS[state], fill=color, font=(UI_FONT, 8, "bold")
         )
 
 
@@ -194,6 +196,7 @@ def run_overlay(config_path):
     lock = ProcessLock(Path(config_path).parent / ".overlay.lock")
     if not lock.acquire():
         return 0
+    load_fonts()
     root = tk.Tk()
     root.withdraw()
     root.overrideredirect(True)

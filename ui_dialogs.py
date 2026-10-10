@@ -1,5 +1,7 @@
 """Accessible themed app dialogs; file pickers remain native Windows dialogs."""
 
+from ui_fonts import UI_FONT
+
 import tkinter as tk
 from tkinter import ttk
 from ui_design import style_titlebar
@@ -24,7 +26,7 @@ def _dialog(title, text, choices, parent=None, entry=False, initialvalue="", sho
         text=title,
         bg=colours["bg"],
         fg=colours["text"],
-        font=("Segoe UI", 17, "bold"),
+        font=(UI_FONT, 17, "bold"),
         anchor="w",
     ).pack(fill="x", pady=(0, 14))
     tk.Label(
@@ -32,7 +34,7 @@ def _dialog(title, text, choices, parent=None, entry=False, initialvalue="", sho
         text=text,
         bg=colours["bg"],
         fg=colours["sub_text"],
-        font=("Segoe UI", 11),
+        font=(UI_FONT, 11),
         wraplength=500,
         justify="left",
         anchor="w",

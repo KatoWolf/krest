@@ -1,5 +1,7 @@
 """Bounded decorative particles, paused when hidden, gaming or motion is reduced."""
 
+from ui_fonts import UI_FONT
+
 import math
 import os
 import random
@@ -301,7 +303,7 @@ class AppearancePages:
                 text=name + (" · Premium" if name in PREMIUM_THEMES else ""),
                 bg=palette["sidebar"],
                 fg=palette["text"],
-                font=("Segoe UI", 9, "bold"),
+                font=(UI_FONT, 9, "bold"),
             ).pack(anchor="w", pady=6)
             button = tk.Button(
                 cell,
@@ -351,7 +353,7 @@ class AppearancePages:
             anchor="w",
             text="КРЕСТ  /  ВАША АТМОСФЕРА",
             fill=self.theme["sub_text"],
-            font=("Segoe UI", 14, "bold"),
+            font=(UI_FONT, 14, "bold"),
         )
         if self.effects:
             self.effects.add_preview(preview)

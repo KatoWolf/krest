@@ -1,5 +1,7 @@
 """Warframe workspace. All network/disk requests run away from Tk's event thread."""
 
+from ui_fonts import UI_FONT
+
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -125,7 +127,7 @@ class WarframePages:
             relief="flat",
             padx=14,
             pady=12,
-            font=("Segoe UI", 10),
+            font=(UI_FONT, 10),
         )
         scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
         scroll.pack(side="right", fill="y")

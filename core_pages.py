@@ -1,5 +1,7 @@
 """Visible controls for kernel jobs, memory, event rules and machine integrations."""
 
+from ui_fonts import UI_FONT
+
 from datetime import datetime
 from pathlib import Path
 import json
@@ -596,7 +598,7 @@ class CorePages:
             relief="flat",
             padx=12,
             pady=10,
-            font=("Segoe UI", 10),
+            font=(UI_FONT, 10),
         )
         self.remote_commands.pack(fill="x", pady=10)
         self.remote_commands.insert("1.0", "\n".join(cfg["remote_control"]["allowed_commands"]))

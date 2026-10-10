@@ -52,3 +52,6 @@ before-update-*.zip
 before-restore-*/
 *.restoring
 *.partial
+
+.setup.lock
+.krest-runtime/

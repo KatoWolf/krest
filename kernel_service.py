@@ -12,6 +12,7 @@ import hmac
 import json
 import logging
 import os
+import sys
 import queue
 import secrets
 import signal
@@ -174,6 +175,8 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "environment":
+            return {"executable": sys.executable}
         if method == "ping":
             return {"protocol": PROTOCOL_VERSION, "pid": os.getpid(), "safe_mode": self.safe}
         if method == "snapshot":

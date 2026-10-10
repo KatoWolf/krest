@@ -1,5 +1,7 @@
 """Search navigation and commands from a keyboard-friendly floating panel."""
 
+from ui_fonts import UI_FONT
+
 import tkinter as tk
 from tkinter import ttk
 from ui_design import style_titlebar
@@ -24,7 +26,7 @@ def show_panel(app):
     frame.pack(fill="both", expand=True)
     app.label(frame, "Что сделать?", large=True).pack(anchor="w", pady=(0, 16))
     variable = tk.StringVar()
-    entry = ttk.Entry(frame, textvariable=variable, font=("Segoe UI", 15))
+    entry = ttk.Entry(frame, textvariable=variable, font=(UI_FONT, 15))
     window.entry = entry
     entry.pack(fill="x", pady=(0, 12))
     tree = ttk.Treeview(frame, columns=("title", "kind"), show="headings", height=6)

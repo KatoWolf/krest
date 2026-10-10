@@ -102,7 +102,7 @@ def find_player_window(data):
     try:
         from pywinauto import Desktop
     except ImportError as exc:
-        raise MediaError("Для кнопок плеера установите requirements-windows.txt.") from exc
+        raise MediaError("Для кнопок плеера откройте Музыка → Подключить управление музыкой. Крест установит компоненты сама.") from exc
     pids = set()
     for proc in psutil.process_iter(["pid", "name"]):
         if (proc.info["name"] or "").casefold() in names:

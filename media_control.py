@@ -35,11 +35,11 @@ def app_name(app_id):
 def _manager_type():
     try:
         return importlib.import_module(
-            "winsdk.media.control"
+            "winsdk.windows.media.control"
         ).GlobalSystemMediaTransportControlsSessionManager
     except ImportError as exc:
         raise MediaError(
-            "Для прямого управления музыкой установите requirements-windows.txt на Windows."
+            "Компоненты музыки ещё не подключены. Откройте Музыка → Подключить управление музыкой: Крест установит всё сама."
         ) from exc
 
 

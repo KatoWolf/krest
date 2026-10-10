@@ -1,5 +1,7 @@
 """Shared visual system. Explicit state colours avoid native white hover surfaces."""
 
+from ui_fonts import UI_FONT, load_fonts
+
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -16,6 +18,7 @@ def contrasting_text(colour):
 
 
 def apply_style(root, colours):
+    load_fonts(root)
     c = colours
     root.configure(bg=c["bg"])
     style = ttk.Style(root)
@@ -24,7 +27,7 @@ def apply_style(root, colours):
         ".",
         background=c["card"],
         foreground=c["text"],
-        font=("Segoe UI", 10),
+        font=(UI_FONT, 11),
         bordercolor=c["border"],
         lightcolor=c["border"],
         darkcolor=c["border"],
@@ -35,7 +38,7 @@ def apply_style(root, colours):
         "*TCombobox*Listbox.foreground": c["text"],
         "*TCombobox*Listbox.selectBackground": c["accent"],
         "*TCombobox*Listbox.selectForeground": contrasting_text(c["accent"]),
-        "*TCombobox*Listbox.font": ("Segoe UI", 11),
+        "*TCombobox*Listbox.font": (UI_FONT, 11),
         "*TCombobox*Listbox.relief": "flat",
         "*TCombobox*Listbox.borderWidth": 0,
     }.items():
@@ -146,7 +149,7 @@ def apply_style(root, colours):
         padding=(12, 10),
         relief="flat",
         borderwidth=0,
-        font=("Segoe UI", 9, "bold"),
+        font=(UI_FONT, 10, "bold"),
     )
     style.map(
         "Treeview.Heading",

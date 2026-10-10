@@ -117,6 +117,10 @@ def test_check_is_read_only_and_cli_command_uses_existing_kernel(tmp_path):
     client = KernelClient(config.filepath).ensure_started()
     args = [sys.executable, str(root / "main.py"), "--config", str(config.filepath)]
     try:
+        assert (
+            Path(client.call("environment")["executable"]).resolve()
+            == Path(sys.executable).resolve()
+        )
         result = subprocess.run([*args, "--check"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
         result = subprocess.run(

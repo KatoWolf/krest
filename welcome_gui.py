@@ -1,5 +1,7 @@
 """Source-only Tk control centre. Tk widgets are accessed on the main thread only."""
 
+from ui_fonts import UI_FONT, load_fonts
+
 import copy
 import importlib
 import logging
@@ -92,6 +94,7 @@ class ControlCenterApp(
     ]
 
     def __init__(self, remote=None, config_path=None):
+        load_fonts()
         set_process_identity()
         super().__init__()
         self._window_icons = install_window_icon(self)
@@ -252,7 +255,7 @@ class ControlCenterApp(
             text=text,
             bg=parent.cget("bg"),
             fg=self.theme["sub_text" if muted else "text"],
-            font=("Segoe UI", 18 if large else 10, "bold" if large else "normal"),
+            font=(UI_FONT, 20 if large else 11, "bold" if large else "normal"),
             anchor="w",
             justify="left",
             **kwargs,
@@ -263,7 +266,7 @@ class ControlCenterApp(
         surface.pack(fill="x", pady=(0, 16))
         frame = surface.inner
         heading = self.label(frame, title)
-        heading.configure(font=("Segoe UI", 14, "bold"))
+        heading.configure(font=(UI_FONT, 14, "bold"))
         heading.pack(anchor="w", pady=(0, 8))
         if subtitle:
             self.label(frame, subtitle, muted=True, wraplength=680).pack(anchor="w", pady=(0, 12))
@@ -347,7 +350,7 @@ class ControlCenterApp(
         self.page_title = tk.StringVar()
         self.page_subtitle = tk.StringVar()
         title = self.label(header, textvariable=self.page_title)
-        title.configure(font=("Segoe UI", 24, "bold"))
+        title.configure(font=(UI_FONT, 24, "bold"))
         title.pack(anchor="w")
         self.label(header, textvariable=self.page_subtitle, muted=True).pack(
             anchor="w", pady=(6, 0)
@@ -557,7 +560,7 @@ class ControlCenterApp(
             text,
             "Привет, " + self.owner_var.get() + "." if self.owner_var.get() else "Привет. Я Крест.",
         )
-        self.home_greeting.configure(font=("Segoe UI", 26, "bold"))
+        self.home_greeting.configure(font=(UI_FONT, 26, "bold"))
         self.home_greeting.pack(anchor="w")
         self.label(text, "Назовите меня и скажите, что нужно сделать.", muted=True).pack(
             anchor="w", pady=(8, 18)
@@ -620,7 +623,7 @@ class ControlCenterApp(
         self.manual_input = manual.master
         row = tk.Frame(manual, bg=self.theme["card"])
         row.pack(fill="x", padx=12, pady=12)
-        self.command_entry = ttk.Entry(row, font=("Segoe UI", 12))
+        self.command_entry = ttk.Entry(row, font=(UI_FONT, 12))
         self.command_entry.pack(side="left", fill="x", expand=True)
         self.command_entry.bind("<Return>", lambda e: self.execute_command())
         self.command_entry.bind("<Up>", lambda e: self._repeat_command())
@@ -643,7 +646,7 @@ class ControlCenterApp(
             height=7,
             bg=self.theme["sidebar"],
             fg=self.theme["text"],
-            font=("Segoe UI", 10),
+            font=(UI_FONT, 10),
             relief="flat",
             wrap="word",
             state="disabled",
