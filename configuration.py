@@ -57,6 +57,7 @@ DEFAULT_CONFIG = {
         "downloads_path": str(Path.home() / "Downloads"),
         "speech_pause_ms": 700,
         "speech_threshold": 200,
+        "speech_auto_threshold": True,
         "speech_confidence": 60,
         "tts_threads": 2,
         "voice_effect": True,

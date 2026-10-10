@@ -54,6 +54,7 @@ def test_workflow_pages_save_steps_weekdays_and_notification_preferences(tmp_pat
     errors = []
     app.report_callback_exception = lambda *args: errors.append(str(args))
     try:
+        app.switch_page("scenarios")
         app._new_scenario()
         app.scenario_name.set("Мой режим")
         app.step_action.set("Команда")
@@ -133,7 +134,8 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
         app.after(500, app.quit)
         app.mainloop()
         assert "Python" in app.command_result.cget("text")
-        assert str(app.api_entries["krest_bot_token"].cget("state")) == "normal"
+        assert "api" not in app._built_pages
+        assert "api" in app._locked_pages
         app.entry_owner_name.delete(0, "end")
         app.entry_owner_name.insert(0, "Новый пользователь")
         app.save_all_settings()
@@ -206,6 +208,8 @@ def test_gui_pages_settings_and_commands(tmp_path, monkeypatch):
                 },
             },
         )
+        monkeypatch.setattr(app.config_mgr, "is_premium", lambda: True)
+        app.switch_page("steam")
         app._update_steam(force=True)
         assert app.steam_games.exists("730")
         assert len(app.steam_items.get_children()) == 1
@@ -362,6 +366,7 @@ def test_new_pages_preserve_drafts_and_submit_real_memory_actions(tmp_path, monk
     try:
         app.owner_var.set("Тест")
         app._complete_welcome()
+        app.switch_page("memory")
         app.memory_key.set("любимый плеер")
         app.memory_value.set("Яндекс Музыка")
         app._save_memory()

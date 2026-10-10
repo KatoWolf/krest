@@ -384,6 +384,8 @@ def test_voice_autostart_inspects_paths_without_opening_devices(tmp_path):
         }
     }
     assert not voice.local_models_ready(cfg)
-    (tmp_path / "vosk").mkdir()
-    (tmp_path / "silero.pt").touch()
-    assert voice.local_models_ready(cfg)
+    (tmp_path / "vosk" / "am").mkdir(parents=True)
+    (tmp_path / "vosk" / "conf").mkdir()
+    (tmp_path / "vosk" / "am" / "final.mdl").touch()
+    (tmp_path / "vosk" / "conf" / "model.conf").touch()
+    assert voice.local_models_ready(cfg)  # Speech recognition does not require TTS.

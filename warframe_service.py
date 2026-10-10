@@ -67,6 +67,17 @@ class WarframeService:
         self._last_notice = 0
         self._last_notice_text = ""
         self._network_thread = None
+        from game_vision import GameVision
+
+        self.vision = GameVision(
+            self.store,
+            allowed=lambda: (
+                self.running
+                and self.cfg().get("vision_enabled", True)
+                and self.cfg()["enabled"]
+                and not self.runtime.settings().get("safe_mode")
+            ),
+        )
 
     def cfg(self):
         from warframe_config import DEFAULT_WARFRAME
@@ -81,6 +92,7 @@ class WarframeService:
 
     def close(self):
         self.stop.set()
+        self.vision.close()
         if self.thread:
             self.thread.join(timeout=1)
         self._restore_profile()
@@ -89,6 +101,7 @@ class WarframeService:
         with self.lock:
             return {
                 "running": self.running,
+                "vision": self.vision.snapshot(),
                 "started": self.started,
                 "busy": bool(self.busy),
                 "operation": self.operation,
@@ -220,6 +233,7 @@ class WarframeService:
         now = time.time() if now is None else now
         cfg = self.cfg()
         if self.runtime.settings().get("safe_mode") or not cfg["enabled"]:
+            self.vision.tick(False, False, now)
             if self.running:
                 self.running = False
                 self._restore_profile()
@@ -233,6 +247,7 @@ class WarframeService:
                     self._on_start(now)
                 else:
                     self._on_stop(now)
+        self.vision.tick(cfg.get("vision_enabled", True), self.running, now)
         if now - self._last_local >= 5:
             self._last_local = now
             self._local_notices(now)
@@ -512,6 +527,8 @@ class WarframeService:
     def _action(self, action, **args):
         state = self.store.snapshot()
         aliases = state["aliases"]
+        if action == "vision":
+            return {"text": self.vision.snapshot()["status"]}
         if action == "snapshot":
             return self.snapshot()
         if action in ("refresh", "briefing", "cycles", "events", "baro", "nightwave"):
@@ -973,6 +990,7 @@ class WarframeService:
 
 
 ACTIONS = {
+    "vision",
     "snapshot",
     "refresh",
     "briefing",

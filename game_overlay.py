@@ -33,7 +33,7 @@ def indicator_state(data, now=None):
     game, voice = data.get("game", {}), data.get("voice", {})
     if voice.get("speaking"):
         return "speaking"
-    if game.get("busy") or data.get("command"):
+    if game.get("vision", {}).get("busy") or game.get("busy") or data.get("command"):
         return "busy"
     if (
         data.get("listening")

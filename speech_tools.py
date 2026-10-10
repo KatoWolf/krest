@@ -141,3 +141,27 @@ def verbalize_numbers(text):
     ):
         text = re.sub(r"(?<=\d)\s*" + short + r"\b", " " + full, text, flags=re.I)
     return text
+
+
+class AdaptiveNoiseFloor:
+    """A bounded silence percentile, not speaker training. Never learns during speech."""
+
+    def __init__(self):
+        from collections import deque
+
+        self.samples = deque(maxlen=120)
+        self.threshold = 200
+
+    def reset(self, initial=200):
+        self.samples.clear()
+        self.threshold = initial
+
+    def feed(self, rms, speaking=False):
+        if speaking:
+            return self.threshold
+        self.samples.append(max(0, rms))
+        if len(self.samples) >= 12:
+            floor = sorted(self.samples)[len(self.samples) // 5]
+            target = max(35, min(900, floor * 2.8 + 20))
+            self.threshold = int(self.threshold * 0.8 + target * 0.2)
+        return self.threshold

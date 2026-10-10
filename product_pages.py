@@ -95,7 +95,7 @@ class ProductPages:
         self.onboarding.destroy()
         self.onboarding = None
         self.status_var.set(
-            f"{name}, рада знакомству. Начнём с команды «помощь» или настройки голоса."
+            f"{name}, подключаю микрофон. Когда он будет готов, скажите: «Крест, который час?»"
         )
         self._start_after_profile()
 

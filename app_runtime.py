@@ -41,6 +41,7 @@ class AssistantRuntime:
         self.performance = PerformancePolicy(settings, Path(data_dir) / "activity_profile.json")
         self.center = NotificationCenter(Path(data_dir) / "inbox.sqlite3")
         self.context = CommandContext(self.state)
+        self.voice_status = "Микрофон на паузе"
         self.notification_mode = None
         self.scenarios = ScenarioRunner(self)
         from automation import EventAutomation
@@ -109,7 +110,6 @@ class AssistantRuntime:
         if (
             not cfg.get("safe_mode")
             and cfg.get("app_settings", {}).get("voice_auto_start", True)
-            and voice.local_models_ready(cfg)
         ):
             self.start_voice()
 
@@ -457,10 +457,14 @@ class AssistantRuntime:
         self._voice_thread.start()
 
     def _voice_loop(self):
+        failure = ""
+        self.voice_status = "Подключаю голос: ищу модели и микрофон…"
+        self.events.put(("voice", self.voice_status))
         try:
             with self._voice_control:
                 voice.enable()
             connected = bool(voice.telemetry().get("connected"))
+            self.voice_status = "Слушаю обращение «Крест»" if connected else "Ищу доступный микрофон…"
             self.events.put(
                 ("voice", "Микрофон активен" if connected else "Ищу доступный микрофон…")
             )
@@ -475,6 +479,7 @@ class AssistantRuntime:
                 now_connected = bool(voice.telemetry().get("connected"))
                 if now_connected != connected:
                     connected = now_connected
+                    self.voice_status = "Слушаю обращение «Крест»" if connected else "Переподключаю микрофон…"
                     self.events.put(
                         (
                             "voice",
@@ -486,11 +491,13 @@ class AssistantRuntime:
                 if text:
                     self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
+            failure = str(exc)
             self.events.put(("error", f"Голос: {exc}"))
         finally:
             with self._voice_control:
                 voice.disable()
-            self.events.put(("voice", "Голос остановлен"))
+            self.voice_status = failure or "Микрофон на паузе"
+            self.events.put(("voice", self.voice_status))
 
     def arm_voice(self):
         voice.stop_speaking()

@@ -144,6 +144,7 @@ class Kernel:
             },
             "voice": {
                 "enabled": voice.is_enabled(),
+                "status": rt.voice_status,
                 "listening": bool(rt._voice_thread and rt._voice_thread.is_alive()),
                 "telemetry": voice.telemetry(),
             },
@@ -367,6 +368,7 @@ class Kernel:
 
     def pump(self):
         self.activate()
+        last_services = 0
         while not self.stop.wait(0.1):
             while True:
                 try:
@@ -378,7 +380,9 @@ class Kernel:
                         self.stop.set()
                 except queue.Empty:
                     break
-            self.integrations.refresh()
+            if time.monotonic() - last_services >= 1:
+                self.integrations.refresh()
+                last_services = time.monotonic()
             cfg = self.settings()
             self.overlay.tick(
                 self._ready

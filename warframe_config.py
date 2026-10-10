@@ -2,6 +2,7 @@
 
 DEFAULT_WARFRAME = {
     "enabled": True,
+    "vision_enabled": True,
     "platform": "pc",
     "poll_seconds": 120,
     "auto_summary": True,

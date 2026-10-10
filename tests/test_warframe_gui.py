@@ -108,6 +108,8 @@ def test_visual_effects_stop_when_off_reduced_hidden_and_game_profile(app):
     app.effect_mode.set("Кровавые потёки")
     app.update()
     assert app.effects.job is not None
+    app.switch_page("security")
+    app.switch_page("appearance")
     app.reduce_motion.set(True)
     app.effects.refresh()
     app.update()

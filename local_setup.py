@@ -42,30 +42,12 @@ def discover_settings(config, base_dir=None, home=None):
     if current in ("", str(home / "Downloads")) and folder.is_dir():
         use("downloads_path", folder, "Папка загрузок")
 
-    def vosk_ready(path):
-        return (path / "am" / "final.mdl").is_file() and (path / "conf" / "model.conf").is_file()
+    from voice_models import discover_models
 
-    value = settings.get("vosk_path", "model")
-    if value in ("", "model") and not vosk_ready(root / value):
-        candidates = set()
-        for folder in (root, root / "model", root / "models"):
-            if folder.is_dir():
-                for path in list(folder.iterdir())[:100]:
-                    if path.is_dir() and vosk_ready(path):
-                        candidates.add(path.resolve())
-        if len(candidates) == 1:
-            use("vosk_path", candidates.pop(), "Модель распознавания")
-
-    value = settings.get("silero_path", "model_silero.pt")
-    if value in ("", "model_silero.pt") and not (root / value).is_file():
-        candidates = {
-            path.resolve()
-            for folder in (root, root / "models")
-            for path in folder.glob("*silero*.pt")
-            if path.is_file()
-        }
-        if len(candidates) == 1:
-            use("silero_path", candidates.pop(), "Модель голоса")
+    models = discover_models(result, root)
+    for key, label in (("vosk_path", "Модель распознавания"), ("silero_path", "Модель голоса")):
+        if models[key]:
+            use(key, models[key], label)
 
     if not result["steam"].get("install_path"):
         from skills.webo import get_steam_install_path

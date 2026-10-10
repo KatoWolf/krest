@@ -14,21 +14,11 @@ def voice_report(cfg):
         lines.append(
             f"{module}: " + ("установлен" if importlib.util.find_spec(module) else "не установлен")
         )
-    for key, title, default in (
-        ("vosk_path", "Vosk", "model"),
-        ("silero_path", "Silero", "model_silero.pt"),
-    ):
-        path = BASE_DIR / app.get(key, default)
-        ready = (
-            (path.is_dir() and (path / "am").is_dir() and (path / "conf").is_dir())
-            if key == "vosk_path"
-            else path.is_file()
-        )
-        lines.append(
-            f"{title}: "
-            + ("файл/структура найдены" if ready else "не найдена модель")
-            + f" ({path})"
-        )
+    from voice_models import discover_models
+
+    models = discover_models(cfg)
+    for key, title in (("vosk_path", "Vosk / распознавание"), ("silero_path", "Silero / озвучка")):
+        lines.append(title + ": " + (models[key] or "модель не найдена"))
     lines.append("Микрофон: " + (str(app.get("microphone")) or "системный по умолчанию"))
     lines.append("Обращение: " + app.get("wake_word", "крест"))
     lines.append(

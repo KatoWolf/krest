@@ -488,6 +488,8 @@ class CorePages:
         )
 
     def _refresh_apps(self):
+        if "programs" not in self._built_pages:
+            return
         self._apps = self.config_mgr.snapshot()["applications"]
         self.app_tree.delete(*self.app_tree.get_children())
         for i, row in enumerate(self._apps):

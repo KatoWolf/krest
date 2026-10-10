@@ -2,10 +2,22 @@ import os
 import sys
 import json
 import queue
-import torch
+
+try:
+    import torch
+except (ImportError, OSError):
+    torch = None
 import sounddevice as sd
 import vosk
-from num2words import num2words
+
+try:
+    from num2words import num2words
+except ImportError:
+
+    def num2words(value, **kwargs):
+        return str(value)
+
+
 import re
 import time
 import logging
@@ -14,7 +26,7 @@ import numpy as np
 import hashlib
 import threading
 from collections import deque
-from speech_tools import Endpoint, pcm_levels, verbalize_numbers
+from speech_tools import Endpoint, pcm_levels, verbalize_numbers, AdaptiveNoiseFloor
 
 # --- Индикатор и конфигурация ---
 
@@ -70,21 +82,22 @@ except ImportError:
     config = None
 
 
-torch.set_num_threads(
-    int(config.reload_config().get("app_settings", {}).get("tts_threads", 2)) if config else 2
-)
-try:
-    torch.set_num_interop_threads(1)
-except RuntimeError:
-    pass  # PyTorch inter-op count cannot be reset after initialization.
-torch.set_grad_enabled(False)
-torch.backends.cudnn.benchmark = False
-
-if sys.platform == "win32":
+if torch is not None:
+    torch.set_num_threads(
+        int(config.reload_config().get("app_settings", {}).get("tts_threads", 2)) if config else 2
+    )
     try:
-        torch.backends.quantized.engine = "qnnpack"
-    except Exception:
-        pass
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass  # PyTorch inter-op count cannot be reset after initialization.
+    torch.set_grad_enabled(False)
+    torch.backends.cudnn.benchmark = False
+
+    if sys.platform == "win32":
+        try:
+            torch.backends.quantized.engine = "qnnpack"
+        except Exception:
+            pass
 
 # Глобальное состояние
 q = queue.Queue(maxsize=20)
@@ -95,6 +108,9 @@ _settings_getter = lambda: config.reload_config() if config else {}
 metrics = {"rms": 0, "peak": 0, "dropped": 0, "partial": ""}
 last_recognition = {}
 _endpoint = Endpoint()
+_noise = AdaptiveNoiseFloor()
+_audio_cfg = {}
+_audio_cfg_at = 0
 _segments = []
 _words = []
 _preroll = deque(maxlen=3)
@@ -269,7 +285,9 @@ def manage_disk_cache(max_files=200):
 
 # --- Инициализация нейросетей ---
 
-print("--- [VOICE ENGINE]: Загрузка нейронных связей слуха (Vosk)... ---")
+logging.getLogger(__name__).info(
+    "--- [VOICE ENGINE]: Загрузка нейронных связей слуха (Vosk)... ---"
+)
 rec = None
 try:
     if os.path.exists(vosk_path):
@@ -288,38 +306,48 @@ try:
     rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
     rec.SetWords(True)
 except Exception as e:
-    print(f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---")
+    metrics["model_error"] = str(e)
+    logging.getLogger(__name__).info(
+        f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---"
+    )
 
-print("--- [VOICE ENGINE]: Инициализация вокального аппарата V4... ---")
-device = torch.device("cpu")
+logging.getLogger(__name__).info("--- [VOICE ENGINE]: Инициализация вокального аппарата V4... ---")
+device = torch.device("cpu") if torch is not None else None
 model_tts = None
 
-if os.path.exists(silero_path):
+if torch is not None and os.path.isfile(silero_path):
     try:
         model_tts = torch.package.PackageImporter(silero_path).load_pickle("tts_models", "model")
         model_tts.to(device)
-    except Exception:
+    except Exception as exc:
+        metrics["tts_error"] = str(exc)[:300]
         model_tts = None
 
 if model_tts is None:
-    print("--- [VOICE]: Добавьте доверенную модель Silero в model_silero.pt ---")
+    logging.getLogger(__name__).info(
+        "--- [VOICE]: Добавьте доверенную модель Silero в model_silero.pt ---"
+    )
 
 if model_tts is not None:
-    print("--- [VOICE ENGINE]: Аппаратный прогрев нейросети (Pre-warming)... ---")
+    logging.getLogger(__name__).info(
+        "--- [VOICE ENGINE]: Аппаратный прогрев нейросети (Pre-warming)... ---"
+    )
     try:
         model_tts.apply_tts(text=".", speaker="xenia", sample_rate=24000)
     except Exception:
         pass
-    print("✅ [VOICE ENGINE]: Системы готовы к мгновенному ответу!")
+    logging.getLogger(__name__).info("[VOICE ENGINE]: Системы готовы к мгновенному ответу!")
 
 # --- Захват и обработка звука ---
 
 
 def configure(settings_getter):
-    global _settings_getter
+    global _settings_getter, _audio_cfg
+    _audio_cfg = {}
     _settings_getter = settings_getter
     settings = _settings_getter().get("app_settings", {})
-    torch.set_num_threads(int(settings.get("tts_threads", 2)))
+    if torch is not None:
+        torch.set_num_threads(int(settings.get("tts_threads", 2)))
     with _recognizer_lock:
         clear_audio_queue()
         _reset_recognizer()
@@ -384,6 +412,7 @@ def start_microphone() -> bool:
         stream, info = open_microphone(sd, selected, audio_callback, SAMPLE_RATE)
         _microphone_setting = str(selected)
         _last_audio_at = time.monotonic()
+        _noise.reset(int(settings.get("speech_threshold", 200)))
         metrics.update(
             connected=True,
             device_name=info["name"],
@@ -396,7 +425,7 @@ def start_microphone() -> bool:
         return True
     except Exception as e:
         last_mic_error_time = time.time()
-        print(f"\n--- [MIC ERROR]: Ошибка захвата микрофона: {e} ---")
+        logging.getLogger(__name__).info(f"\n--- [MIC ERROR]: Ошибка захвата микрофона: {e} ---")
         metrics.update(connected=False, mic_error=str(e), rms=0, peak=0)
         stream = None
         return False
@@ -418,10 +447,15 @@ def _reset_recognizer():
 
 
 def listen():
-    global last_recognition
+    global last_recognition, _audio_cfg, _audio_cfg_at
     if rec is None or is_speaking:
         return ""
-    selected = str(_settings_getter().get("app_settings", {}).get("microphone", ""))
+    now = time.monotonic()
+    if not _audio_cfg or now - _audio_cfg_at > 0.5:
+        _audio_cfg = _settings_getter().get("app_settings", {})
+        _audio_cfg_at = now
+    cfg = _audio_cfg
+    selected = str(cfg.get("microphone", ""))
     try:
         active = stream is not None and stream.active
     except Exception:
@@ -433,7 +467,6 @@ def listen():
     ):
         if not start_microphone():
             return ""
-    cfg = _settings_getter().get("app_settings", {})
     _endpoint.threshold = int(cfg.get("speech_threshold", 200))
     metrics["threshold"] = _endpoint.threshold
     _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
@@ -451,6 +484,9 @@ def listen():
                 q.task_done()
             except queue.Empty:
                 break
+            if cfg.get("speech_auto_threshold", False):
+                _endpoint.threshold = _noise.feed(rms, speaking=_endpoint.started)
+                metrics["threshold"] = _endpoint.threshold
             if not _endpoint.started and rms < _endpoint.threshold:
                 _preroll.append(data)
                 continue
@@ -707,7 +743,7 @@ def speak(text: str, cancelled=lambda: False):
         sd.wait()
 
     except Exception as e:
-        print(f"\n--- [Ошибка Neural TTS]: {e} ---")
+        logging.getLogger(__name__).info(f"\n--- [Ошибка Neural TTS]: {e} ---")
     finally:
         # Пауза перед включением микрофона, чтобы колонки не перехватили хвост речи
         time.sleep(0.2)
@@ -716,4 +752,6 @@ def speak(text: str, cancelled=lambda: False):
         clear_audio_queue()
         is_speaking = False
 
-        print("\n--- [Сенсоры Активны]: Ожидаю голосовых команд... ---" + " " * 15)
+        logging.getLogger(__name__).info(
+            "\n--- [Сенсоры Активны]: Ожидаю голосовых команд... ---" + " " * 15
+        )

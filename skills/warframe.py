@@ -225,3 +225,12 @@ def journal(state):
 )
 def launch(state):
     return run(state, "launch")
+
+
+@skill(
+    keywords=["что видишь в варфрейме", "варфрейм экран"],
+    description="Последнее локальное наблюдение экрана Warframe",
+    category="Warframe",
+)
+def vision(state):
+    return run(state, "vision")

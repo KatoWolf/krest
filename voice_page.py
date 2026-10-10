@@ -47,6 +47,11 @@ class VoicePages:
         self.mic_meter.pack(fill="x", pady=8)
         self.mic_level_label = self.label(card, "Микрофон выключен", muted=True, wraplength=680)
         self.mic_level_label.pack(anchor="w")
+        ttk.Checkbutton(
+            card,
+            text="Автоматически подстраивать чувствительность к фону",
+            variable=self.settings_vars["speech_auto_threshold"],
+        ).pack(anchor="w", pady=4)
         tuning = self.advanced(card, "Точная настройка распознавания")
         for key, label in (
             ("speech_pause_ms", "Пауза в конце, мс"),
@@ -77,10 +82,11 @@ class VoicePages:
         self.label(card, textvariable=self.recognition_status, muted=True, wraplength=680).pack(
             anchor="w", pady=4
         )
-        self.field(card, "Правильная команда", self.correction_var)
-        ttk.Button(card, text="Запомнить исправление", command=self._save_speech_correction).pack(
-            anchor="w", pady=5
-        )
+        correction = self.advanced(card, "Исправить распознанную фразу")
+        self.field(correction, "Правильная команда", self.correction_var)
+        ttk.Button(
+            correction, text="Запомнить исправление", command=self._save_speech_correction
+        ).pack(anchor="w", pady=5)
         self.label(
             card,
             "Исправление сохраняется как ваша фраза и ничего не выполняет. Его можно удалить в «Мои команды».",
@@ -150,7 +156,8 @@ class VoicePages:
         if self.audio_test_busy:
             self._report_error("Дождитесь завершения проверки микрофона")
             return
-        self.runtime.start_voice()
+        self.voice_var.set("Подключаю голос: ищу модели и микрофон…")
+        self._background(self.runtime.start_voice)
 
     def _arm_voice(self):
         if self.audio_test_busy:
@@ -304,10 +311,17 @@ class VoicePages:
 
     def _update_voice_meter(self):
         data = voice.telemetry()
+        if self.runtime.voice_status and not self.audio_test_busy:
+            self.voice_var.set(self.runtime.voice_status)
         rms = self.microphone_test.level if self.audio_test_busy else data.get("rms", 0)
         peak = self.microphone_test.peak if self.audio_test_busy else data.get("peak", 0)
-        self.mic_meter["value"] = min(100, peak / 32768 * 100)
+        for key in ("mic_meter", "home_meter"):
+            widget = getattr(self, key, None)
+            if widget is not None and widget.winfo_exists():
+                widget["value"] = min(100, peak / 32768 * 100)
         text = f"Уровень: {rms:.0f} · Пик: {peak / 32768:.0%}"
+        if data.get("threshold"):
+            text += f" · Порог речи: {data['threshold']}"
         if data.get("device_name"):
             text = (
                 data["device_name"]
@@ -323,4 +337,13 @@ class VoicePages:
             text += f" · Пропущено блоков: {data['dropped']}"
         if data.get("partial"):
             text += "\nСлышу: " + data["partial"][:180]
-        self.mic_level_label.configure(text=text)
+        if data.get("connected") and data.get("tts_ready") is False:
+            text += "\nСлышу вас. Озвучка недоступна — ответы пока видны в меню."
+        for key in ("mic_level_label", "home_mic_detail"):
+            widget = getattr(self, key, None)
+            if widget is not None and widget.winfo_exists():
+                widget.configure(
+                    text=text
+                    if data or self.audio_test_busy
+                    else "Микрофон ещё не подключён. Нажмите «Подключить голос»."
+                )

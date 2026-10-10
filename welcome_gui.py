@@ -77,7 +77,7 @@ class ControlCenterApp(
     ]
 
     NAV_GROUPS = [
-        ("actions", "Главная", ("actions", "favorites", "skills")),
+        ("actions", "Главная", ("actions", "voice", "favorites", "skills")),
         ("music", "Музыка", ("music",)),
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
         ("inbox", "Уведомления", ("inbox", "logs")),
@@ -88,7 +88,7 @@ class ControlCenterApp(
         ),
         ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
         ("wf_home", "Warframe", tuple(code for code, _ in PAGE_NAMES)),
-        ("settings", "Настройки", ("settings", "voice", "appearance", "license")),
+        ("settings", "Настройки", ("settings", "appearance", "license")),
     ]
 
     def __init__(self, remote=None, config_path=None):
@@ -168,7 +168,9 @@ class ControlCenterApp(
             )
             for key, value in self.config_mgr.config["dota_guide"].items()
         }
-        self.status_var = tk.StringVar(value="Готово. Введите команду или выберите навык.")
+        self.status_var = tk.StringVar(
+            value="Скажите «Крест, который час?» — после подключения микрофона."
+        )
         self.queue_var = tk.StringVar(value="Нет команд в очереди")
         self.reminder_var = tk.StringVar(value="Нет непрочитанных напоминаний")
         self.voice_var = tk.StringVar(value="Голос выключен")
@@ -218,7 +220,7 @@ class ControlCenterApp(
         self.bind("<Escape>", lambda e: voice.stop_speaking())
         self.bind("<Unmap>", self._on_minimize)
         indicator_controller.attach(self)
-        self._poll_job = self.after(100, self._poll)
+        self._poll_job = self.after(150 if self.state() == "normal" else 600, self._poll)
         self._show_welcome()
         if self.setup_message:
             self._append_log(self.setup_message)
@@ -336,7 +338,7 @@ class ControlCenterApp(
         body = tk.Frame(self.shell, bg=self.theme["bg"], padx=28, pady=24)
         body.pack(side="left", fill="both", expand=True)
         header = tk.Frame(body, bg=self.theme["bg"])
-        header.pack(fill="x", pady=(0, 18))
+        header.pack(fill="x", pady=(0, 10))
         ttk.Button(
             header, text="Поиск  Ctrl+K", command=lambda: __import__("quick_panel").show_panel(self)
         ).pack(side="right", anchor="n")
@@ -354,7 +356,7 @@ class ControlCenterApp(
             self.effects.close()
         self.effects = MenuEffects(self, self.effects_header)
         self.subnav = tk.Frame(body, bg=self.theme["bg"])
-        self.subnav.pack(fill="x", pady=(0, 18))
+        self.subnav.pack(fill="x", pady=(0, 10))
         footer = tk.Frame(body, bg=self.theme["bg"])
         footer.pack(side="bottom", fill="x", pady=(12, 0))
         self.save_button = ttk.Button(
@@ -395,28 +397,68 @@ class ControlCenterApp(
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind_all("<Button-4>", self._wheel)
         self.bind_all("<Button-5>", self._wheel)
-        self.build_actions_tab()
-        self.build_voice_tab()
-        self.build_music_tab()
-        self.build_workflows()
-        self.build_skills_tab()
-        self.build_favorites_tab()
-        self.build_timers_tab()
-        self.build_api_tab()
-        self.build_steam_tab()
-        self.build_discord_tabs()
-        self.build_scripts_tab()
-        self.build_dota_tab()
-        self.build_settings_tab()
-        self.build_logs_tab()
-        self.build_premium_tab()
-        self.build_core_pages()
-        self.build_warframe_pages()
-        self.build_appearance()
+        self._built_pages = set()
+        self.api_entries = {}
+        self.service_labels, self.service_details, self.service_buttons = {}, {}, {}
+        self._locked_pages = {}
+        self._ensure_page("actions")
         from ui_design import style_titlebar
 
         self.after_idle(lambda: style_titlebar(self, self.theme))
         self.switch_page(self.current_page)
+
+    BOT_PAGES = {"api", "steam", "discord_account", "discord_bot", "scripts"}
+    CORE_PAGES = {
+        "timers",
+        "scenarios",
+        "inbox",
+        "maintenance",
+        "kernel",
+        "memory",
+        "events",
+        "programs",
+        "security",
+    }
+
+    def _ensure_page(self, code):
+        if code in self._built_pages:
+            return
+        if code in self.CORE_PAGES:
+            self._built_pages.update(self.CORE_PAGES)
+            self.build_workflows()
+            self.build_timers_tab()
+            self.build_core_pages()
+        elif code.startswith("wf_"):
+            self._built_pages.update(k for k, _ in PAGE_NAMES)
+            self.build_warframe_pages()
+        elif code in ("discord_account", "discord_bot"):
+            self._built_pages.update(("discord_account", "discord_bot"))
+            self.build_discord_tabs()
+        else:
+            self._built_pages.add(code)
+            builders = {"license": self.build_premium_tab, "appearance": self.build_appearance}
+            builders.get(code, lambda: getattr(self, "build_" + code + "_tab")())()
+
+    def _show_locked_page(self, code):
+        if code not in self._locked_pages:
+            frame = tk.Frame(self.content, bg=self.theme["bg"])
+            card = self.card(
+                frame, "Подключения · Premium", "Боты и мосты доступны после активации кода."
+            )
+            self.label(
+                card,
+                "Голос, музыка и помощник Warframe уже доступны в обычной версии.",
+                wraplength=620,
+                muted=True,
+            ).pack(anchor="w", pady=16)
+            ttk.Button(
+                card,
+                text="Открыть Premium",
+                style="Accent.TButton",
+                command=lambda: self.switch_page("license"),
+            ).pack(anchor="w")
+            self._locked_pages[code] = frame
+        self._locked_pages[code].pack(fill="both", expand=True)
 
     def _wheel(self, event):
         if isinstance(event.widget, (ttk.Treeview, tk.Text, ttk.Combobox, tk.Listbox)) or (
@@ -440,7 +482,7 @@ class ControlCenterApp(
 
     def switch_page(self, code):
         names = dict(self.NAV)
-        for page in self.pages.values():
+        for page in [*self.pages.values(), *self._locked_pages.values()]:
             page.pack_forget()
         group = next(g for g in self.NAV_GROUPS if code in g[2])
         for key, button in self.group_buttons.items():
@@ -463,14 +505,23 @@ class ControlCenterApp(
             for i, key in enumerate(group[2]):
                 ttk.Button(
                     self.subnav,
-                    text=names[key],
+                    text=names[key]
+                    + (
+                        " · Premium"
+                        if key in self.BOT_PAGES and not self.config_mgr.is_premium()
+                        else ""
+                    ),
                     style="Selected.Tab.TButton" if key == code else "Tab.TButton",
                     command=lambda k=key: self.switch_page(k),
                 ).grid(row=i // 4, column=i % 4, sticky="ew", padx=(0, 5), pady=(0, 4))
             for i in range(4):
                 self.subnav.columnconfigure(i, weight=1, uniform="tabs")
-        self.pages[code].pack(fill="both", expand=True)
         self.current_page = code
+        if code in self.BOT_PAGES and not self.config_mgr.is_premium():
+            self._show_locked_page(code)
+            return
+        self._ensure_page(code)
+        self.pages[code].pack(fill="both", expand=True)
         if code.startswith("wf_"):
             self.wf_refresh()
         if code == "skills":
@@ -493,83 +544,100 @@ class ControlCenterApp(
     def build_actions_tab(self):
         page = self.page_bodies["actions"]
         surface = RoundedCard(page, self.theme, padding=24)
-        surface.pack(fill="x", pady=(0, 16))
+        surface.pack(fill="x", pady=(0, 14))
         card = surface.inner
         top = tk.Frame(card, bg=self.theme["card"])
         top.pack(fill="x")
         text = tk.Frame(top, bg=self.theme["card"])
         text.pack(side="left", fill="x", expand=True)
-        self.label(text, "ВАШ ЛИЧНЫЙ ПОМОЩНИК", muted=True).pack(anchor="w", pady=(0, 10))
+        self.label(text, "ГОЛОСОВОЕ УПРАВЛЕНИЕ", muted=True).pack(anchor="w", pady=(0, 8))
         self.home_greeting = self.label(
             text,
             "Привет, " + self.owner_var.get() + "." if self.owner_var.get() else "Привет. Я Крест.",
         )
-        self.home_greeting.configure(font=("Segoe UI", 24, "bold"))
+        self.home_greeting.configure(font=("Segoe UI", 26, "bold"))
         self.home_greeting.pack(anchor="w")
-        self.label(text, "Скажите «Крест» или напишите, что нужно сделать.", muted=True).pack(
-            anchor="w", pady=(8, 20)
+        self.label(text, "Назовите меня и скажите, что нужно сделать.", muted=True).pack(
+            anchor="w", pady=(8, 18)
         )
         from PIL import ImageTk
 
-        self._hero_image = ImageTk.PhotoImage(load_image(88), master=self)
+        self._hero_image = ImageTk.PhotoImage(load_image(72), master=self)
         tk.Label(top, image=self._hero_image, bg=self.theme["card"]).pack(
             side="right", padx=(20, 6)
         )
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x")
+        self.label(card, textvariable=self.voice_var, wraplength=640).pack(anchor="w", pady=(0, 8))
+        self.home_meter = ttk.Progressbar(card, maximum=100)
+        self.home_meter.pack(fill="x", pady=(0, 8))
+        self.home_mic_detail = self.label(
+            card, "Микрофон подбирается автоматически", muted=True, wraplength=640
+        )
+        self.home_mic_detail.pack(anchor="w", pady=(0, 14))
+        controls = tk.Frame(card, bg=self.theme["card"])
+        controls.pack(fill="x", pady=(0, 12))
+        ttk.Button(
+            controls, text="Подключить голос", style="Accent.TButton", command=self._start_voice
+        ).pack(side="left")
+        ttk.Button(controls, text="Пауза", command=self.runtime.stop_voice).pack(
+            side="left", padx=8
+        )
+        ttk.Button(controls, text="Проверить звук", command=lambda: self.switch_page("voice")).pack(
+            side="left"
+        )
+        self.label(card, textvariable=self.heard_var, muted=True, wraplength=640).pack(
+            anchor="w", pady=(4, 6)
+        )
+        self.command_result = self.label(card, "Попробуйте: «Крест, который час?»", wraplength=660)
+        self.command_result.pack(anchor="w", fill="x")
+        shortcuts = tk.Frame(page, bg=self.theme["bg"])
+        shortcuts.pack(fill="x", pady=(0, 14))
+        for i, (title, command) in enumerate(
+            (
+                ("План на сегодня", "план на сегодня"),
+                ("Таймер на 5 минут", "таймер на пять минут"),
+                ("Музыка", None),
+            )
+        ):
+            shortcuts.columnconfigure(i, weight=1, uniform="shortcuts")
+            ttk.Button(
+                shortcuts,
+                text=title,
+                command=(lambda c=command: self.runtime.submit(c))
+                if command
+                else lambda: self.switch_page("music"),
+            ).grid(row=0, column=i, sticky="ew", padx=(0, 8 if i < 2 else 0))
+        summary = self.card(page, "Ваш день")
+        self.overview_label = self.label(
+            summary, "Крест готова к работе", muted=True, wraplength=660
+        )
+        self.overview_label.pack(anchor="w")
+        ttk.Button(
+            summary, textvariable=self.reminder_var, command=lambda: self.switch_page("timers")
+        ).pack(anchor="w", pady=(8, 0))
+        manual = self.advanced(page, "Написать вместо голоса")
+        self.manual_input = manual.master
+        row = tk.Frame(manual, bg=self.theme["card"])
+        row.pack(fill="x", padx=12, pady=12)
         self.command_entry = ttk.Entry(row, font=("Segoe UI", 12))
-        self.command_entry.pack(side="left", fill="x", expand=True, ipady=3)
+        self.command_entry.pack(side="left", fill="x", expand=True)
         self.command_entry.bind("<Return>", lambda e: self.execute_command())
         self.command_entry.bind("<Up>", lambda e: self._repeat_command())
         self.command_entry.bind("<Down>", lambda e: self._repeat_command(1))
-        ttk.Button(
-            row, text="Выполнить  →", style="Accent.TButton", command=self.execute_command
-        ).pack(side="right", padx=(10, 0))
-        shortcuts = tk.Frame(card, bg=self.theme["card"])
-        shortcuts.pack(fill="x", pady=(14, 16))
-        for title, command in (
-            ("План на сегодня", "план на сегодня"),
-            ("Таймер на 5 минут", "таймер на пять минут"),
-        ):
-            ttk.Button(
-                shortcuts, text=title, command=lambda c=command: self.runtime.submit(c)
-            ).pack(side="left", padx=(0, 8))
-        ttk.Button(
-            shortcuts, text="Открыть музыку", command=lambda: self.switch_page("music")
-        ).pack(side="left")
-        self.command_result = self.label(card, "Я здесь. Чем помочь?", wraplength=690)
-        self.command_result.pack(anchor="w", fill="x", pady=(0, 8))
-        self.label(card, textvariable=self.queue_var, muted=True, wraplength=680).pack(anchor="w")
-        tools = self.advanced(card, "Избранное и очередь команд")
+        ttk.Button(row, text="Выполнить", command=self.execute_command).pack(
+            side="right", padx=(8, 0)
+        )
+        self.label(manual, textvariable=self.queue_var, muted=True, wraplength=660).pack(
+            anchor="w", padx=12
+        )
+        tools = tk.Frame(manual, bg=self.theme["card"])
+        tools.pack(fill="x", padx=12, pady=12)
         ttk.Button(tools, text="Сохранить команду", command=self._save_favorite).pack(side="left")
         ttk.Button(tools, text="Очистить очередь", command=self._clear_pending).pack(
             side="left", padx=8
         )
-        row = tk.Frame(page, bg=self.theme["bg"])
-        row.pack(fill="x")
-        for column in (0, 1):
-            row.columnconfigure(column, weight=1, uniform="home")
-        left = tk.Frame(row, bg=self.theme["bg"])
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        right = tk.Frame(row, bg=self.theme["bg"])
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        card = self.card(left, "Голос")
-        self.label(card, textvariable=self.voice_var, muted=True).pack(anchor="w", pady=(0, 12))
-        buttons = tk.Frame(card, bg=self.theme["card"])
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Включить", command=self._start_voice).pack(
-            side="left", padx=(0, 6)
-        )
-        ttk.Button(buttons, text="Выключить", command=self.runtime.stop_voice).pack(side="left")
-        card = self.card(right, "Ваш день")
-        self.overview_label = self.label(card, "Крест готова к работе", muted=True, wraplength=320)
-        self.overview_label.pack(anchor="w", pady=(0, 8))
-        ttk.Button(
-            card, textvariable=self.reminder_var, command=lambda: self.switch_page("timers")
-        ).pack(anchor="w")
-        card = self.advanced(self.card(page, "История"), "Последние события")
+        history = self.advanced(page, "Последние события")
         self.event_text = tk.Text(
-            card,
+            history,
             height=7,
             bg=self.theme["sidebar"],
             fg=self.theme["text"],
@@ -599,7 +667,12 @@ class ControlCenterApp(
 
     def _focus_command(self):
         self.switch_page("actions")
-        self.canvases["actions"].yview_moveto(0)
+        if not self.manual_input.opened:
+            self.manual_input.toggle()
+        self.update_idletasks()
+        self.canvases["actions"].yview_moveto(
+            self.manual_input.winfo_y() / max(1, self.page_bodies["actions"].winfo_height())
+        )
         self.command_entry.focus_set()
         return "break"
 
@@ -787,9 +860,7 @@ class ControlCenterApp(
         ).pack(anchor="w", pady=10)
 
     def refresh_skills(self):
-        if hasattr(self.runtime.manager, "refresh"):
-            self.runtime.manager.refresh()
-        if not hasattr(self, "skill_tree"):
+        if "skills" not in self._built_pages:
             return
         selected = self.skill_tree.selection()
         self.skill_tree.delete(*self.skill_tree.get_children())
@@ -845,10 +916,9 @@ class ControlCenterApp(
         if not examples:
             self.status_var.set("Введите команду по шаблону из описания навыка.")
             return
-        self.switch_page("actions")
+        self._focus_command()
         self.command_entry.delete(0, "end")
         self.command_entry.insert(0, examples[0])
-        self.command_entry.focus_set()
 
     def build_timers_tab(self):
         card = self.card(
@@ -1015,7 +1085,7 @@ class ControlCenterApp(
         self.reminder_var.set(
             f"Непрочитанных напоминаний: {len(items)}" if items else "Нет непрочитанных напоминаний"
         )
-        if items == self._reminder_rows:
+        if "timers" not in self._built_pages or items == self._reminder_rows:
             return
         self._reminder_rows = items
         selected = self.reminder_tree.selection()
@@ -1034,6 +1104,8 @@ class ControlCenterApp(
             self.reminder_tree.selection_set(selected[0])
 
     def _update_timers(self):
+        if "timers" not in self._built_pages:
+            return
         selected = self.timer_tree.selection()
         rows = []
         for kind, items in self.runtime.state.snapshot().items():
@@ -1069,10 +1141,6 @@ class ControlCenterApp(
                 self.timer_tree.selection_add(key)
 
     def build_api_tab(self):
-        self.api_entries = {}
-        self.service_labels = {}
-        self.service_details = {}
-        self.service_buttons = {}
         groups = [
             (
                 "Telegram Terminal",
@@ -1428,7 +1496,7 @@ class ControlCenterApp(
         data["api_keys"].update({key: var.get().strip() for key, var in self.api_vars.items()})
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
         data["dota_guide"].update({key: var.get() for key, var in self.dota_vars.items()})
-        if hasattr(self, "core_settings_draft"):
+        if "kernel" in self._built_pages:
             data.update(self.core_settings_draft())
         return data
 
@@ -1456,7 +1524,8 @@ class ControlCenterApp(
         self.status_var.set("Настройки сохранены. Для ботов и моделей нужен перезапуск.")
         self.home_greeting.configure(text="Привет, " + self.owner_var.get() + ".")
         self.refresh_skills()
-        self._update_steam(force=True)
+        if "steam" in self._built_pages:
+            self._update_steam(force=True)
         if not self.config_mgr.config["skills"].get("gid", True):
             from skills import gid
 
@@ -1489,8 +1558,10 @@ class ControlCenterApp(
                 "alias_name",
                 "alias_target",
             )
+            if hasattr(self, key)
         }
-        core_pending = self.core_draft_values()
+        built_pages = set(self._built_pages)
+        core_pending = self.core_draft_values() if "kernel" in built_pages else None
         self.wf_preserve()
         if self.effects:
             self.effects.close()
@@ -1498,7 +1569,10 @@ class ControlCenterApp(
         self._timer_rows = None
         self._reminder_rows = None
         self.build_ui()
-        self.restore_core_draft(core_pending)
+        for code in built_pages:
+            self._ensure_page(code)
+        if core_pending:
+            self.restore_core_draft(core_pending)
         self.command_entry.insert(0, pending_command)
         for key, value in pending_fields.items():
             target = getattr(self, key)
@@ -1787,7 +1861,8 @@ class ControlCenterApp(
                 self.restore_window()
             elif kind == "skills_changed":
                 self.refresh_skills()
-                self._refresh_skill_imports()
+                if "skills" in self._built_pages:
+                    self._refresh_skill_imports()
             elif kind == "quick_panel":
                 from quick_panel import show_panel
 
@@ -1832,12 +1907,15 @@ class ControlCenterApp(
                         logger.warning("Уведомление трея недоступно; напоминание сохранено в меню")
             elif kind == "shutdown":
                 self._real_quit()
-        self._update_voice_meter()
+        if self.state() == "normal" and self.current_page in ("actions", "voice"):
+            self._update_voice_meter()
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
             self._last_refresh = now
             statuses = self.integration.refresh()
             for key, (filename, title) in self.integration.MODULES.items():
+                if filename not in self.service_labels:
+                    continue
                 if filename not in self.busy_services:
                     detail = self.integration.details(filename)
                     self.service_labels[filename].configure(
@@ -1877,8 +1955,12 @@ class ControlCenterApp(
                     button.configure(state="normal" if enabled else "disabled")
             self._update_timers()
             self._update_reminders()
-            self._update_workflows()
+            if self.current_page in self.CORE_PAGES:
+                self._update_workflows()
             self._update_license_view()
+            if self.current_page in self.BOT_PAGES and not self.config_mgr.is_premium():
+                if self.pages[self.current_page].winfo_manager():
+                    self.switch_page(self.current_page)
             if (
                 not self.config_mgr.is_premium()
                 and self.integration.processes
@@ -1895,11 +1977,13 @@ class ControlCenterApp(
                 self._background(enforce)
             if not self.config_mgr.is_premium() and self.theme_var.get() in PREMIUM_THEMES:
                 self.apply_theme("Amethyst Modern")
-            self.download_label.configure(text=self.runtime.download_status)
-            self._update_steam()
+            if self.current_page == "settings":
+                self.download_label.configure(text=self.runtime.download_status)
+            if self.current_page == "steam" and "steam" in self._built_pages:
+                self._update_steam()
             current, pending = self.runtime.command_status()
             self.queue_var.set(
-                ("Выполняется: " + current[:100] if current else "Готов к командам")
+                ("Выполняется: " + current[:100] if current else "Ожидаю обращение «Крест»")
                 + f" · В очереди: {pending}"
             )
             from skills import gid
@@ -1909,17 +1993,18 @@ class ControlCenterApp(
                 if hasattr(self.runtime, "client")
                 else gid.service_status()
             )
-            self.dota_label.configure(
-                text=(f"GSI: порт {info['port']}" if info["running"] else "GSI выключен")
-                + f" · Время матча: {info['match_seconds'] // 60}:{info['match_seconds'] % 60:02}"
-            )
+            if self.current_page == "dota":
+                self.dota_label.configure(
+                    text=(f"GSI: порт {info['port']}" if info["running"] else "GSI выключен")
+                    + f" · Время матча: {info['match_seconds'] // 60}:{info['match_seconds'] % 60:02}"
+                )
             self.overview_label.configure(
                 text=f"{len(self.runtime.manager.catalog())} навыков готовы  ·  "
                 f"{len(self.runtime.state.snapshot()['active_timers'])} активных таймеров  ·  "
                 f"{len(self.integration.processes)} подключённых сервисов"
             )
         if self.winfo_exists():
-            self._poll_job = self.after(100, self._poll)
+            self._poll_job = self.after(150 if self.state() == "normal" else 600, self._poll)
 
     def _real_quit(self):
         if self.closing:

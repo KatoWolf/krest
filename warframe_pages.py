@@ -50,6 +50,7 @@ class WarframePages:
         self.wf_texts = {}
         self.wf_refreshing = False
         self.wf_refreshed = 0
+        self.wf_vision = tk.StringVar(self, value="Ожидаю активное окно Warframe")
         self.wf_status = tk.StringVar(self, value="Игра не обнаружена")
         self.wf_source = tk.StringVar(
             self, value="Данные мира ещё не запрошены. Личные записи доступны без сети."
@@ -290,6 +291,9 @@ class WarframePages:
         )
         if status["busy"]:
             label += " · " + status["operation"]
+        self.wf_vision.set(
+            data.get("status", {}).get("vision", {}).get("status", "Ожидаю активное окно Warframe")
+        )
         self.wf_status.set(label)
         source = (
             ("Сохранённые данные" if status["stale"] else "Обновлено")
@@ -410,6 +414,9 @@ class WarframePages:
             "Мир игры, личные планы и важные события. Цели и таймеры остаются с вами после закрытия меню.",
         )
         self.label(card, textvariable=self.wf_status, muted=True).pack(anchor="w", pady=(0, 12))
+        self.label(card, textvariable=self.wf_vision, muted=True, wraplength=650).pack(
+            anchor="w", pady=(0, 10)
+        )
         self.wf_buttons(
             card,
             [
@@ -1191,7 +1198,7 @@ class WarframePages:
         self.field(card, "Размер, 32–96 px", self.wf_vars["overlay_size"])
         self.label(
             card,
-            "Для наложения используйте оконный режим без рамки. «Наблюдаю» означает контроль процессов и событий; содержимое экрана не анализируется.",
+            "Для наложения используйте оконный режим без рамки. Чтение экрана выполняется отдельно через Windows OCR; его состояние видно в «Навигаторе». Кадры не сохраняются.",
             muted=True,
             wraplength=680,
         ).pack(anchor="w", pady=8)
@@ -1216,6 +1223,7 @@ class WarframePages:
         self.field(card, "Программы .exe через ,", self.wf_vars["volume_apps"])
         self.field(card, "Их громкость, %", self.wf_vars["volume_percent"])
         for key, label in [
+            ("vision_enabled", "Читать активное окно игры локально каждые 15 секунд"),
             ("capture_on_bookmark", "При метке сохранять скриншот активного окна Warframe"),
             ("clip_on_bookmark", "При метке запросить последний клип Game Bar"),
         ]:

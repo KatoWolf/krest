@@ -5,7 +5,6 @@ Importing this module never loads a model, opens an audio device or creates a wi
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from pathlib import Path
 import importlib.util
 import importlib
 import logging
@@ -104,51 +103,58 @@ def speak(text):
 
 def local_models_ready(settings):
     """Only inspect paths: this does not import models or open a microphone."""
-    cfg = settings.get("app_settings", {})
-    base = Path(__file__).resolve().parent
-    return (base / cfg.get("vosk_path", "model")).is_dir() and (
-        base / cfg.get("silero_path", "model_silero.pt")
-    ).is_file()
+    from voice_models import discover_models
+
+    return bool(discover_models(settings)["vosk_path"])
 
 
 def enable():
     global _engine, _model_signature
+    from voice_models import discover_models
+
     with _engine_lock:
         if _engine is not None:
             return
-        cfg = _settings().get("app_settings", {})
-        signature = (
-            cfg.get("vosk_path", "model"),
-            cfg.get("silero_path", "model_silero.pt"),
-        )
+        models = discover_models(_settings())
+        signature = tuple(models.values())
         missing = [
             name
-            for name in ("torch", "vosk", "sounddevice", "numpy", "num2words")
+            for name in ("vosk", "sounddevice", "numpy")
             if importlib.util.find_spec(name) is None
         ]
         if missing:
             raise RuntimeError(
                 "Установите requirements-voice.txt. Не найдены: " + ", ".join(missing)
             )
-        base = Path(__file__).resolve().parent
-        if not (base / signature[0]).is_dir() or not (base / signature[1]).is_file():
-            raise RuntimeError("Выберите существующие модели Vosk и Silero на странице настроек.")
+        if not models["vosk_path"]:
+            raise RuntimeError(
+                "Не найдена модель распознавания. Положите распакованную папку Vosk в model "
+                "рядом с main.py. Внутри нужны am/final.mdl и conf/model.conf. Затем нажмите «Подключить голос»."
+            )
         import config
 
         importlib.reload(config)
+        # Pass discovered paths before import: the engine initializes its models once.
+        config.MODEL_VOSK_PATH = models["vosk_path"]
+        config.MODEL_SILERO_PATH = models["silero_path"]
+        was_loaded = "voice_engine" in __import__("sys").modules
         engine = importlib.import_module("voice_engine")
-        if _model_signature is not None and signature != _model_signature:
+        if was_loaded and (signature != _model_signature or engine.rec is None):
             engine = importlib.reload(engine)
         _model_signature = signature
         engine.configure(_settings)
-        if engine.rec is None or engine.model_tts is None:
-            raise RuntimeError("Не загружены модели Vosk/Silero. Проверьте пути в настройках.")
+        if engine.rec is None:
+            raise RuntimeError(
+                "Модель Vosk найдена, но не загрузилась: "
+                + engine.metrics.get("model_error", "проверьте целостность файлов")
+            )
+        engine.metrics.update(models=models, tts_ready=engine.model_tts is not None)
         try:
             active = engine.stream is not None and engine.stream.active
         except Exception:
             active = False
         if not active:
-            engine.start_microphone()  # Keep the listener alive so a newly connected microphone can recover.
+            engine.start_microphone()
         _engine = engine
 
 
