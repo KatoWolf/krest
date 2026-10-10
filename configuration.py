@@ -1,0 +1,147 @@
+"""Validated application settings. Secrets remain in the local, ignored config file."""
+
+import copy
+import json
+import os
+from pathlib import Path
+import shutil
+import time
+import threading
+from storage import atomic_write_json
+
+CONFIG_PATH = Path(os.getenv("KREST_CONFIG_PATH", Path(__file__).resolve().parent / "config.json"))
+DEFAULT_CONFIG = {
+    "owner_name": "КатоВульф",
+    "selected_theme": "Amethyst Modern",
+    "app_settings": {
+        "autostart": False,
+        "minimize_to_tray": True,
+        "close_to_tray": True,
+        "voice_enabled": True,
+        "voice_volume": 80,
+        "wake_word": "крест",
+        "active_timeout": 6,
+        "indicator_enabled": True,
+        "weather_city": "Москва",
+        "microphone": "",
+        "vosk_path": "model",
+        "silero_path": "model_silero.pt",
+    },
+    "api_keys": dict.fromkeys(
+        (
+            "steam_api_key",
+            "steam_id",
+            "discord_token",
+            "discord_channel_id",
+            "telegram_api_id",
+            "telegram_api_hash",
+            "telegram_phone",
+            "krest_bot_token",
+            "telegram_owner_id",
+            "telegram_channel_id",
+        ),
+        "",
+    ),
+    "dota_guide": {
+        "process_name": "dota2.exe",
+        "warning_lead_time": 30,
+        "gsi_port": 3000,
+        "enabled": False,
+        "auto_mode": False,
+    },
+    "skills": {
+        name: True
+        for name in (
+            "basic",
+            "interactive",
+            "meta",
+            "media",
+            "utils",
+            "timers_alarms",
+            "system_mon",
+            "webo",
+            "windows",
+            "gid",
+        )
+    },
+}
+
+
+def merge(default, values):
+    result = copy.deepcopy(default)
+    for key, value in values.items():
+        if key in result and isinstance(result[key], dict):
+            if not isinstance(value, dict):
+                raise ValueError(f"Раздел {key} должен быть объектом JSON")
+            result[key] = merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def validate(data):
+    if not str(data["owner_name"]).strip():
+        raise ValueError("Введите имя пользователя")
+    for section in ("app_settings", "skills", "dota_guide"):
+        for key, default in DEFAULT_CONFIG[section].items():
+            if isinstance(default, bool) and not isinstance(data[section].get(key), bool):
+                raise ValueError(f"{key}: требуется логический переключатель")
+    app = data["app_settings"]
+    if not str(app["wake_word"]).strip() or len(str(app["wake_word"]).split()) != 1:
+        raise ValueError("Обращение должно состоять из одного слова")
+    for section, key, lo, hi in [
+        ("app_settings", "voice_volume", 0, 100),
+        ("app_settings", "active_timeout", 1, 60),
+        ("dota_guide", "gsi_port", 1024, 65535),
+        ("dota_guide", "warning_lead_time", 0, 120),
+    ]:
+        value = data[section][key]
+        if isinstance(value, bool) or not str(value).isdigit() or not lo <= int(value) <= hi:
+            raise ValueError(f"{key}: требуется целое число от {lo} до {hi}")
+        data[section][key] = int(value)
+    for key in ("telegram_owner_id", "telegram_api_id"):
+        value = data["api_keys"].get(key)
+        if value and (not str(value).isdigit() or int(value) <= 0):
+            raise ValueError(f"{key}: требуется положительный числовой ID")
+    for key in ("telegram_channel_id", "discord_channel_id"):
+        value = str(data["api_keys"].get(key, ""))
+        if value and not value.lstrip("-").isdigit():
+            raise ValueError(f"{key}: требуется числовой ID")
+    return data
+
+
+class ConfigManager:
+    def __init__(self, filepath=CONFIG_PATH):
+        self.filepath = Path(filepath)
+        self._lock = threading.RLock()
+        self.load_error = ""
+        self.config = self.load_config()
+
+    def load_config(self):
+        if not self.filepath.exists():
+            return copy.deepcopy(DEFAULT_CONFIG)
+        try:
+            data = json.loads(self.filepath.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Ожидался объект JSON")
+            return validate(merge(DEFAULT_CONFIG, data))
+        except (ValueError, OSError) as exc:
+            self.load_error = str(exc)
+            return copy.deepcopy(DEFAULT_CONFIG)
+
+    def snapshot(self):
+        with self._lock:
+            return copy.deepcopy(self.config)
+
+    def save_config(self, data=None):
+        with self._lock:
+            candidate = validate(merge(DEFAULT_CONFIG, data if data is not None else self.config))
+            if self.load_error and self.filepath.exists():
+                backup = self.filepath.with_name(self.filepath.name + f".broken-{time.time_ns()}")
+                shutil.copy2(self.filepath, backup)
+            atomic_write_json(self.filepath, candidate)
+            self.config = candidate
+            self.load_error = ""
+
+    def is_premium(self):
+        return True  # Legacy GUI compatibility; local features are available without activation.
