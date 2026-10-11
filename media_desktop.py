@@ -22,7 +22,7 @@ def request(operation, data=None, action=""):
     # Frozen Windows can decode stdin using the legacy console codepage.
     # Keep the wire protocol ASCII; JSON restores Cyrillic labels exactly.
     payload = json.dumps(
-        {"operation": operation, "data": data or {}, "action": action}, ensure_ascii=False
+        {"operation": operation, "data": data or {}, "action": action}, ensure_ascii=True
     )
     try:
         result = subprocess.run(
