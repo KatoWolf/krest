@@ -114,7 +114,7 @@ def endpoint_volume():
     from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
     from ctypes import cast, POINTER
 
-    comtypes.CoInitialize()
+    comtypes.CoInitializeEx()
     try:
         speakers = AudioUtilities.GetSpeakers()
         if hasattr(speakers, "EndpointVolume"):

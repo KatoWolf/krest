@@ -13,7 +13,7 @@ a = Analysis(
     [str(root / "main.py")], pathex=[str(root)],
     binaries=collect_dynamic_libs("vosk"),
     datas=[(str(root / "assets"), "assets"), (str(root / "license_public_key.pem"), "."), (str(root / "packaging/NOTICE.txt"), ".")],
-    hiddenimports=hidden, hookspath=[], runtime_hooks=[],
+    hiddenimports=hidden, hookspath=[], runtime_hooks=[str(root / "packaging/rthook_com.py")],
     excludes=["pytest", "_pytest", "tests", "ruff", "nuitka", "pyarmor", "PyInstaller"],
     noarchive=False,
 )

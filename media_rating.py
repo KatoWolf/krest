@@ -93,8 +93,11 @@ def uia_apartment():
     if os.name != "nt":
         yield
         return
-    # Let pywinauto negotiate the process COM mode before importing comtypes.
-    # Forcing MTA after comtypes' implicit STA initialization raises 0x80010106.
+    import sys
+
+    # Also cover direct use of the adapter outside main.py. Bootstrap sets this
+    # before imports in normal source/EXE launches, so UIA's singleton is MTA.
+    sys.coinit_flags = 0
     try:
         import pywinauto  # noqa: F401
         import comtypes
@@ -109,7 +112,9 @@ def uia_apartment():
     except OSError as exc:
         if (getattr(exc, "winerror", 0) or 0) & 0xFFFFFFFF != 0x80010106:
             raise
-        # An existing apartment is usable, but wasn't acquired by this scope.
+        raise MediaError(
+            "Доступ к кнопкам плеера занят другим режимом Windows. Полностью перезапустите Крест, включая ядро в трее."
+        ) from exc
     try:
         yield
     finally:

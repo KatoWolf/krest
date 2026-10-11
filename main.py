@@ -10,6 +10,10 @@ def configure_output():
     """Frozen Python ignores PYTHONIOENCODING; pipes still need Unicode output."""
     import sys
 
+    if sys.platform == "win32":
+        # UI Automation's shared COM objects are used by kernel/GUI workers.
+        # Creating them in STA can deadlock when the main thread waits for a worker.
+        sys.coinit_flags = 0  # COINIT_MULTITHREADED, before any Windows imports
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:

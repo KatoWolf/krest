@@ -11,7 +11,7 @@ def com_context(operation):
             raise ValueError("Управление звуком доступно в Windows")
         import comtypes
 
-        comtypes.CoInitialize()
+        comtypes.CoInitializeEx()
         try:
             return operation(*args, **kwargs)
         finally:
