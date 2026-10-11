@@ -24,6 +24,33 @@ SCREENS = (
     ("foundry", "Кузница", ("кузница", "foundry")),
     ("arsenal", "Арсенал", ("арсенал", "arsenal")),
     ("navigation", "Навигация", ("звездная карта", "star chart")),
+    (
+        "disruption",
+        "Сбой · проводники",
+        (
+            "защитите проводник",
+            "защитите проводники",
+            "найдите ключи",
+            "conduits defended",
+            "defend the conduit",
+            "conduits activated",
+        ),
+    ),
+    (
+        "survival",
+        "Выживание",
+        (
+            "поддержка жизнеобеспечения",
+            "уровень жизнеобеспечения",
+            "life support system",
+            "life support remaining",
+        ),
+    ),
+    (
+        "revive",
+        "Ожидание возрождения",
+        ("ожидание возрождения", "удерживайте для возрождения", "hold to revive"),
+    ),
 )
 
 
@@ -37,6 +64,9 @@ def classify_screen(text):
 
 
 SCREEN_HINTS = {
+    "disruption": "Сбой: подберите подходящий ключ, активируйте проводник и найдите демолиста по звуку. «Варфрейм аполлон» — план фарма Акси; «открой сводку по миру» — события.",
+    "survival": "Следите за жизнеобеспечением и точкой эвакуации. «Мои цели варфрейм» — ваш список фарма.",
+    "revive": "Игра показывает возрождение. Проверьте оставшиеся попытки и возможность помощи союзника.",
     "mission_complete": "Миссия завершена. Скажите «варфрейм сохрани момент» или «мои цели варфрейм».",
     "mission_failed": "Проверьте выживаемость и моды. «Варфрейм проверь билд» и название сохранённой сборки.",
     "relic_reward": "Сравните нужные вам компоненты. «Варфрейм рынок» и название предмета — поиск цены.",
@@ -72,9 +102,8 @@ async def _read_image(image):
         raise RuntimeError(
             "В Windows не установлен язык распознавания текста. Добавьте русский или английский язык в параметрах Windows."
         )
-    image.thumbnail(
-        (min(1600, OcrEngine.max_image_dimension), min(1600, OcrEngine.max_image_dimension))
-    )
+    limit = min(1600, int(getattr(OcrEngine, "max_image_dimension", 1600)))
+    image.thumbnail((limit, limit))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     stream = InMemoryRandomAccessStream()
@@ -167,11 +196,15 @@ class GameVision:
             return
         if self.closed.is_set() or now < self.next_scan or (self.thread and self.thread.is_alive()):
             return
-        self.next_scan = now + 15
+        # Confirm transitions promptly; stable screens need fewer OCR calls.
+        self.next_scan = now + (
+            3 if self.candidate != self.confirmed or self.candidate == "relic_reward" else 8
+        )
         self.thread = threading.Thread(target=self.scan, daemon=True, name="krest-game-ocr")
         self.thread.start()
 
     def scan(self):
+        started = time.monotonic()
         with self.lock:
             self.state["busy"] = True
         try:
@@ -179,6 +212,8 @@ class GameVision:
             if self.closed.is_set() or not self.allowed():
                 return
             code = result["screen"]
+            if code != self.candidate and code != "unknown":
+                self.next_scan = min(self.next_scan, time.time() + 3)
             feature = result.pop("feature", None)
             result.update(visual_guess="unknown", visual_label="")
             if self.memory:
@@ -231,6 +266,8 @@ class GameVision:
         finally:
             with self.lock:
                 self.state["busy"] = False
+                self.state["scan_ms"] = round((time.monotonic() - started) * 1000)
+                self.state["confirmed"] = self.confirmed
 
     def close(self):
         self.closed.set()

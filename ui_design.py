@@ -49,7 +49,7 @@ def apply_style(root, colours):
         ("Nav.TButton", c["sidebar"], c["card_hover"], c["sub_text"]),
         ("Selected.Nav.TButton", c["glow"], c["card_hover"], c["text"]),
         ("Tab.TButton", c["bg"], c["card_hover"], c["sub_text"]),
-        ("Selected.Tab.TButton", c["glow"], c["card_hover"], c["accent"]),
+        ("Selected.Tab.TButton", c["glow"], c["card_hover"], c["text"]),
     ]:
         style.configure(
             name,
@@ -60,6 +60,11 @@ def apply_style(root, colours):
             relief="flat",
             focusthickness=0,
             anchor="w" if "Nav" in name else "center",
+            font=(
+                UI_FONT,
+                12 if "Nav" in name else 11,
+                "bold" if name.startswith("Selected") else "normal",
+            ),
         )
         style.map(
             name,

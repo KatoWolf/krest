@@ -4,7 +4,7 @@ from pathlib import Path
 import hashlib
 import json
 
-PERMISSIONS = {"notifications", "refresh"}
+PERMISSIONS = {"notifications", "refresh", "discord_control"}
 
 
 def inspect_plugin(script):

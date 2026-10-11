@@ -4,13 +4,14 @@ SMTC handles transport controls; it has no rating API. Ratings require a named
 button in the current-track panel. Never guess a click position or send hotkeys.
 """
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import os
 import re
 import time
 
 import psutil
 from media_control import MediaError
+from desktop_access import expose_window
 
 LABELS = {
     "like": {
@@ -264,7 +265,7 @@ def _has_track(elements, data):
     return title_found
 
 
-def find_player_window(data):
+def find_player_window(data, stack=None):
     names = player_processes(data["app_id"])
     try:
         from pywinauto import Desktop
@@ -278,9 +279,15 @@ def find_player_window(data):
             pids.add(proc.info["pid"])
     # Native discovery also works when Electron hasn't exposed its UIA tree yet.
     handles = []
-    for window in Desktop(backend="win32").windows():
+    for window in Desktop(backend="win32").windows(visible_only=False, enabled_only=False):
         try:
-            if window.process_id() in pids and window.is_visible():
+            if (
+                window.process_id() in pids
+                and window.class_name().startswith("Chrome_WidgetWin_")
+                and len(handles) < 8
+            ):
+                if stack is not None:
+                    stack.enter_context(expose_window(window))
                 handles.append(window.handle)
         except Exception:
             continue
@@ -290,11 +297,11 @@ def find_player_window(data):
         try:
             _enable_accessibility(handle)
             window = desktop.window(handle=handle).wrapper_object()
-            for attempt in range(3):
+            for attempt in range(8):
                 if _has_track(_elements(window), data):
                     windows.append(window)
                     break
-                if attempt < 2:
+                if attempt < 7:
                     time.sleep(0.2)
         except Exception:
             continue
@@ -372,8 +379,8 @@ def track_buttons(window, data):
 
 
 def perform_rating(data, action):
-    with uia_apartment():
-        window = find_player_window(data)
+    with uia_apartment(), ExitStack() as stack:
+        window = find_player_window(data, stack)
         refresh = lambda: track_buttons(window, data)
         # Recheck the panel with the expected title before and after invocation.
         return apply_rating(
@@ -399,8 +406,8 @@ def change_rating(data, action):
 
 
 def inspect_player(data):
-    with uia_apartment():
-        window = find_player_window(data)
+    with uia_apartment(), ExitStack() as stack:
+        window = find_player_window(data, stack)
         buttons = track_buttons(window, data)
         candidates = [b for b in buttons if _label(b) in set().union(*LABELS.values())]
         lines = [f"Кнопок отметки найдено: {len(candidates)}"]

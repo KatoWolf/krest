@@ -4,7 +4,7 @@ import ctypes
 import os
 from pathlib import Path
 
-UI_FONT = "Roboto"
+UI_FONT = "Segoe UI" if os.name == "nt" else "Roboto"
 _loaded = False
 
 

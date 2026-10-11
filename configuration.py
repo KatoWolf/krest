@@ -63,6 +63,8 @@ DEFAULT_CONFIG = {
         "speech_pause_ms": 700,
         "speech_threshold": 200,
         "speech_auto_threshold": True,
+        "voice_fast_commands": True,
+        "voice_headphones": False,
         "speech_confidence": 60,
         "tts_threads": 2,
         "voice_effect": True,

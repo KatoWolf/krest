@@ -46,7 +46,10 @@ class KernelTray:
                         "Без озвучки", mute, checked=lambda item: self.kernel.runtime.state.is_muted
                     ),
                     pystray.MenuItem(
-                        "Выключить микрофон", lambda *args: self.kernel.runtime.stop_voice()
+                        "Возобновить прослушивание", lambda *args: self.kernel.runtime.arm_voice()
+                    ),
+                    pystray.MenuItem(
+                        "Пауза прослушивания", lambda *args: self.kernel.runtime.stop_voice()
                     ),
                     pystray.Menu.SEPARATOR,
                     pystray.MenuItem("Завершить работу", quit_all),

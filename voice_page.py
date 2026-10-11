@@ -58,6 +58,16 @@ class VoicePages:
             variable=self.settings_vars["speech_auto_threshold"],
         ).pack(anchor="w", pady=4)
         tuning = self.advanced(card, "Точная настройка распознавания")
+        ttk.Checkbutton(
+            card,
+            text="Быстро завершать короткие команды музыки и микрофона",
+            variable=self.settings_vars["voice_fast_commands"],
+        ).pack(anchor="w", pady=4)
+        ttk.Checkbutton(
+            card,
+            text="Я в наушниках: слышать команды во время ответа",
+            variable=self.settings_vars["voice_headphones"],
+        ).pack(anchor="w", pady=4)
         for key, label in (
             ("speech_pause_ms", "Пауза в конце, мс"),
             ("speech_threshold", "Порог речи, 20–5000"),

@@ -12,7 +12,7 @@ for package in ("skills", "vosk", "winsdk", "pywinauto", "pycaw", "comtypes", "t
 a = Analysis(
     [str(root / "main.py")], pathex=[str(root)],
     binaries=collect_dynamic_libs("vosk"),
-    datas=[(str(root / "assets"), "assets"), (str(root / "license_public_key.pem"), "."), (str(root / "packaging/NOTICE.txt"), ".")],
+    datas=[(str(root / "assets"), "assets"), (str(root / "license_public_key.pem"), "."), (str(root / "packaging/NOTICE.txt"), "."), (str(root / "bot_bridge_adapter.py"), ".")],
     hiddenimports=hidden, hookspath=[], runtime_hooks=[],
     excludes=["pytest", "_pytest", "tests", "ruff", "nuitka", "pyarmor", "PyInstaller"],
     noarchive=False,

@@ -181,6 +181,8 @@ class IntegrationManager:
             custom = settings.get("services", {}).get(filename, {}).get("path")
             allowed = self.BUILTIN_COMMANDS.get(filename, set()) if not custom else set()
             allowed = allowed | ({"refresh"} if "refresh" in permissions else set())
+            if filename == "ds_session.py" and "discord_control" in permissions:
+                allowed |= {"refresh", "channels", "send_message"}
             self.bridge[filename] = {
                 **self.bridge.get(filename, {}),
                 "text": message,
@@ -354,7 +356,12 @@ class IntegrationManager:
                 KREST_CONFIG_PATH=str(self.app.config_mgr.filepath),
                 KREST_DATA_DIR=str(self.app.config_mgr.filepath.parent),
                 KREST_SERVICE_ID=filename,
-                KREST_SERVICE_TOKEN=settings.get("services", {}).get(filename, {}).get("token", ""),
+                KREST_SERVICE_TOKEN=settings.get("services", {}).get(filename, {}).get("token", "")
+                or (
+                    settings.get("api_keys", {}).get("discord_token", "")
+                    if filename == "ds_session.py"
+                    else ""
+                ),
                 PYTHONPATH=str(self.base_dir) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             )
             from app_paths import compiled, app_command
@@ -366,9 +373,19 @@ class IntegrationManager:
                 if compiled()
                 else [sys.executable, "-u", self.path(filename)]
             )
+            if custom:
+                folder = Path(self.path(filename)).parent
+                interpreters = [
+                    folder / name / executable
+                    for name in (".venv", "venv")
+                    for executable in ("Scripts/python.exe", "bin/python")
+                ]
+                interpreter = next((path for path in interpreters if path.is_file()), None)
+                if interpreter:
+                    command = [str(interpreter), "-u", self.path(filename)]
             proc = subprocess.Popen(
                 command,
-                cwd=self.base_dir,
+                cwd=Path(self.path(filename)).parent if custom else self.base_dir,
                 env=env,
                 stdout=subprocess.PIPE,
                 stdin=subprocess.PIPE,

@@ -217,7 +217,15 @@ def _start_service(settings=None):
         DOTA_PROCESS_NAME = settings.get("process_name", DOTA_PROCESS_NAME).lower()
         dota_state.auto_mode = bool(settings.get("auto_mode", True))
         _setup_settings = dict(settings)
-        server = HTTPServer(("127.0.0.1", GSI_PORT), GSIDataHandler)
+        try:
+            server = HTTPServer(("127.0.0.1", GSI_PORT), GSIDataHandler)
+        except OSError as exc:
+            import errno
+
+            if exc.errno not in (errno.EADDRINUSE, 10048):
+                raise
+            server = HTTPServer(("127.0.0.1", 0), GSIDataHandler)
+        GSI_PORT = server.server_port
         _server = server
         _service_stop.clear()
         _threads = [
@@ -270,7 +278,55 @@ def service_status():
         "config_file": dota_state.config_file,
         "hero": dict(dota_state.hero),
         "player": dict(dota_state.player),
+        "diagnosis": connection_diagnosis(),
     }
+
+
+def connection_diagnosis():
+    if _server is None:
+        return "Гид выключен. Нажмите «Играть с гидом», чтобы подготовить связь и запустить Dota."
+    if not dota_state.gsi_configured:
+        return dota_state.setup_message
+    if not dota_state.dota_running:
+        return "Файл GSI готов. Ожидаю запуск Dota 2."
+    age = time.time() - dota_state.last_gsi_update
+    if not dota_state.last_gsi_update or age > 15:
+        return "Dota запущена, но свежих данных нет. Нужен параметр запуска -gamestateintegration; после первого подключения перезапустите игру через «Играть с гидом»."
+    return f"Данные Dota получены {max(0, int(age))} сек. назад."
+
+
+@skill(
+    keywords=["проверь связь с дотой", "диагностика доты"],
+    description="Проверить связь Dota GSI и причину отсутствия данных",
+    category="Dota 2",
+)
+def diagnose_dota():
+    return connection_diagnosis()
+
+
+@skill(
+    keywords=["что делать в доте", "подсказка дота", "совет по герою"],
+    description="Короткая подсказка по свежему состоянию героя Dota",
+    category="Dota 2",
+)
+def hero_hint():
+    if time.time() - dota_state.last_gsi_update > 15:
+        return connection_diagnosis()
+    hero = dota_state.hero
+    if hero.get("alive") is False:
+        return "Герой погиб. Пока ждёте возрождения, проверьте предметы и ближайшие тайминги рун."
+    hints = []
+    for key, threshold, text in (
+        ("health_percent", 25, "Мало здоровья — проверьте возможность отойти или восстановиться."),
+        ("mana_percent", 20, "Мало маны — сохраните её для необходимой способности."),
+    ):
+        value = hero.get(key)
+        if type(value) in (int, float) and 0 <= value <= threshold:
+            hints.append(text)
+    return (
+        " ".join(hints)
+        or "«Когда руны» — ближайший тайминг; «сводка матча» — доступные данные о герое."
+    )
 
 
 def dota_timer_loop():

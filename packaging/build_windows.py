@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 
 
 def run_checked(command, **kwargs):
@@ -122,6 +122,11 @@ def audit_distribution(dist):
             for part in relative.parts
         ):
             raise RuntimeError("Служебный файл в сборке: " + str(relative))
+        if path.name == "bot_bridge_adapter.py" and path.parent == Path(dist) / "_internal":
+            # Deliberately exportable adapter, not an application source leak.
+            if path.read_bytes() != (ROOT / "bot_bridge_adapter.py").read_bytes():
+                raise RuntimeError("Экспортируемый адаптер отличается от исходного")
+            continue
         # PyTorch can legitimately need its own .py data for TorchScript introspection.
         if path.suffix == ".py" and (
             relative.parts[0] == "skills"

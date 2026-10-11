@@ -17,7 +17,38 @@ DEFAULT_ALLOWED = [
     "📦 инвентарь cs2",
     "💾 диски",
     "🤝 трейды",
+    "диски",
+    "процессы",
+    "окно",
+    "скриншот",
+    "инвентарь",
+    "трейды",
+    "предыдущий трек",
+    "что играет",
+    "поставь лайк",
+    "мут",
+    "анмут",
+    "список будильников",
+    "сводка варфрейм",
+    "циклы варфрейм",
+    "сводка матча",
+    "заблокируй компьютер",
+    "отмени выключение",
+    "файлы",
+    "файл *",
+    "таймер на *",
+    "напомни через *",
+    "проверь связь с дотой",
 ]
+PARAMETER_COMMANDS = {
+    "таймер на",
+    "напомни через",
+    "файл",
+    "скажи",
+    "поиск",
+    "запусти игру",
+    "запусти программу",
+}
 
 
 def session_locked():
@@ -46,7 +77,12 @@ def authorize(text, settings, locked=None):
     if not cfg.get("enabled", False):
         return False, "Удалённые команды выключены в меню Крест."
     command = text.casefold().strip()
-    if command not in {v.casefold().strip() for v in cfg.get("allowed_commands", DEFAULT_ALLOWED)}:
+    allowed = {v.casefold().strip() for v in cfg.get("allowed_commands", DEFAULT_ALLOWED)}
+    parameter = any(
+        prefix + " *" in allowed and command.startswith(prefix + " ") and len(command) <= 2000
+        for prefix in PARAMETER_COMMANDS
+    )
+    if command not in allowed and not parameter:
         return False, "Команда отсутствует в разрешённом списке меню Крест."
     if (session_locked() if locked is None else locked) and cfg.get("block_when_locked", True):
         return False, "Компьютер заблокирован; удалённое выполнение приостановлено."

@@ -1,12 +1,13 @@
 """Control the local Discord microphone through its own accessible user panel."""
 
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 import time
 
 import psutil
 
 from media_control import MediaError
 from media_rating import _enable_accessibility, _label, _toggle, uia_apartment
+from desktop_access import expose_window as _expose_window
 
 PROCESS_NAMES = {"discord.exe", "discordptb.exe", "discordcanary.exe"}
 MUTE_LABELS = {
@@ -45,16 +46,25 @@ def microphone_button(window):
         if _label(button) not in MUTE_LABELS | UNMUTE_LABELS or not button.is_enabled():
             continue
         parent = button
-        for _ in range(4):
+        for _ in range(8):
             parent = parent.parent()
-            if parent is None or parent == window:
+            if parent is None:
                 break
             controls = _controls(parent)
-            if len(controls) > 25:
+            # The root may also contain another user's context menu. A flat
+            # root is acceptable only when this is its sole microphone control.
+            if (
+                parent == window
+                and sum(_label(c) in MUTE_LABELS | UNMUTE_LABELS for c in controls) != 1
+            ):
+                break
+            if len(controls) > 80:
                 break
             labels = {_label(control) for control in controls}
             if labels & DEAFEN_LABELS and labels & SETTINGS_LABELS:
                 candidates.append(button)
+                break
+            if parent == window:
                 break
     if len(candidates) != 1:
         raise MediaError(
@@ -111,34 +121,12 @@ def apply_microphone(window, action):
                 "Выключила микрофон в Discord." if current else "Включила микрофон в Discord.",
             )
     raise MediaError(
-        "Команда отправлена, но Discord не подтвердил состояние. "
-        "Скажите «Крест, я в муте»."
+        "Команда отправлена, но Discord не подтвердил состояние. Скажите «Крест, я в муте»."
     )
 
 
 def _result(muted, message):
     return {"success": True, "muted": muted, "message": message}
-
-
-@contextmanager
-def _expose_window(window):
-    """Temporarily expose a minimized/tray window without activating it."""
-    import win32con
-    import win32gui
-
-    handle = window.handle
-    hidden = not win32gui.IsWindowVisible(handle)
-    minimized = bool(win32gui.IsIconic(handle))
-    try:
-        if hidden or minimized:
-            win32gui.ShowWindow(handle, win32con.SW_SHOWNOACTIVATE)
-        yield
-    finally:
-        if win32gui.IsWindow(handle):
-            if minimized:
-                win32gui.ShowWindow(handle, win32con.SW_SHOWMINNOACTIVE)
-            if hidden:
-                win32gui.ShowWindow(handle, win32con.SW_HIDE)
 
 
 def perform(action):
@@ -158,30 +146,29 @@ def perform(action):
         native = Desktop(backend="win32")
         desktop = Desktop(backend="uia")
         windows = []
-        for window in native.windows(visible_only=False):
+        for window in native.windows(visible_only=False, enabled_only=False):
             try:
-                if (
-                    window.process_id() not in pids
-                    or window.class_name() != "Chrome_WidgetWin_1"
-                    or not window.window_text()
+                if window.process_id() not in pids or not window.class_name().startswith(
+                    "Chrome_WidgetWin_"
                 ):
                     continue
                 stack.enter_context(_expose_window(window))
                 _enable_accessibility(window.handle)
                 candidate = desktop.window(handle=window.handle).wrapper_object()
-                for attempt in range(3):
+                for attempt in range(8):
                     try:
                         microphone_button(candidate)
                         windows.append(candidate)
                         break
                     except MediaError:
-                        if attempt < 2:
+                        if attempt < 7:
                             time.sleep(0.2)
             except Exception:
                 continue
         if len(windows) != 1:
             raise MediaError(
-                "Не найдено единственное окно Discord с вашим микрофоном. "
-                "Откройте главное окно Discord; если запущены несколько клиентов, оставьте один."
+                "Discord запущен, но не предоставил доступ к вашей кнопке микрофона. "
+                "Проверьте вход в аккаунт и одинаковые права запуска Discord и Крест. "
+                "Если открыты несколько клиентов Discord, оставьте один."
             )
         return apply_microphone(windows[0], action)

@@ -13,6 +13,30 @@ from discord_bot_pages import DiscordBotPages
 
 
 class ServicePages(DiscordBotPages):
+    def _enable_telegram_remote(self):
+        from remote_policy import DEFAULT_ALLOWED
+
+        cfg = self.config_mgr.snapshot()
+        allowed = list(
+            dict.fromkeys([*cfg["remote_control"]["allowed_commands"], *DEFAULT_ALLOWED])
+        )
+        cfg["remote_control"].update(enabled=True, allowed_commands=allowed)
+        try:
+            self.config_mgr.save_config(cfg)
+            if getattr(self, "remote_enabled", None) is not None:
+                self.remote_enabled.set(True)
+            if (
+                getattr(self, "remote_commands", None) is not None
+                and self.remote_commands.winfo_exists()
+            ):
+                self.remote_commands.delete("1.0", "end")
+                self.remote_commands.insert("1.0", "\n".join(allowed))
+            self.status_var.set(
+                "Базовый пульт включён. Запустите Telegram Terminal и отправьте ему /menu."
+            )
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+
     def _startup_checks(self):
         import psutil
 
@@ -88,6 +112,12 @@ class ServicePages(DiscordBotPages):
         ttk.Button(
             row, text="Найти скрипт бота…", command=lambda: self._choose_service_script(filename)
         ).pack(side="left")
+        if filename == "ds_session.py":
+            ttk.Button(
+                options,
+                text="Подключить папку Discord-бота / экспортировать мост…",
+                command=self._connect_discord_folder,
+            ).pack(anchor="w", pady=8)
         self.label(
             row,
             self.service_configs.get(filename, {}).get("path") or "Встроенный скрипт",
@@ -103,12 +133,50 @@ class ServicePages(DiscordBotPages):
             return
         try:
             ast.parse(Path(path).read_text(encoding="utf-8-sig"))
-        except (OSError, SyntaxError, UnicodeError) as exc:
+            if filename == "ds_session.py":
+                from bot_project import connect_project
+
+                path = connect_project(path)
+        except (OSError, ValueError, SyntaxError, UnicodeError) as exc:
             self._report_error("Скрипт не прочитан: " + str(exc))
             return
         self.service_configs.setdefault(filename, {})["path"] = path
         self._mark_dirty()
         self.status_var.set("Скрипт выбран. Сохраните настройки и перезапустите сервис.")
+
+    def _connect_discord_folder(self):
+        from bot_project import entrypoints, connect_project
+
+        folder = filedialog.askdirectory(
+            parent=self, title="Папка вашего Discord-бота (discord.py)"
+        )
+        if not folder:
+            return
+        try:
+            candidates = entrypoints(folder)
+            if not candidates:
+                raise ValueError("В папке нет Python-файлов")
+            chosen = (
+                str(candidates[0])
+                if len(candidates) == 1
+                else filedialog.askopenfilename(
+                    parent=self,
+                    initialdir=folder,
+                    initialfile=candidates[0].name,
+                    title="Какой файл запускает бота?",
+                    filetypes=[("Python", "*.py")],
+                )
+            )
+            if not chosen:
+                return
+            path = connect_project(chosen)
+            self.service_configs.setdefault("ds_session.py", {})["path"] = path
+            self._mark_dirty()
+            self.status_var.set(
+                "Мост экспортирован в папку бота. Исходники сохранены. Сохраните настройки и запустите Discord-бота."
+            )
+        except (OSError, ValueError, SyntaxError, UnicodeError) as exc:
+            self._report_error("Папка не подключена: " + str(exc))
 
     def build_steam_tab(self):
         card = self.card(
@@ -150,6 +218,15 @@ class ServicePages(DiscordBotPages):
             wraplength=680,
         )
         self.steam_status.pack(anchor="w")
+        links = tk.Frame(card, bg=self.theme["card"])
+        links.pack(fill="x", pady=6)
+        for title, url in (
+            ("Проверить Web API Key", "https://steamcommunity.com/dev/apikey"),
+            ("Приватность инвентаря", "https://steamcommunity.com/my/edit/settings"),
+        ):
+            ttk.Button(
+                links, text=title, command=lambda address=url: webbrowser.open(address)
+            ).pack(side="left", padx=(0, 8))
         card = self.card(
             self.page_bodies["steam"],
             "Мои игры",
@@ -176,6 +253,7 @@ class ServicePages(DiscordBotPages):
         ttk.Button(
             card, text="Открыть выбранную игру в Steam", command=self._launch_steam_selection
         ).pack(anchor="w")
+        games_card = card.master
         card = self.card(
             self.page_bodies["steam"],
             "Инвентарь CS2",
@@ -205,6 +283,9 @@ class ServicePages(DiscordBotPages):
         ).pack(anchor="w", pady=8)
         self.steam_notices = self.label(card, "", wraplength=680)
         self.steam_notices.pack(anchor="w")
+        # CS2 and trade status come before the potentially long library table.
+        games_card.pack_forget()
+        games_card.pack(fill="x", pady=(0, 18))
         self._steam_stamp = None
         self._update_steam(force=True)
 
@@ -262,6 +343,7 @@ class ServicePages(DiscordBotPages):
         counts = inv.get("summary", {})
         self.steam_inventory_status.configure(
             text=f"Всего: {counts.get('total', '—')} · Можно обменять: {counts.get('tradable', '—')} · Недоступны: {counts.get('locked', '—')} · Неизвестно: {counts.get('unknown', '—')}\nОбновлено: {self._date(inv.get('updated'))}"
+            + ("\n" + data["errors"]["730:2"] if data.get("errors", {}).get("730:2") else "")
         )
         self.steam_items.delete(*self.steam_items.get_children())
         for item in inv.get("items", []):
@@ -279,7 +361,22 @@ class ServicePages(DiscordBotPages):
                     self._date(item.get("unlock_at")),
                 ),
             )
-        errors = "\n".join(f"{k}: {v}" for k, v in data.get("errors", {}).items())
+        names = {
+            "owned": "Библиотека",
+            "bans": "Ограничения аккаунта",
+            "offers": "Обмены",
+            "730:2": "Инвентарь CS2",
+            "account": "Аккаунт",
+        }
+        errors = "\n".join(
+            f"{names.get(k, k)}: {v}"
+            + (
+                " Повтор после " + self._date(data["retry_after"][k])
+                if k in data.get("retry_after", {})
+                else ""
+            )
+            for k, v in data.get("errors", {}).items()
+        )
         self.steam_status.configure(
             text=f"Игр: {len(data.get('games', []))} · Библиотека аккаунта: {self._date(data.get('owned_updated'))}\n"
             + (errors or "Ошибок последней проверки нет")
@@ -294,6 +391,9 @@ class ServicePages(DiscordBotPages):
         }.get(bans.get("economy_ban"), "неизвестно")
         self.steam_account.configure(
             text=f"Ограничение экономики аккаунта: {economy}. API не сообщает дату его снятия.\nПредложения: входящих {sum(o['direction'] == 'in' for o in offers)}, исходящих {sum(o['direction'] == 'out' for o in offers)}. Проверено: {self._date(data.get('offers_updated'))}"
+            if data.get("offers_updated")
+            else "Обмены ещё не получены. "
+            + data.get("errors", {}).get("offers", "Запустите проверку Steam.")
         )
         self.steam_notices.configure(
             text="\n\n".join(

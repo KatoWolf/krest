@@ -336,7 +336,7 @@ class ControlCenterApp(
         self.shell.pack(fill="both", expand=True)
         from PIL import ImageTk
 
-        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=220, padx=18, pady=26)
+        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=250, padx=16, pady=22)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         self._brand_image = ImageTk.PhotoImage(load_image(44), master=self)
@@ -347,7 +347,9 @@ class ControlCenterApp(
         self.brand_mark = BrandMark(brand, self._brand_image, self.theme, self.motion.enabled)
         self.brand_mark.pack(side="left", padx=(0, 10))
         self.label(brand, "КРЕСТ", large=True).pack(side="left")
-        self.label(side, "Личный помощник", muted=True).pack(anchor="w", padx=2, pady=(0, 28))
+        self.label(side, "Голосовое управление ПК", muted=True).pack(
+            anchor="w", padx=4, pady=(0, 16)
+        )
         self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
         self.edition_label.pack(side="bottom", anchor="w", pady=(14, 0))
         ttk.Button(
@@ -356,7 +358,9 @@ class ControlCenterApp(
         ttk.Button(
             side, text="Свернуть в трей", style="Nav.TButton", command=self.hide_to_tray
         ).pack(side="bottom", fill="x", pady=6)
-        self.nav_canvas = tk.Canvas(side, bg=self.theme["sidebar"], highlightthickness=0, width=178)
+        self.nav_canvas = tk.Canvas(
+            side, bg=self.theme["sidebar"], highlightthickness=0, width=210, yscrollincrement=1
+        )
         self.nav_canvas.pack(fill="both", expand=True)
         self.nav_frame = tk.Frame(self.nav_canvas, bg=self.theme["sidebar"])
         nav_window = self.nav_canvas.create_window((0, 0), window=self.nav_frame, anchor="nw")
@@ -370,14 +374,22 @@ class ControlCenterApp(
         self.nav_buttons = {}
         self.group_buttons = {}
         for default, title, codes in self.NAV_GROUPS:
+            if default in ("actions", "steam", "settings"):
+                self.label(
+                    self.nav_frame,
+                    {"actions": "КАЖДЫЙ ДЕНЬ", "steam": "ИГРЫ И СИСТЕМА", "settings": "ПАРАМЕТРЫ"}[
+                        default
+                    ],
+                    muted=True,
+                ).pack(anchor="w", padx=14, pady=(12, 6))
             button = ttk.Button(
                 self.nav_frame,
                 text=title,
                 style="Nav.TButton",
-                padding=(16, 13),
+                padding=(16, 12),
                 command=lambda k=default: self.switch_page(k),
             )
-            button.pack(fill="x", pady=4)
+            button.pack(fill="x", pady=2)
             self.group_buttons[default] = button
             for key in codes:
                 self.nav_buttons[key] = button
@@ -425,7 +437,7 @@ class ControlCenterApp(
         self.canvases = {}
         for code, _ in self.NAV:
             page = tk.Frame(self.content, bg=self.theme["bg"])
-            canvas = tk.Canvas(page, bg=self.theme["bg"], highlightthickness=0, yscrollincrement=18)
+            canvas = tk.Canvas(page, bg=self.theme["bg"], highlightthickness=0, yscrollincrement=1)
             scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
             scroll.pack(side="right", fill="y")
             canvas.pack(side="left", fill="both", expand=True)
@@ -513,26 +525,42 @@ class ControlCenterApp(
         ):
             return
         units = (
-            -1
+            -1.0
             if getattr(event, "num", 0) == 4
             else 1
             if getattr(event, "num", 0) == 5
-            else -int(event.delta / 120) or (-1 if event.delta > 0 else 1)
+            else -event.delta / 120
         )
         widget = event.widget
         while widget is not None:
             if widget is self.nav_canvas or widget is self.nav_frame:
-                self.nav_canvas.yview_scroll(units * 3, "units")
-                return
+                canvas = self.nav_canvas
+                break
             widget = getattr(widget, "master", None)
-        canvas = self.canvases[self.current_page]
-        canvas.yview_scroll(units * 3, "units")
+        else:
+            canvas = self.canvases[self.current_page]
+        if not hasattr(self, "_wheel_pending"):
+            self._wheel_pending = {}
+        self._wheel_pending[canvas] = self._wheel_pending.get(canvas, 0) + units * 48
+        if not getattr(self, "_wheel_job", None):
+            self._wheel_job = self.after(16, self._flush_wheel)
         return "break"
+
+    def _flush_wheel(self):
+        self._wheel_job = None
+        pending, self._wheel_pending = self._wheel_pending, {}
+        for canvas, pixels in pending.items():
+            if canvas.winfo_exists():
+                canvas.yview_scroll(round(pixels), "units")
 
     def switch_page(self, code):
         names = dict(self.NAV)
-        for page in [*self.pages.values(), *self._locked_pages.values()]:
-            page.pack_forget()
+        for page in (
+            self.pages.get(getattr(self, "current_page", "")),
+            self._locked_pages.get(getattr(self, "current_page", "")),
+        ):
+            if page is not None:
+                page.pack_forget()
         group = next(g for g in self.NAV_GROUPS if code in g[2])
         for key, button in self.group_buttons.items():
             button.configure(style="Selected.Nav.TButton" if key == group[0] else "Nav.TButton")
@@ -1209,6 +1237,19 @@ class ControlCenterApp(
                 ).pack(side="right")
             if filename:
                 self.service_options(card, filename)
+            if filename == "krest_bot.py":
+                ttk.Button(
+                    card,
+                    text="Включить базовый пульт ПК",
+                    style="Accent.TButton",
+                    command=self._enable_telegram_remote,
+                ).pack(anchor="w", pady=8)
+                self.label(
+                    card,
+                    "Затем напишите боту /menu: музыка, микрофон Discord, скриншоты, дела, игры и файлы пульта. Доступ — только вашему ID в личном диалоге.",
+                    muted=True,
+                    wraplength=660,
+                ).pack(anchor="w", pady=6)
             credentials = tk.Frame(card, bg=self.theme["card"])
             ttk.Button(
                 card,
@@ -2015,6 +2056,8 @@ class ControlCenterApp(
             for key, (filename, title) in self.integration.MODULES.items():
                 if filename not in self.service_labels:
                     continue
+                if not self.service_labels[filename].winfo_ismapped():
+                    continue
                 if filename not in self.busy_services:
                     detail = self.integration.details(filename)
                     self.service_labels[filename].configure(
@@ -2102,7 +2145,7 @@ class ControlCenterApp(
                     + (
                         "Получаю данные из игры"
                         if info.get("connected")
-                        else info.get("setup_message", "Ожидаю матч")
+                        else info.get("diagnosis", info.get("setup_message", "Ожидаю матч"))
                     )
                 )
             self.overview_label.configure(

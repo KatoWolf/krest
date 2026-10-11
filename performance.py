@@ -91,6 +91,24 @@ class PerformancePolicy:
         return 1 if self.active == "balanced" else 3
 
 
+def foreground_title():
+    import os
+
+    if os.name != "nt":
+        return "Чтение активного окна доступно в Windows"
+    import ctypes
+    from ctypes import wintypes
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetForegroundWindow.restype = wintypes.HWND
+    user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    window = user.GetForegroundWindow()
+    text = ctypes.create_unicode_buffer(min(user.GetWindowTextLengthW(window) + 1, 2048))
+    user.GetWindowTextW(window, text, len(text))
+    return text.value
+
+
 def shared_multiplier(folder):
     import json
 

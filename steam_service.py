@@ -5,6 +5,7 @@ from storage import read_json
 
 from datetime import datetime, timezone
 import copy
+import hashlib
 import html
 import json
 import os
@@ -17,7 +18,10 @@ from storage import atomic_write_json
 
 
 class SteamError(RuntimeError):
-    pass
+    def __init__(self, message, *, status=0, retry_after=0):
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
 
 
 def read_cache(path):
@@ -140,12 +144,25 @@ class SteamClient:
         try:
             response = self.session.get(url, params=params, timeout=(5, 25))
             if response.status_code == 429:
+                try:
+                    retry = max(60, min(86400, int(response.headers.get("Retry-After", 900))))
+                except (ValueError, TypeError):
+                    retry = 900
                 raise SteamError(
-                    "Steam ограничил частоту запросов. Повтор — при следующей плановой проверке."
+                    f"Steam временно ограничил частоту запросов (429). Пауза не менее {retry // 60} мин.; сохранённые данные остаются доступны.",
+                    status=429,
+                    retry_after=retry,
                 )
             if response.status_code in (401, 403):
+                message = (
+                    "Steam Web API отклонил ключ (401/403). Проверьте ключ на steamcommunity.com/dev/apikey и его принадлежность вашему аккаунту. Публичный инвентарь проверяется отдельно."
+                    if "api.steampowered.com/" in url
+                    else "Steam не разрешил просмотр инвентаря (401/403). Откройте профиль → Редактировать → Приватность → Инвентарь: открытый."
+                )
                 raise SteamError(
-                    "Steam отказал в доступе: проверьте ключ и приватность профиля/инвентаря"
+                    message,
+                    status=response.status_code,
+                    retry_after=1800,
                 )
             response.raise_for_status()
             data = response.json()
@@ -296,6 +313,29 @@ class SteamMonitor:
             cached = {"account": steam_id, "inventories": {}, "notices": []}
         cached.setdefault("inventories", {})
         cached.setdefault("errors", {})
+        identity = hashlib.sha256(
+            str(cfg.get("api_keys", {}).get("steam_api_key", "")).encode()
+        ).hexdigest()
+        if cached.get("key_fingerprint") != identity:
+            cached.update(key_fingerprint=identity, retry_after={}, failures={})
+        retries = cached.setdefault("retry_after", {})
+        failures = cached.setdefault("failures", {})
+
+        def failed(key, error):
+            cached["errors"][key] = str(error)
+            failures[key] = min(6, failures.get(key, 0) + 1)
+            delay = max(getattr(error, "retry_after", 0), min(3600, 60 * 2 ** failures[key]))
+            retries[key] = time.time() + delay
+            if getattr(error, "status", 0) in (401, 403) and key in ("owned", "bans", "offers"):
+                for other in ("owned", "bans", "offers"):
+                    retries[other] = retries[key]
+                    cached["errors"][other] = str(error)
+
+        def succeeded(key):
+            cached["errors"].pop(key, None)
+            retries.pop(key, None)
+            failures.pop(key, None)
+
         installed = local_games(cfg.get("steam", {}).get("install_path", ""))
         notices = []
         if remote and steam_id:
@@ -312,6 +352,8 @@ class SteamMonitor:
                     ("bans", client.bans),
                     ("offers", client.offers),
                 ):
+                    if time.time() < retries.get(key, 0):
+                        continue
                     try:
                         value = fetch()
                         if key == "owned" and "owned" in cached:
@@ -340,9 +382,9 @@ class SteamMonitor:
                                 )
                         cached[key] = value
                         cached[key + "_updated"] = time.time()
-                        cached["errors"].pop(key, None)
+                        succeeded(key)
                     except (SteamError, ValueError, KeyError, TypeError) as exc:
-                        cached["errors"][key] = str(exc)
+                        failed(key, exc)
                 requested = [
                     v.strip() for v in cfg.get("steam", {}).get("inventories", "730:2").split(",")
                 ]
@@ -350,6 +392,8 @@ class SteamMonitor:
                     k: v for k, v in cached["inventories"].items() if k in requested
                 }
                 for inventory in requested:
+                    if time.time() < retries.get(inventory, 0):
+                        continue
                     try:
                         appid, contextid = inventory.split(":")
                         items = client.inventory(appid, contextid)
@@ -381,9 +425,9 @@ class SteamMonitor:
                             "summary": inventory_summary(items),
                             "updated": time.time(),
                         }
-                        cached["errors"].pop(inventory, None)
+                        succeeded(inventory)
                     except (SteamError, ValueError, KeyError, TypeError) as exc:
-                        cached["errors"][inventory] = str(exc)
+                        failed(inventory, exc)
         cached["games"] = merge_games(cached.get("owned", []), installed)
         cached["local_updated"] = time.time()
         cached["notices"] = (

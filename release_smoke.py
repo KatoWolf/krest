@@ -9,6 +9,21 @@ def check_kernel(config_path):
     from process_lock import ProcessLock
     from configuration import ConfigManager
 
+    # The packaged GUI must be able to export its standalone Discord adapter.
+    from bot_project import connect_project
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    import ast
+
+    with TemporaryDirectory(prefix="krest-bot-export-") as folder:
+        script = Path(folder) / "bot.py"
+        script.write_text("pass\n", encoding="utf-8")
+        launcher = Path(connect_project(script))
+        ast.parse(launcher.read_text(encoding="utf-8"))
+        ast.parse(launcher.with_name("krest_bridge_adapter.py").read_text(encoding="utf-8"))
+        if script.read_text(encoding="utf-8") != "pass\n":
+            raise RuntimeError("Экспорт моста изменил исходник бота")
+
     if config_path.exists():
         raise RuntimeError("Проверка сборки требует новый временный профиль")
     cfg = ConfigManager(config_path)
@@ -75,12 +90,32 @@ def check_models(settings):
     if engine.rec is None or engine.model_tts is None:
         raise RuntimeError("Сборка не загрузила модели: " + str(engine.metrics))
     engine.rec.AcceptWaveform(bytes(3200))
+    import os
+
+    if os.name == "nt":
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory(prefix="Крест-проверка-") as folder:
+            target = Path(folder) / "модель"
+            shutil.copytree(paths["vosk_path"], target)
+            engine.initialize_recognition(str(target))
+            if engine.rec is None:
+                raise RuntimeError(
+                    "Vosk не открыла путь с русскими буквами: "
+                    + engine.metrics.get("model_error", "")
+                )
+            engine.rec.AcceptWaveform(bytes(3200))
+            # Release native file handles before TemporaryDirectory cleanup.
+            engine.rec = engine.model_vosk = None
+        engine.initialize_recognition(paths["vosk_path"])
     import numpy as np
 
     samples = engine.synthesize(engine.prepare_text("Крест готова. Громкость 80%. Время 12:05."))
     if samples.size < 240 or not np.isfinite(samples).all() or not np.any(samples):
         raise RuntimeError("Синтез в сборке не вернул корректный звук")
-    print("Vosk и синтез Silero проверены без микрофона и динамиков.")
+    print("Vosk (включая русский путь) и синтез Silero проверены без микрофона и динамиков.")
 
 
 def check_telegram_worker():

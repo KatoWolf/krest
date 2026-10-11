@@ -10,6 +10,7 @@ import importlib
 import logging
 import queue
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 _capture = ContextVar("speech_capture", default=None)
@@ -24,6 +25,9 @@ _audio_queue = queue.Queue(maxsize=50)
 _audio_thread = None
 _generation = 0
 _remote = None
+_vosk_repairs = {}
+_recovered_vosk = ""
+_vosk_recovery_source = ""
 
 
 def set_remote(remote):
@@ -109,13 +113,19 @@ def local_models_ready(settings):
 
 
 def enable():
-    global _engine, _model_signature
+    global _engine, _model_signature, _recovered_vosk, _vosk_recovery_source
     from voice_models import discover_models
 
     with _engine_lock:
         if _engine is not None:
             return
         models = discover_models(_settings())
+        if _recovered_vosk and models["vosk_path"] == _vosk_recovery_source:
+            from voice_models import is_vosk
+            from pathlib import Path
+
+            if is_vosk(Path(_recovered_vosk)):
+                models["vosk_path"] = _recovered_vosk
         signature = tuple(models.values())
         missing = [
             name
@@ -154,10 +164,34 @@ def enable():
         if was_loaded:
             engine.request_microphone_refresh()
         if engine.rec is None:
-            raise RuntimeError(
-                "Модель Vosk найдена, но не загрузилась: "
-                + engine.metrics.get("model_error", "проверьте целостность файлов")
-            )
+            failed = models["vosk_path"]
+            if time.monotonic() >= _vosk_repairs.get(failed, 0) and _settings().get(
+                "app_settings", {}
+            ).get("voice_auto_models", True):
+                from model_setup import prepare
+
+                # Retry after a temporary network failure, without downloading on each tick.
+                _vosk_repairs[failed] = time.monotonic() + 600
+                repaired = prepare(
+                    _settings(),
+                    lambda text: _output(text) if _output else logger.info("%s", text),
+                    components=("vosk_path",),
+                    rejected_vosk=(failed,),
+                )
+                if repaired["vosk_path"]:
+                    engine.initialize_recognition(repaired["vosk_path"])
+                    if engine.rec is not None:
+                        _vosk_recovery_source = failed
+                        _recovered_vosk = models["vosk_path"] = repaired["vosk_path"]
+                        _model_signature = tuple(models.values())
+            if engine.rec is None:
+                raise RuntimeError(
+                    "Vosk не загрузилась: "
+                    + engine.metrics.get("model_error", "проверьте целостность файлов")
+                    + ". Папка: "
+                    + failed
+                    + ". Распакуйте ZIP целиком. Если путь содержит русские буквы, попробуйте C:\\Krest."
+                )
         engine.metrics.update(models=models, tts_ready=engine.model_tts is not None)
         try:
             active = engine.stream is not None and engine.stream.active
@@ -219,6 +253,11 @@ def disable():
 def listen():
     engine = _engine
     return engine.listen() if engine is not None else ""
+
+
+def set_command_dictionary(phrases):
+    if _engine is not None:
+        _engine.set_command_dictionary(phrases)
 
 
 def is_enabled():

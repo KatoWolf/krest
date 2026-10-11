@@ -102,7 +102,7 @@ if torch is not None:
             pass
 
 # Глобальное состояние
-q = queue.Queue(maxsize=20)
+q = queue.Queue(maxsize=100)
 _recognizer_lock = threading.RLock()
 _play_lock = threading.Lock()
 _cancel_speech = threading.Event()
@@ -125,6 +125,7 @@ _last_backend_refresh = 0
 _failed_microphones = {}
 _last_nonzero_audio_at = 0
 _refresh_audio_requested = False
+_quick_phrases = set()
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -281,11 +282,17 @@ def manage_disk_cache(max_files=200, max_bytes=64 * 1024 * 1024):
 
 
 def initialize_models(models=None):
-    global rec, model_vosk, vosk_path, silero_path
+    global vosk_path, silero_path
     if models:
         vosk_path, silero_path = models["vosk_path"], models["silero_path"]
+    initialize_recognition(vosk_path)
+    initialize_tts(silero_path)
+
+
+def initialize_recognition(path):
+    global rec, model_vosk, vosk_path
+    vosk_path = path
     metrics.pop("model_error", None)
-    metrics.pop("tts_error", None)
     logging.getLogger(__name__).info(
         "--- [VOICE ENGINE]: Загрузка нейронных связей слуха (Vosk)... ---"
     )
@@ -304,16 +311,22 @@ def initialize_models(models=None):
                 if len(subdirs) == 1:
                     vosk_path = subdirs[0]
 
-        model_vosk = vosk.Model(vosk_path)
+        from vosk_support import model_problem, native_model_path
+
+        if problem := model_problem(vosk_path):
+            raise RuntimeError(problem)
+        actual_path = native_model_path(vosk_path)
+        model_vosk = vosk.Model(actual_path)
         rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
         rec.SetWords(True)
+        if hasattr(rec, "SetPartialWords"):
+            rec.SetPartialWords(True)
+        metrics.update(model_path=vosk_path, model_native_path=actual_path)
     except Exception as e:
         metrics["model_error"] = str(e)
         logging.getLogger(__name__).info(
             f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---"
         )
-
-    initialize_tts(silero_path)
 
 
 def initialize_tts(path):
@@ -390,6 +403,12 @@ def configure(settings_getter):
         _reset_recognizer()
 
 
+def set_command_dictionary(phrases):
+    global _quick_phrases
+    _quick_phrases = frozenset(phrases)
+    metrics["dictionary_phrases"] = len(_quick_phrases)
+
+
 def interrupt():
     with _play_lock:
         _cancel_speech.set()
@@ -400,7 +419,7 @@ def audio_callback(indata, frames, time_info, status):
     global _last_audio_at, _last_nonzero_audio_at
     _last_audio_at = time.monotonic()
     metrics["connected"] = True
-    if is_speaking:
+    if is_speaking and not _audio_cfg.get("voice_headphones", False):
         return
     data = bytes(indata)
     rms, peak = pcm_levels(data)
@@ -408,10 +427,10 @@ def audio_callback(indata, frames, time_info, status):
         _last_nonzero_audio_at = _last_audio_at
     metrics.update(rms=rms, peak=peak)
     try:
-        q.put_nowait((data, rms))
+        q.put_nowait((data, rms, _last_audio_at))
     except queue.Full:
         metrics["dropped"] += 1
-    if status:
+    if status and getattr(status, "input_overflow", False):
         metrics["dropped"] += 1
 
 
@@ -512,13 +531,15 @@ def _reset_recognizer():
 
 def listen():
     global last_recognition, _audio_cfg, _audio_cfg_at
-    if rec is None or is_speaking:
+    if rec is None:
         return ""
     now = time.monotonic()
     if not _audio_cfg or now - _audio_cfg_at > 0.5:
         _audio_cfg = _settings_getter().get("app_settings", {})
         _audio_cfg_at = now
     cfg = _audio_cfg
+    if is_speaking and not cfg.get("voice_headphones", False):
+        return ""
     selected = str(cfg.get("microphone", ""))
     try:
         active = stream is not None and stream.active
@@ -548,19 +569,24 @@ def listen():
     metrics["threshold"] = _endpoint.threshold
     _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
     with _recognizer_lock:
-        if is_speaking:
+        if is_speaking and not cfg.get("voice_headphones", False):
             return ""
         if metrics.get("handled_drops", 0) != metrics["dropped"]:
             clear_audio_queue()
             _reset_recognizer()
             metrics["handled_drops"] = metrics["dropped"]
             return ""
-        for _ in range(20):
+        for _ in range(100):
             try:
-                data, rms = q.get_nowait()
+                packet = q.get_nowait()
                 q.task_done()
             except queue.Empty:
                 break
+            data, rms = packet[:2]
+            if len(packet) > 2 and now - packet[2] > 2:
+                # A busy/game-suspended process must not execute stale speech later.
+                _reset_recognizer()
+                continue
             if cfg.get("speech_auto_threshold", False):
                 _endpoint.threshold = _noise.feed(rms, speaking=_endpoint.started)
                 metrics["threshold"] = _endpoint.threshold
@@ -572,6 +598,14 @@ def listen():
                     rec.AcceptWaveform(prefix)
                 _preroll.clear()
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
+            # Never execute a partial hypothesis. Only shorten the end-of-speech
+            # wait for a complete known transport command; FinalResult still wins.
+            if (
+                cfg.get("voice_fast_commands", True)
+                and metrics.get("partial", "").casefold() in _quick_phrases
+                and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.4)
+            ):
+                finished = True
             if rec.AcceptWaveform(data):
                 result = json.loads(rec.Result())
                 _segments.append(result.get("text", ""))
@@ -586,6 +620,7 @@ def listen():
                     "text": text,
                     "confidence": sum(confidences) / len(confidences) if confidences else None,
                 }
+                metrics["recognition_pause_ms"] = round(_endpoint.silence * 1000)
                 _reset_recognizer()
                 return text
             metrics["partial"] = " ".join(
@@ -775,9 +810,10 @@ def speak(text: str, cancelled=lambda: False):
 
     _cancel_speech.clear()
     is_speaking = True
-    with _recognizer_lock:
-        clear_audio_queue()
-        _reset_recognizer()
+    if not _settings_getter().get("app_settings", {}).get("voice_headphones", False):
+        with _recognizer_lock:
+            clear_audio_queue()
+            _reset_recognizer()
     try:
         for part in speech_chunks(prepare_text(text)):
             if cancelled() or _cancel_speech.is_set():
@@ -804,9 +840,10 @@ def speak(text: str, cancelled=lambda: False):
         metrics["tts_error"] = "Ошибка озвучки: " + str(exc)[:240]
         logging.getLogger(__name__).warning(metrics["tts_error"])
     finally:
-        # Keep the speaker tail out of recognition.
-        time.sleep(0.2)
-        with _recognizer_lock:
-            _reset_recognizer()
-        clear_audio_queue()
+        if not _settings_getter().get("app_settings", {}).get("voice_headphones", False):
+            # Keep the speaker tail out of recognition without cutting off headset input.
+            time.sleep(0.2)
+            with _recognizer_lock:
+                _reset_recognizer()
+                clear_audio_queue()
         is_speaking = False

@@ -298,8 +298,10 @@ class WarframePages:
         )
         if status["busy"]:
             label += " · " + status["operation"]
+        vision = data.get("status", {}).get("vision", {})
         self.wf_vision.set(
-            data.get("status", {}).get("vision", {}).get("status", "Ожидаю активное окно Warframe")
+            vision.get("status", "Ожидаю активное окно Warframe")
+            + (f" · Проверка: {vision['scan_ms']} мс" if "scan_ms" in vision else "")
         )
         self.wf_status.set(label)
         study = status.get("study", {})

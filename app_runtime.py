@@ -549,6 +549,11 @@ class AssistantRuntime:
                 return
             with self._voice_control:
                 voice.enable()
+            from speech_dictionary import quick_phrases
+
+            dictionary_settings = self.settings()
+            voice.set_command_dictionary(quick_phrases(self.manager, dictionary_settings))
+            dictionary_checked = time.monotonic()
             if not voice.telemetry().get("tts_ready"):
                 threading.Thread(
                     target=self._tts_recovery,
@@ -564,6 +569,12 @@ class AssistantRuntime:
                 ("voice", "Микрофон активен" if connected else "Ищу доступный микрофон…")
             )
             while not self.stop_event.is_set() and not self._voice_stop.wait(0.03):
+                if time.monotonic() - dictionary_checked >= 5:
+                    dictionary_checked = time.monotonic()
+                    latest = self.settings()
+                    if latest != dictionary_settings:
+                        voice.set_command_dictionary(quick_phrases(self.manager, latest))
+                        dictionary_settings = latest
                 if self._arm_requested.is_set():
                     self._arm_requested.clear()
                     self._active_until = time.monotonic() + self.settings().get(
@@ -586,6 +597,12 @@ class AssistantRuntime:
                         )
                     )
                 if text:
+                    if self.settings().get("app_settings", {}).get("voice_headphones", False):
+                        from speech_recognition import decode_voice_command
+
+                        addressed, _ = decode_voice_command(self.manager, text, self.settings())
+                        if addressed:
+                            voice.stop_speaking()
                     self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
             failure = str(exc)

@@ -449,6 +449,8 @@ class MissionStudy:
         )
 
     def learning_report(self):
+        from game_vision import SCREENS
+
         with self.lock:
             history = dict(self.history)
             if self.data:
@@ -471,6 +473,10 @@ class MissionStudy:
                 )
                 if controls[key]
             )
+            recognized = "; ".join(
+                f"{label}: {screens[code]}" for code, label, _ in SCREENS if screens[code]
+            )
+            not_seen = ", ".join(label for code, label, _ in SCREENS if not screens[code])
             return "\n".join(
                 [
                     "Аполлон · Луа · Акси · Валькирия Прайм",
@@ -481,6 +487,9 @@ class MissionStudy:
                     + (actions or "ещё нет данных")
                     + ". Раскладка стандартная; это не подтверждение срабатывания способности.",
                     f"Наблюдений знакомых экранов по двум OCR-кадрам: {sum(screens.values())}.",
+                    "Уже различала: " + (recognized or "пока нет подтверждённых экранов"),
+                    "Ещё нет примеров: "
+                    + (not_seen or "примеры есть для всех текущих типов экранов"),
                     "Для обучения навигации ещё нужны положение цели и движение камеры. Текущая запись этого не восстанавливает.",
                     "Автономный запуск миссии, поиск демолиста, бой и эвакуация: НЕ ОБУЧЕНЫ / НЕ ПРОВЕРЕНЫ.",
                     "Статистика нажатий не является обученной моделью управления. Проверенных автономных сценариев: 0.",

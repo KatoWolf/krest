@@ -100,8 +100,12 @@ def prepare(
     components=("vosk_path", "silero_path"),
     force=False,
     destination=None,
+    rejected_vosk=(),
 ):
     models = discover_models(settings)
+    rejected = {Path(path).resolve() for path in rejected_vosk}
+    if models["vosk_path"] and Path(models["vosk_path"]).resolve() in rejected:
+        models["vosk_path"] = ""
     requested = set(components)
     if not requested <= {"vosk_path", "silero_path"}:
         raise ValueError("Неизвестный компонент голоса")
@@ -128,7 +132,7 @@ def prepare(
                 if key not in requested or models[key]:
                     continue
                 target = folder / filename
-                if not valid(target):
+                if not valid(target) or (key == "vosk_path" and target.resolve() in rejected):
                     progress("Подготовка: загружаю " + title + "…")
                     try:
                         archive = temp / (filename + ".download")
@@ -142,6 +146,11 @@ def prepare(
                         )
                         if not valid(source):
                             raise ValueError("Файл модели повреждён или имеет неподходящий формат")
+                        if key == "vosk_path":
+                            from vosk_support import model_problem
+
+                            if problem := model_problem(source):
+                                raise ValueError(problem)
                         # Only replace a broken managed cache; user-supplied files
                         # outside this folder are preserved.
                         if target.exists():
