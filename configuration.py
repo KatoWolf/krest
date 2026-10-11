@@ -125,6 +125,7 @@ DEFAULT_CONFIG = {
         name: True
         for name in (
             "basic",
+            "discord_voice",
             "workflows",
             "interactive",
             "meta",

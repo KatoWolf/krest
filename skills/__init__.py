@@ -2,6 +2,7 @@
 
 BUILTIN_MODULES = (
     "basic",
+    "discord_voice",
     "gid",
     "interactive",
     "media",

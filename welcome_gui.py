@@ -923,6 +923,7 @@ class ControlCenterApp(
         for name, var in self.skill_vars.items():
             names = {
                 "basic": "Время и дата",
+                "discord_voice": "Микрофон Discord",
                 "interactive": "Интерактивные команды",
                 "meta": "Управление ассистентом",
                 "media": "Медиа и громкость",

@@ -98,9 +98,14 @@ def uia_apartment():
     try:
         import comtypes
         import comtypes.client
+        import comtypes.gen
 
         # Concurrent helpers must not write/import a half-generated shared
         # UIAutomationClient.py. comtypes supports generating wrappers in memory.
+        # Its memory loader still indexes gen.__path__[0]; a freshly created
+        # namespace package can have an empty path (including in a frozen app).
+        if not list(comtypes.gen.__path__):
+            comtypes.gen.__path__ = [comtypes.client.gen_dir]
         comtypes.client.gen_dir = None
         import pywinauto  # noqa: F401
     except ImportError as exc:

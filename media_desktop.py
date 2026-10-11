@@ -16,7 +16,7 @@ PREFIX = "KREST_DESKTOP_RESULT:"
 
 def request(operation, data=None, action=""):
     if os.name != "nt":
-        raise MediaError("Кнопки настольных плееров доступны в Windows.")
+        raise MediaError("Управление кнопками настольных приложений доступно в Windows.")
     from app_paths import app_command
 
     # Frozen Windows can decode stdin using the legacy console codepage.
@@ -36,11 +36,15 @@ def request(operation, data=None, action=""):
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as exc:
+        if operation == "discord_voice":
+            raise MediaError(
+                "Discord не ответил за 20 секунд. Проверьте состояние микрофона в Discord перед повтором."
+            ) from exc
         raise MediaError(
             "Плеер не ответил за 20 секунд. Помощник доступа остановлен. Проверьте отметку в плеере перед повторной командой."
         ) from exc
     except OSError as exc:
-        raise MediaError("Не удалось открыть помощник доступа к плееру: " + str(exc)) from exc
+        raise MediaError("Не удалось открыть помощник доступа к приложению: " + str(exc)) from exc
     for line in reversed(result.stdout.splitlines()):
         if line.startswith(PREFIX):
             try:
@@ -57,7 +61,7 @@ def request(operation, data=None, action=""):
             except (ValueError, TypeError, KeyError):
                 break
     raise MediaError(
-        "Помощник доступа к плееру завершился без результата. Перезапустите Крест и откройте диагностику музыки."
+        "Помощник доступа к приложению завершился без результата. Откройте его окно и перезапустите Крест."
     )
 
 
@@ -72,7 +76,9 @@ def run_worker():
         payload = json.loads(raw)
         operation = payload["operation"]
         data = payload.get("data", {})
-        if operation != "probe":
+        if not isinstance(data, dict):
+            raise MediaError("Некорректный запрос к приложению.")
+        if operation in ("rating", "diagnostics"):
             if not isinstance(data, dict) or any(
                 not isinstance(data.get(k), str) or len(data[k]) > 4096
                 for k in ("title", "artist", "app_id")
@@ -84,6 +90,10 @@ def run_worker():
             result = perform_rating(data, payload["action"])
         elif operation == "diagnostics":
             result = {"lines": inspect_player(data)}
+        elif operation == "discord_voice":
+            from discord_voice import perform
+
+            result = perform(payload.get("action", ""))
         elif operation == "probe":
             with uia_apartment():
                 from pywinauto import Desktop

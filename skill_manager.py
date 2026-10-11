@@ -40,7 +40,7 @@ class SkillEntry:
     @property
     def requires_windows(self):
         return (
-            self.module == "windows"
+            self.module in ("windows", "discord_voice")
             or self.module == "media"
             and not self.func.__name__.startswith("open_")
             or self.module == "system_mon"
