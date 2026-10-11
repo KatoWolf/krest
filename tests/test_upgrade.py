@@ -291,7 +291,7 @@ def test_pages_build_independently_and_parser_is_a_separate_window(tmp_path, mon
         app.switch_page("wf_home")
         assert "wf_arsenal" not in app._built_pages
         assert isinstance(RoundedCard(app, app.theme), tk.Frame)
-        assert app.effects.window is None
+        assert not hasattr(app, "effects")
         app._open_command_parser()
         assert app._parser_window.winfo_exists()
         first = app._parser_window

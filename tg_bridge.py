@@ -88,11 +88,12 @@ def load_app_config() -> dict:
     if os.path.exists(CONFIG_FILE) and os.path.getsize(CONFIG_FILE) > 0:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
-                return json.load(f) or {}
+                value = json.load(f)
+                return value if isinstance(value, dict) else {}
         except (json.JSONDecodeError, OSError):
             pass
         except Exception as e:
-            logger.error(f"Ошибка чтения config.json: {e}")
+            logger.error(f"Ошибка чтения config.json: {type(e).__name__}")
     return {}
 
 
@@ -102,13 +103,13 @@ def get_owner_name() -> str:
 
 
 async def get_local_status() -> dict:
-    if os.path.exists(STATUS_FILE) and os.path.getsize(STATUS_FILE) > 0:
-        try:
-            with open(STATUS_FILE, "r", encoding="utf-8-sig") as f:
-                return json.load(f) or {}
-        except Exception:
-            pass
-    return {}
+    from storage import read_json
+
+    try:
+        value = read_json(STATUS_FILE)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 async def status_updater(client):
@@ -132,7 +133,7 @@ async def status_updater(client):
             logger.warning(f"FloodWait от Telegram: ждем {e.value} секунд")
             await asyncio.sleep(e.value)
         except Exception as e:
-            logger.debug(f"Ошибка обновления статуса Bio: {e}")
+            logger.debug(f"Ошибка обновления статуса Bio: {type(e).__name__}")
 
         await asyncio.sleep(300)
 
@@ -147,7 +148,7 @@ async def auto_delete_message(message, delay: int):
 
 async def track_outgoing(client, message):
     chat_id = message.chat.id
-    last_outgoing[chat_id] = time.time()
+    last_outgoing[chat_id] = time.monotonic()
     if chat_id in spam_control:
         del spam_control[chat_id]
 
@@ -156,9 +157,8 @@ async def auto_reply(client, message):
     if not message.from_user:
         return
 
-    user_id = message.from_user.id
     chat_id = message.chat.id
-    current_time = time.time()
+    current_time = time.monotonic()
     owner_name = get_owner_name()
 
     if chat_id in last_outgoing and (current_time - last_outgoing[chat_id] < 300):
@@ -175,10 +175,12 @@ async def auto_reply(client, message):
     text = message.text.lower() if message.text else ""
     is_urgent = any(word in text for word in ["срочно", "важно", "горит", "ответь"])
 
-    if not is_urgent and user_id in spam_control and current_time - spam_control[user_id] < 300:
+    if chat_id in spam_control and current_time - spam_control[chat_id] < (
+        60 if is_urgent else 300
+    ):
         return
 
-    spam_control[user_id] = current_time
+    spam_control[chat_id] = current_time
     sender_name = message.from_user.first_name or "Пользователь"
     logger.info(f"Входящее сообщение от {sender_name}")
 
@@ -208,12 +210,14 @@ async def auto_reply(client, message):
                 f"───\n"
                 f"● `Статус:` Восстановление ресурсов 🌙\n"
                 f"───\n"
-                f"{owner_name} отдыхает. Сообщение будет прочитано утром."
+                f"{owner_name} может отдыхать. Сейчас действует ночной режим автоответчика."
             )
         elif is_playing or activity_type in ["GAME", "WORK", "REST", "SOCIAL"]:
             context_msg = full_msg if full_msg else f"{owner_name} сейчас занят делами."
             if is_urgent:
-                context_msg = f"⚠️ Приоритетный сигнал!\n{context_msg}\nПоставлена пометка «СРОЧНО»."
+                context_msg = (
+                    f"⚠️ Приоритетный сигнал!\n{context_msg}\nСообщение содержит признак срочности."
+                )
             reply_text = f"💠 **KREST: Автоответчик**\n───\n{context_msg}"
         else:
             reply_text = (
@@ -221,20 +225,28 @@ async def auto_reply(client, message):
                 f"───\n"
                 f"● `Статус:` В движении / Отошел\n"
                 f"───\n"
-                f"{owner_name} отошел от ПК. Я передам сообщение, как только он вернется."
+                f"{owner_name} отошел от ПК. Ваше сообщение останется в этом чате."
             )
 
-        final_text = f"{reply_text}\n\n_(Автоматический ответ КРЕСТ. Исчезнет через 5 минут.)_"
-        sent_msg = await message.reply(final_text)
+        footer = "\n\nАвтоответ КРЕСТ. Попробую удалить его через 5 минут."
+        # Telegram counts UTF-16 units; disable parsing for untrusted status text.
+        body = reply_text.replace("**", "").replace("`", "")
+        body = body.encode("utf-16-le")[: (4000 - len(footer)) * 2].decode(
+            "utf-16-le", errors="ignore"
+        )
+        final_text = body + footer
+        if last_outgoing.get(chat_id, float("-inf")) >= current_time:
+            return
+        sent_msg = await message.reply(final_text, parse_mode=enums.ParseMode.DISABLED)
 
         asyncio.create_task(auto_delete_message(sent_msg, 300))
 
-        if hasattr(client, "notifications_queue") and client.notifications_queue:
+        if getattr(client, "notifications_queue", None) is not None:
             if not is_night:
-                client.notifications_queue.put(sender_name)
+                client.notifications_queue.put_nowait(sender_name)
 
     except Exception as e:
-        logger.error(f"Ошибка отправки автоответа: {e}")
+        logger.error(f"Ошибка отправки автоответа: {type(e).__name__}")
 
 
 class AuthManager:
@@ -311,7 +323,9 @@ class AuthManager:
         except FileNotFoundError:
             pass
         except OSError as e:
-            logger.warning(f"Не удалось удалить временное состояние авторизации: {e}")
+            logger.warning(
+                f"Не удалось удалить временное состояние авторизации: {type(e).__name__}"
+            )
 
     async def _disconnect_client(self):
         if self.client is not None:
@@ -319,7 +333,7 @@ class AuthManager:
                 if getattr(self.client, "is_connected", False):
                     await self.client.disconnect()
             except Exception as e:
-                logger.debug(f"Ошибка отключения auth-клиента: {e}")
+                logger.debug(f"Ошибка отключения auth-клиента: {type(e).__name__}")
             finally:
                 self.client = None
 
@@ -342,7 +356,7 @@ class AuthManager:
         api_id_int, api_hash_clean = self._validate_api(api_id, api_hash)
         phone_clean = self._normalize_phone(phone)
 
-        logger.info("Запрашиваем код Telegram для %s", phone_clean)
+        logger.info("Запрашиваем код Telegram")
         self._write_state({"status": "sending_code", "phone": phone_clean})
 
         try:
@@ -402,8 +416,8 @@ class AuthManager:
             )
             return "Запрос кода авторизации успешно отправлен Telegram."
 
-        except Exception:
-            logger.exception("ОШИБКА ПРИ ЗАПРОСЕ КОДА TELEGRAM")
+        except Exception as exc:
+            logger.error("Ошибка запроса кода Telegram: %s", type(exc).__name__)
             await self._disconnect_client()
             self._remove_state()
             self.phone_code_hash = None
@@ -503,8 +517,8 @@ class AuthManager:
             logger.info("Telegram успешно авторизован: %s", user_info)
             return user_info
 
-        except Exception:
-            logger.exception("ОШИБКА ПРИ АВТОРИЗАЦИИ TELEGRAM")
+        except Exception as exc:
+            logger.error("Ошибка авторизации Telegram: %s", type(exc).__name__)
             raise
         finally:
             await self._disconnect_client()
@@ -624,10 +638,10 @@ def start_tg_bridge(notifications_queue=None):
                         "База данных Telegram-сессии заблокирована. Повтор через 3 сек..."
                     )
                     return "LOCKED"
-                logger.exception("Ошибка SQLite Telegram")
+                logger.error("Ошибка SQLite Telegram: %s", type(e).__name__)
                 return "ERROR"
-            except Exception:
-                logger.exception("Ошибка во время работы Telegram юзербота")
+            except Exception as exc:
+                logger.error("Ошибка Telegram юзербота: %s", type(exc).__name__)
                 return "ERROR"
             finally:
                 for task in (updater_task, auth_watch_task):
@@ -646,7 +660,9 @@ def start_tg_bridge(notifications_queue=None):
                     if os.path.exists(SESSION_PATH):
                         os.remove(SESSION_PATH)
                 except OSError as e:
-                    logger.warning(f"Не удалось удалить недействительную session: {e}")
+                    logger.warning(
+                        f"Не удалось удалить недействительную session: {type(e).__name__}"
+                    )
                 time.sleep(3)
                 continue
 
@@ -666,8 +682,8 @@ def start_tg_bridge(notifications_queue=None):
         except KeyboardInterrupt:
             logger.info("Остановка юзербота по запросу.")
             break
-        except Exception:
-            logger.exception("Критическая ошибка цикла Telegram")
+        except Exception as exc:
+            logger.error("Ошибка цикла Telegram: %s", type(exc).__name__)
             time.sleep(3)
         finally:
             try:

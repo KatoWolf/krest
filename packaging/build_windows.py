@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -18,6 +19,9 @@ def run_checked(command, **kwargs):
     from collections import deque
     import threading
 
+    log_path = kwargs.pop("log_path", None)
+    if log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     timeout = kwargs.pop("timeout", None)
     kwargs.pop("check", None)
     tail = deque(maxlen=35)
@@ -32,9 +36,15 @@ def run_checked(command, **kwargs):
     ) as process:
 
         def read():
-            for line in process.stdout:
-                print(line, end="", flush=True)
-                tail.append(line)
+            from contextlib import nullcontext
+
+            with open(log_path, "w", encoding="utf-8") if log_path else nullcontext() as log:
+                for line in process.stdout:
+                    print(line, end="", flush=True)
+                    tail.append(line)
+                    if log:
+                        log.write(line)
+                        log.flush()
 
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
@@ -126,34 +136,122 @@ def audit_distribution(dist):
             raise RuntimeError("Исходник Крест в сборке: " + str(path))
 
 
+def distribution_manifest(dist):
+    """Bind successful runtime verification to every byte shipped by Inno Setup."""
+    if not (dist / "Krest.exe").is_file():
+        raise RuntimeError("Не найдена standalone-сборка Krest.exe")
+    manifest = {}
+    for path in sorted(dist.rglob("*")):
+        if path.is_file():
+            with path.open("rb") as stream:
+                manifest[path.relative_to(dist).as_posix()] = hashlib.file_digest(
+                    stream, "sha256"
+                ).hexdigest()
+    return manifest
+
+
+def require_verified_distribution(dist, receipt):
+    try:
+        data = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("Перед установщиком выполните --stage verify") from exc
+    if (
+        not isinstance(data, dict)
+        or data.get("version") != VERSION
+        or data.get("files") != distribution_manifest(dist)
+        or data.get("checks") != ["skills", "kernel", "models"]
+    ):
+        raise RuntimeError("Сборка изменилась после проверки; повторите --stage verify")
+
+
+def validate_skill_reports(source, packaged):
+    expected = source.get("builtin_skill_ids")
+    actual = packaged.get("builtin_skill_ids")
+    if (
+        source.get("errors")
+        or packaged.get("errors")
+        or not expected
+        or not actual
+        or sorted(expected) != sorted(actual)
+    ):
+        raise RuntimeError("Каталог встроенных навыков сборки не совпадает с исходниками")
+
+
 def smoke_test(dist):
     executable = dist / "Krest.exe"
+    reports = dist.parent / "release-checks"
+    reports.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="krest-release-test-") as temp:
         root = Path(temp)
         cfg = root / "config.json"
-        report = root / "skills.json"
-        run_checked(
-            [str(executable), "--check", "--check-output", str(report), "--config", str(cfg)],
-            check=True,
-            timeout=180,
-            cwd=root,
+        source_report = reports / "source-skills.json"
+        packaged_report = reports / "packaged-skills.json"
+        # Separate empty profiles: no custom skills or local user configuration.
+        for label, command, report in (
+            ("source-skills", [sys.executable, str(ROOT / "main.py")], source_report),
+            ("packaged-skills", [str(executable)], packaged_report),
+        ):
+            report.unlink(missing_ok=True)
+            run_checked(
+                command
+                + [
+                    "--check",
+                    "--safe-mode",
+                    "--check-output",
+                    str(report),
+                    "--config",
+                    str(root / (label + ".json")),
+                ],
+                timeout=180,
+                cwd=root,
+                log_path=reports / (label + ".log"),
+            )
+        validate_skill_reports(
+            json.loads(source_report.read_text(encoding="utf-8")),
+            json.loads(packaged_report.read_text(encoding="utf-8")),
         )
-        data = json.loads(report.read_text(encoding="utf-8"))
-        if data["errors"] or data["skills"] < 150:
-            raise RuntimeError("Встроенные навыки не загрузились: " + str(data))
-        # Exercise the real child-process launcher with the installed executable, not python main.py.
-        run_checked(
-            [str(executable), "--release-smoke", "--config", str(cfg)],
-            check=True,
-            timeout=90,
-            cwd=root,
+        for label, option, timeout in (
+            ("kernel", "--release-smoke", 90),
+            ("models", "--release-model-check", 900),
+        ):
+            run_checked(
+                [str(executable), option, "--config", str(cfg)],
+                timeout=timeout,
+                cwd=root,
+                log_path=reports / (label + ".log"),
+            )
+
+
+def verify_distribution(dist):
+    receipt = dist.parent / "verified-distribution.json"
+    receipt.unlink(missing_ok=True)
+    # Do not attach previous successful checks to a failed new verification.
+    reports = dist.parent / "release-checks"
+    if reports.exists():
+        shutil.rmtree(reports)
+    native = {p.name.lower() for p in dist.rglob("*.dll")}
+    required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
+    if required - native:
+        raise RuntimeError(
+            "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
         )
-        run_checked(
-            [str(executable), "--release-model-check", "--config", str(cfg)],
-            check=True,
-            timeout=900,
-            cwd=root,
-        )
+    audit_distribution(dist)
+    before = distribution_manifest(dist)
+    smoke_test(dist)
+    if before != distribution_manifest(dist):
+        raise RuntimeError("Файлы сборки изменились во время проверки")
+    receipt.write_text(
+        json.dumps(
+            {
+                "version": VERSION,
+                "checks": ["skills", "kernel", "models"],
+                "files": before,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def main():
@@ -176,21 +274,16 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     dist = output / "main.dist"
     if args.stage in ("all", "compile"):
-        run_checked(command, cwd=ROOT, check=True)
+        (output / "verified-distribution.json").unlink(missing_ok=True)
+        run_checked(command, cwd=ROOT, log_path=output / "compile.log")
         print("::notice::Compilation finished.", flush=True)
     if args.stage in ("all", "verify"):
-        native = {p.name.lower() for p in dist.rglob("*.dll")}
-        required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
-        if required - native:
-            raise RuntimeError(
-                "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
-            )
-        audit_distribution(dist)
-        smoke_test(dist)
+        verify_distribution(dist)
         print(
             "::notice::Packaged kernel and speech models passed their runtime checks.", flush=True
         )
     if args.stage in ("all", "installer") and not args.skip_installer:
+        require_verified_distribution(dist, output / "verified-distribution.json")
         iscc = shutil.which("ISCC.exe") or str(
             Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
             / "Inno Setup 6"
@@ -204,7 +297,7 @@ def main():
                 "/O" + str(ROOT / "dist"),
                 str(ROOT / "packaging" / "krest.iss"),
             ],
-            check=True,
+            log_path=output / "installer.log",
         )
     print("Этап " + args.stage + " завершён: " + str(output))
 

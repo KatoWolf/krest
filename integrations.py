@@ -59,6 +59,8 @@ class IntegrationManager:
         self._readers = {}
         self._lock = threading.RLock()
         self._health_lock = threading.Lock()
+        self._operation_lock = threading.Lock()
+        self._operations = {}
         self._closed = False
         self.bridge = {}
         self.manifests = {}
@@ -110,6 +112,11 @@ class IntegrationManager:
         running = proc is not None and proc.poll() is None
         return {
             "running": running,
+            "installed": self.exists(filename),
+            "operation": self._operations.get(filename),
+            "restart_in": max(0, int(self.restart_due[filename] - time.monotonic()) + 1)
+            if filename in self.restart_due
+            else None,
             "pid": proc.pid if running else None,
             "uptime": max(0, int(time.time() - self.started_at.get(filename, time.time())))
             if running
@@ -127,6 +134,23 @@ class IntegrationManager:
             "manifest": self.manifests.get(filename, {}),
             "restarts": len(self.restart_history.get(filename, [])),
         }
+
+    def perform(self, filename, action):
+        """Serialize manual actions without queuing duplicate reconnects."""
+        if action not in ("start", "stop", "restart"):
+            raise ValueError("Неизвестное действие сервиса")
+        with self._operation_lock:
+            if filename in self._operations:
+                return "Операция уже выполняется"
+            self._operations[filename] = action
+        try:
+            return getattr(self, action)(filename)
+        except Exception as exc:
+            self.errors[filename] = redact(str(exc), self.app.config_mgr.snapshot())
+            raise
+        finally:
+            with self._operation_lock:
+                self._operations.pop(filename, None)
 
     def send(self, filename, command):
         from licensing import require_premium
@@ -209,8 +233,9 @@ class IntegrationManager:
                     code = proc.poll()
                     if code is not None:
                         if code:
-                            self.errors[filename] = (
-                                f"Процесс завершился с кодом {code}; подробности в журнале"
+                            self.errors.setdefault(
+                                filename,
+                                f"Процесс завершился с кодом {code}; подробности в журнале",
                             )
                         self.processes.pop(filename, None)
                         if proc.stdin:
@@ -285,7 +310,8 @@ class IntegrationManager:
                     while line and not line.endswith("\n"):
                         line = proc.stdout.readline(8193)
                     line = "[слишком длинная строка сервиса пропущена]\n"
-                self._event(filename, line, settings)
+                if self.processes.get(filename) is proc:
+                    self._event(filename, line, settings)
                 record = logging.LogRecord(
                     filename,
                     logging.INFO,

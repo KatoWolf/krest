@@ -1,0 +1,17 @@
+{
+  "base_commit": "4c5be67",
+  "baseline_count": 158,
+  "current_count": 167,
+  "removed": [],
+  "added": [
+    "skills.interactive.quiz_hint",
+    "skills.interactive.quiz_repeat",
+    "skills.interactive.quiz_stop",
+    "skills.practical.days_between",
+    "skills.practical.discount",
+    "skills.practical.percentage",
+    "skills.practical.shift_date",
+    "skills.practical.split_bill",
+    "skills.practical.weekday"
+  ]
+}

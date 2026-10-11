@@ -288,8 +288,13 @@ class MotionController:
         root.bind_class("TButton", "<Destroy>", self._destroy, add="+")
 
     def enabled(self):
-        return (
-            not self.root.config_mgr.snapshot().get("accessibility", {}).get("reduce_motion", False)
+        draft = getattr(self.root, "reduce_motion", None)
+        return not (
+            draft.get()
+            if draft is not None
+            else self.root.config_mgr.snapshot()
+            .get("accessibility", {})
+            .get("reduce_motion", False)
         )
 
     def _enter(self, event):

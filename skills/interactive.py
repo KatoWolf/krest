@@ -282,10 +282,10 @@ def make_decision(text: str, options: str = ""):
 
     selected = random.choice(choices)
     phrases = [
-        f"Я считаю, лучше выбрать {selected}.",
+        f"Случайный выбор: {selected}.",
         f"Мой выбор — {selected}.",
-        f"Однозначно {selected}!",
-        f"Думаю, отличным вариантом будет {selected}.",
+        f"Жребий выпал на {selected}.",
+        f"Пусть случай решит: {selected}.",
     ]
     ans = random.choice(phrases)
 
@@ -442,14 +442,30 @@ def mood(state):
 
 
 @skill(
-    keywords=["поддержи меня", "я устал", "я устала"],
+    keywords=[
+        "поддержи меня",
+        "я устал",
+        "я устала",
+        "у меня не получилось",
+        "я волнуюсь",
+        "мне тревожно",
+    ],
     description="Несколько слов поддержки",
     category="Общение",
 )
-def support(state):
+def support(state, text=""):
     from personality import reply
 
-    return reply("support", state)
+    text = text.casefold().replace("ё", "е")
+    if "устал" in text:
+        kind = "support_tired"
+    elif "не получилось" in text:
+        kind = "support_setback"
+    elif "волнуюсь" in text or "тревожно" in text:
+        kind = "support_worried"
+    else:
+        kind = "support"
+    return reply(kind, state)
 
 
 @skill(
@@ -519,7 +535,7 @@ def evening(state):
 
 
 @skill(
-    keywords=["расскажи факт", "интересный факт", "еще факт"],
+    keywords=["расскажи факт", "интересный факт", "еще факт", "ещё факт"],
     description="Небольшой научный факт",
     category="Общение",
 )
@@ -529,44 +545,190 @@ def fact(state):
     return reply("fact", state)
 
 
+# Public question/answer pairs remain available to existing callers.
 QUIZ = [
     ("Какая планета самая большая в Солнечной системе?", "юпитер"),
     ("Как называется спутник Земли?", "луна"),
     ("Какой океан самый большой?", "тихий"),
     ("Сколько сторон у шестиугольника?", "шесть"),
     ("Какая планета известна как красная?", "марс"),
+    ("Сколько бит в одном байте?", "восемь"),
+    ("Какой газ растения поглощают из воздуха при фотосинтезе?", "углекислый газ"),
+    ("Как называется ближайшая к Земле звезда?", "солнце"),
+    ("Какой прибор измеряет атмосферное давление?", "барометр"),
+    ("Сколько градусов в прямом угле?", "девяносто"),
+    ("Какая планета ближе всего к Солнцу?", "меркурий"),
+    ("Как называется переход воды из жидкого состояния в газообразное?", "испарение"),
+    ("Какая геометрическая фигура имеет три стороны?", "треугольник"),
+    ("В какой системе счисления используются только ноль и один?", "двоичная"),
+    ("Как называется сила, из-за которой предметы падают на Землю?", "сила тяжести"),
 ]
+# Explanation, hint, accepted alternatives. No loose substring matching: an
+# answer containing both the correct word and a contradiction is not accepted.
+QUIZ_DETAILS = {
+    "юпитер": (
+        "Юпитер — крупнейшая планета Солнечной системы, газовый гигант.",
+        "Это газовый гигант с Большим красным пятном.",
+        (),
+    ),
+    "луна": (
+        "Луна — единственный естественный спутник Земли.",
+        "Её фазы видны на ночном небе.",
+        (),
+    ),
+    "тихий": (
+        "Тихий океан больше остальных океанов по площади.",
+        "Его название звучит как описание спокойствия.",
+        ("тихий океан",),
+    ),
+    "шесть": (
+        "В названии шестиугольника указано число его углов и сторон.",
+        "Число спрятано в названии фигуры.",
+        ("6",),
+    ),
+    "марс": (
+        "Красноватый цвет Марса связан с оксидами железа на его поверхности.",
+        "Это четвёртая планета от Солнца.",
+        (),
+    ),
+    "восемь": (
+        "Один байт содержит восемь бит.",
+        "Это два в третьей степени.",
+        ("8", "8 бит", "восемь бит"),
+    ),
+    "углекислый газ": (
+        "При фотосинтезе растения используют углекислый газ и воду, получая энергию света.",
+        "Формула этого газа — CO2.",
+        ("диоксид углерода", "co2"),
+    ),
+    "солнце": (
+        "Солнце — звезда, вокруг которой обращается Земля.",
+        "Именно эта звезда освещает наш день.",
+        (),
+    ),
+    "барометр": (
+        "Барометр измеряет атмосферное давление; термометр — температуру.",
+        "Его название начинается с «баро».",
+        (),
+    ),
+    "девяносто": (
+        "Прямой угол равен девяноста градусам — четверти полного оборота.",
+        "Это половина развёрнутого угла.",
+        ("90", "90 градусов", "девяносто градусов"),
+    ),
+    "меркурий": (
+        "Меркурий — первая планета от Солнца.",
+        "У этой планеты нет естественных спутников; название начинается с «мер».",
+        (),
+    ),
+    "испарение": (
+        "При испарении жидкость переходит в газ с поверхности; для этого не обязательно кипение.",
+        "Так постепенно высыхает лужа.",
+        (),
+    ),
+    "треугольник": (
+        "У треугольника три стороны и три угла.",
+        "Число сторон есть в названии фигуры.",
+        (),
+    ),
+    "двоичная": (
+        "В двоичной системе каждый разряд соответствует степени двойки.",
+        "Название связано с числом два.",
+        (
+            "двоичная система",
+            "двоичной",
+            "двоичной системе",
+            "двоичная система счисления",
+            "двоичной системе счисления",
+            "в двоичной системе",
+            "в двоичной системе счисления",
+        ),
+    ),
+    "сила тяжести": (
+        "Земля притягивает тела благодаря гравитации.",
+        "Её действие связано с гравитацией.",
+        ("гравитация", "тяготение", "земное притяжение", "притяжение"),
+    ),
+}
 
 
 @skill(
     keywords=["задай вопрос", "давай викторину", "следующий вопрос"],
-    description="Короткая голосовая викторина",
+    description="Локальная викторина без повторов до конца набора",
     category="Общение",
 )
 def quiz(state):
-    previous = getattr(state, "_quiz_answer", None)
-    question, answer = random.choice([q for q in QUIZ if q[1] != previous])
+    from personality import choose_response
+
+    question, answer = choose_response(state, "quiz", QUIZ)
     state._quiz_answer = answer
+    state._quiz_question = question
     return question + " Скажите: мой ответ, и ваш вариант."
+
+
+def _normalize_quiz_answer(answer):
+    value = re.sub(r"[^\w\s]", " ", str(answer).casefold().replace("ё", "е"))
+    value = " ".join(value.split())
+    for prefix in ("я думаю это ", "я думаю ", "это "):
+        if value.startswith(prefix):
+            value = value[len(prefix) :]
+            break
+    return value
 
 
 @skill(
     patterns=[r"мой ответ (?P<answer>.+)"],
     examples=["мой ответ юпитер"],
-    description="Ответить на вопрос викторины",
+    description="Ответить на вопрос викторины и узнать объяснение",
     category="Общение",
 )
 def quiz_answer(state, answer):
     expected = getattr(state, "_quiz_answer", None)
     if expected is None:
         return "Сначала скажите: задай вопрос."
+    value = _normalize_quiz_answer(answer)
+    if not value:
+        return "Не расслышала ответ. Скажите: мой ответ, и ваш вариант."
+    explanation, _, aliases = QUIZ_DETAILS[expected]
+    correct = value in {_normalize_quiz_answer(a) for a in (expected, *aliases)}
     state._quiz_answer = None
-    value = answer.casefold().strip(" .!?").replace("ё", "е")
-    correct = value in (
-        expected,
-        "тихий океан" if expected == "тихий" else expected,
-        "6" if expected == "шесть" else expected,
-    )
+    state._quiz_question = None
     return (
-        "Верно!" if correct else "Правильный ответ: " + expected + "."
-    ) + " Для продолжения скажите: следующий вопрос."
+        ("Верно! " if correct else "Правильный ответ: " + expected + ". ")
+        + explanation
+        + " Для продолжения скажите: следующий вопрос."
+    )
+
+
+@skill(
+    keywords=["подсказка викторины", "дай подсказку"],
+    description="Подсказка к текущему вопросу викторины",
+    category="Общение",
+)
+def quiz_hint(state):
+    expected = getattr(state, "_quiz_answer", None)
+    if expected is None:
+        return "Сначала скажите: задай вопрос."
+    return QUIZ_DETAILS[expected][1]
+
+
+@skill(
+    keywords=["повтори вопрос"],
+    description="Повторить вопрос викторины без смены ответа",
+    category="Общение",
+)
+def quiz_repeat(state):
+    question = getattr(state, "_quiz_question", None)
+    return question or "Сначала скажите: задай вопрос."
+
+
+@skill(
+    keywords=["закончи викторину", "останови викторину"],
+    description="Закончить текущую викторину",
+    category="Общение",
+)
+def quiz_stop(state):
+    pending = getattr(state, "_quiz_answer", None) is not None
+    state._quiz_answer = None
+    state._quiz_question = None
+    return "Викторина завершена." if pending else "Сейчас нет вопроса без ответа."

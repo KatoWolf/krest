@@ -358,6 +358,8 @@ class Kernel:
                 return True
             if name not in operations:
                 raise ValueError("Неизвестная операция сервиса")
+            if name in ("start", "stop", "restart"):
+                return self.integrations.perform(filename, name)
             return operations[name](filename)
         if method == "dota":
             from skills import gid

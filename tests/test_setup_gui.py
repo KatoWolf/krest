@@ -111,3 +111,46 @@ def test_bundled_font_is_shared_by_buttons_fields_and_dialogs():
         assert (root_path / "LICENSE.txt").is_file()
     finally:
         root.destroy()
+
+
+def test_closed_setup_releases_tk_variable_before_worker_gc(tmp_path, monkeypatch):
+    """Closing mid-check must never leave Tcl finalization to the worker."""
+    import gc
+    import threading
+    import weakref
+    import setup_app
+
+    executable = tmp_path / "python.exe"
+    executable.touch()
+    started, release, finished = (threading.Event() for _ in range(3))
+    main_thread = threading.get_ident()
+    finalized_on = []
+    original_del = setup_app.tk.Variable.__del__
+
+    def tracked_del(variable):
+        finalized_on.append(threading.get_ident())
+        original_del(variable)
+
+    def inspect(*args):
+        started.set()
+        assert release.wait(3)
+        gc.collect()
+        finished.set()
+        return {"missing": [], "broken": []}
+
+    monkeypatch.setattr(setup_app.tk.Variable, "__del__", tracked_del)
+    monkeypatch.setattr(setup_app, "inspect", inspect)
+    app = setup_app.SetupWindow("music", executable, launch=False)
+    assert started.wait(2)
+    variable = weakref.ref(app.status)
+    app.destroy()
+    del app
+    try:
+        # Destruction must happen synchronously on the caller's Tk thread,
+        # rather than just happen to pass when a later GC runs on that thread.
+        assert variable() is None
+        assert finalized_on == [main_thread]
+    finally:
+        release.set()
+        assert finished.wait(3)
+    assert finalized_on == [main_thread]

@@ -6,7 +6,9 @@ on:
     paths:
       - 'packaging/**'
       - '**/*.py'
-      - 'requirements-build.txt'
+      - 'requirements*.txt'
+      - 'assets/**'
+      - 'license_public_key.pem'
       - '.github/workflows/windows-release.yml'
 permissions:
   contents: read
@@ -56,3 +58,14 @@ jobs:
         with:
           name: Krest-compilation-report
           path: build/windows/compilation-report.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Krest-release-diagnostics
+          path: |
+            test-results.xml
+            build/windows/*.log
+            build/windows/release-checks/
+            build/windows/verified-distribution.json
+            nuitka-crash-report.xml
+          if-no-files-found: warn

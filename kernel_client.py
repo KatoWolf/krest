@@ -149,16 +149,22 @@ class ServiceProxy:
         return {k: v for k, v in self.remote.cached["services"].items() if v["running"]}
 
     def details(self, filename):
-        return self.remote.cached["services"].get(
-            filename,
-            {
-                "running": False,
-                "pid": None,
-                "uptime": 0,
-                "error": self.errors.get(filename, ""),
-                "bridge": {},
-            },
+        detail = dict(
+            self.remote.cached["services"].get(
+                filename,
+                {
+                    "running": False,
+                    "pid": None,
+                    "uptime": 0,
+                    "error": self.errors.get(filename, ""),
+                    "bridge": {},
+                },
+            )
         )
+        if filename in self.errors:
+            detail["error"] = self.errors[filename]
+            detail["health"] = "error"
+        return detail
 
     def refresh(self):
         return self.remote.cached["service_statuses"]
@@ -172,7 +178,23 @@ class ServiceProxy:
         )
 
     def exists(self, filename):
+        detail = self.remote.cached["services"].get(filename, {})
+        if "installed" in detail:
+            return detail["installed"]
         return Path(self.path(filename)).is_file()
+
+    def perform(self, filename, action):
+        if action not in ("start", "stop", "restart"):
+            raise ValueError("Неизвестное действие сервиса")
+        try:
+            result = getattr(self, action)(filename)
+            self.errors.pop(filename, None)
+            return result
+        except Exception as exc:
+            from integrations import redact
+
+            self.errors[filename] = redact(str(exc), self.remote.settings())
+            raise
 
     def __getattr__(self, name):
         if name in (

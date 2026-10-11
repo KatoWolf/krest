@@ -17,7 +17,7 @@ from ui_dialogs import messagebox, simpledialog
 from core_pages import CorePages
 from skill_import_pages import SkillImportPages
 from warframe_pages import WarframePages, PAGE_NAMES
-from menu_effects import AppearancePages, MenuEffects
+from menu_effects import AppearancePages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -62,6 +62,7 @@ class ControlCenterApp(
         ("scenarios", "Сценарии"),
         ("inbox", "Уведомления"),
         ("maintenance", "Нагрузка и файлы"),
+        ("bot_status", "Состояние ботов"),
         ("api", "Telegram"),
         ("steam", "Steam / CS2"),
         ("discord_account", "Мой Discord"),
@@ -86,7 +87,7 @@ class ControlCenterApp(
         (
             "steam",
             "Подключения",
-            ("steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
+            ("bot_status", "steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
         ),
         ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
         ("wf_home", "Warframe", tuple(code for code, _ in PAGE_NAMES)),
@@ -138,7 +139,6 @@ class ControlCenterApp(
         self.init_product_pages()
         self.init_workflows()
         self.init_warframe()
-        self.init_appearance()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
         self.service_restart = {}
@@ -219,6 +219,7 @@ class ControlCenterApp(
 
         self.bind("<Control-k>", lambda e: show_panel(self))
         self.bind("<Control-l>", lambda e: self._focus_command())
+        self.bind("<Control-f>", lambda e: self._focus_settings_search())
         self.bind("<F8>", lambda e: self._arm_voice())
         self.bind("<Escape>", lambda e: voice.stop_speaking())
         self.bind("<Unmap>", self._on_minimize)
@@ -250,7 +251,7 @@ class ControlCenterApp(
         apply_style(self, self.theme)
 
     def label(self, parent, text="", large=False, muted=False, **kwargs):
-        return tk.Label(
+        label = tk.Label(
             parent,
             text=text,
             bg=parent.cget("bg"),
@@ -260,12 +261,23 @@ class ControlCenterApp(
             justify="left",
             **kwargs,
         )
+        if kwargs.get("wraplength"):
+            limit = kwargs["wraplength"]
+
+            def fit(event):
+                if event.width > 100 and label.winfo_exists():
+                    width = min(limit, event.width - 4)
+                    if int(label.cget("wraplength")) != width:
+                        label.configure(wraplength=width)
+
+            parent.bind("<Configure>", fit, add="+")
+        return label
 
     def card(self, parent, title, subtitle=""):
         surface = RoundedCard(parent, self.theme)
         surface.pack(fill="x", pady=(0, 16))
         frame = surface.inner
-        heading = self.label(frame, title)
+        heading = self.label(frame, title, wraplength=680)
         heading.configure(font=(UI_FONT, 14, "bold"))
         heading.pack(anchor="w", pady=(0, 8))
         if subtitle:
@@ -295,7 +307,10 @@ class ControlCenterApp(
         self.shell.pack(fill="both", expand=True)
         from PIL import ImageTk
 
-        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=220, padx=18, pady=26)
+        from tkinter import font as tkfont
+
+        nav_width = max(220, tkfont.Font(family=UI_FONT, size=11).measure("Завершить работу") + 68)
+        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=nav_width, padx=18, pady=26)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         self._brand_image = ImageTk.PhotoImage(load_image(44), master=self)
@@ -315,17 +330,26 @@ class ControlCenterApp(
         ttk.Button(
             side, text="Свернуть в трей", style="Nav.TButton", command=self.hide_to_tray
         ).pack(side="bottom", fill="x", pady=6)
-        self.nav_canvas = tk.Canvas(side, bg=self.theme["sidebar"], highlightthickness=0, width=178)
-        self.nav_canvas.pack(fill="both", expand=True)
+        nav_container = tk.Frame(side, bg=self.theme["sidebar"])
+        nav_container.pack(fill="both", expand=True)
+        self.nav_canvas = tk.Canvas(
+            nav_container, bg=self.theme["sidebar"], highlightthickness=0, width=178
+        )
+        self.nav_scrollbar = ttk.Scrollbar(
+            nav_container, orient="vertical", command=self.nav_canvas.yview
+        )
+        self.nav_canvas.configure(yscrollcommand=self.nav_scrollbar.set)
+        self.nav_canvas.pack(side="left", fill="both", expand=True)
         self.nav_frame = tk.Frame(self.nav_canvas, bg=self.theme["sidebar"])
         nav_window = self.nav_canvas.create_window((0, 0), window=self.nav_frame, anchor="nw")
         self.nav_frame.bind(
             "<Configure>",
-            lambda e: self.nav_canvas.configure(scrollregion=self.nav_canvas.bbox("all")),
+            lambda e: self._update_nav_scroll(),
         )
         self.nav_canvas.bind(
             "<Configure>", lambda e: self.nav_canvas.itemconfigure(nav_window, width=e.width)
         )
+        self.nav_canvas.bind("<Configure>", lambda e: self._update_nav_scroll(), add="+")
         self.nav_buttons = {}
         self.group_buttons = {}
         for default, title, codes in self.NAV_GROUPS:
@@ -337,6 +361,7 @@ class ControlCenterApp(
                 command=lambda k=default: self.switch_page(k),
             )
             button.pack(fill="x", pady=4)
+            button.bind("<FocusIn>", lambda e, b=button: self._reveal_nav_button(b))
             self.group_buttons[default] = button
             for key in codes:
                 self.nav_buttons[key] = button
@@ -344,25 +369,24 @@ class ControlCenterApp(
         body.pack(side="left", fill="both", expand=True)
         header = tk.Frame(body, bg=self.theme["bg"])
         header.pack(fill="x", pady=(0, 10))
+        title_row = tk.Frame(header, bg=self.theme["bg"])
+        title_row.pack(fill="x")
         ttk.Button(
-            header, text="Поиск  Ctrl+K", command=lambda: __import__("quick_panel").show_panel(self)
+            title_row,
+            text="Поиск  Ctrl+K",
+            command=lambda: __import__("quick_panel").show_panel(self),
         ).pack(side="right", anchor="n")
-        ttk.Button(header, text="Разбор команды", command=self._open_command_parser).pack(
+        ttk.Button(title_row, text="Разбор команды", command=self._open_command_parser).pack(
             side="right", anchor="n", padx=6
         )
         self.page_title = tk.StringVar()
         self.page_subtitle = tk.StringVar()
-        title = self.label(header, textvariable=self.page_title)
+        title = self.label(title_row, textvariable=self.page_title)
         title.configure(font=(UI_FONT, 24, "bold"))
         title.pack(anchor="w")
-        self.label(header, textvariable=self.page_subtitle, muted=True).pack(
+        self.label(header, textvariable=self.page_subtitle, muted=True, wraplength=900).pack(
             anchor="w", pady=(6, 0)
         )
-        self.effects_header = tk.Canvas(body, bg=self.theme["bg"], height=14, highlightthickness=0)
-        self.effects_header.pack(fill="x", pady=(0, 6))
-        if self.effects:
-            self.effects.close()
-        self.effects = MenuEffects(self, self.effects_header)
         self.subnav = tk.Frame(body, bg=self.theme["bg"])
         self.subnav.pack(fill="x", pady=(0, 10))
         footer = tk.Frame(body, bg=self.theme["bg"])
@@ -419,7 +443,7 @@ class ControlCenterApp(
         self.after_idle(lambda: style_titlebar(self, self.theme))
         self.switch_page(self.current_page)
 
-    BOT_PAGES = {"api", "steam", "discord_account", "discord_bot", "scripts"}
+    BOT_PAGES = {"bot_status", "api", "steam", "discord_account", "discord_bot", "scripts"}
     CORE_PAGES = {
         "timers",
         "scenarios",
@@ -471,6 +495,27 @@ class ControlCenterApp(
             ).pack(anchor="w")
             self._locked_pages[code] = frame
         self._locked_pages[code].pack(fill="both", expand=True)
+
+    def _update_nav_scroll(self):
+        bounds = self.nav_canvas.bbox("all")
+        self.nav_canvas.configure(scrollregion=bounds)
+        overflow = bool(bounds and bounds[3] > self.nav_canvas.winfo_height())
+        if overflow and not self.nav_scrollbar.winfo_manager():
+            self.nav_scrollbar.pack(side="right", fill="y")
+        elif not overflow and self.nav_scrollbar.winfo_manager():
+            self.nav_scrollbar.pack_forget()
+            self.nav_canvas.yview_moveto(0)
+
+    def _reveal_nav_button(self, button):
+        self.update_idletasks()
+        top = self.nav_canvas.canvasy(0)
+        bottom = top + self.nav_canvas.winfo_height()
+        y, height = button.winfo_y(), button.winfo_height()
+        total = max(1, self.nav_frame.winfo_height())
+        if y < top:
+            self.nav_canvas.yview_moveto(y / total)
+        elif y + height > bottom:
+            self.nav_canvas.yview_moveto((y + height - self.nav_canvas.winfo_height()) / total)
 
     def _wheel(self, event):
         if isinstance(event.widget, (ttk.Treeview, tk.Text, ttk.Combobox, tk.Listbox)) or (
@@ -531,12 +576,12 @@ class ControlCenterApp(
             for i in range(4):
                 self.subnav.columnconfigure(i, weight=1, uniform="tabs")
         self.current_page = code
+        self._animate_transition()
         if code in self.BOT_PAGES and not self.config_mgr.is_premium():
             self._show_locked_page(code)
             return
         self._ensure_page(code)
         self.pages[code].pack(fill="both", expand=True)
-        self._animate_transition()
         if code.startswith("wf_"):
             self.wf_refresh()
         if code == "skills":
@@ -556,16 +601,20 @@ class ControlCenterApp(
                 values=list(self.config_mgr.snapshot()["scenarios"])
             )
 
-    def _preview_personality(self):
-        from types import SimpleNamespace
-        from personality import reply
+    def _preview_personality(self, *_):
+        from personality import preview
 
-        cfg = self._draft()
-        state = SimpleNamespace(owner_name=cfg["owner_name"], config_getter=lambda: cfg)
-        messagebox.showinfo(
-            "Характер Крест",
-            reply("greeting", state) + "\n\n" + reply("support", state),
-            parent=self,
+        key = next(
+            (k for k, v in PERSONALITIES.items() if v == self.personality_var.get()), "friendly"
+        )
+        intents = {
+            "Знакомство": "greeting",
+            "Поддержка": "support",
+            "Разговор": "conversation",
+            "Юмор": "joke",
+        }
+        self.personality_preview.set(
+            preview(key, self.owner_var.get(), intents[self.preview_situation.get()])
         )
 
     def _open_command_parser(self):
@@ -905,6 +954,9 @@ class ControlCenterApp(
             names = {
                 "basic": "Время и дата",
                 "interactive": "Интерактивные команды",
+                "practical": "Расчёты и календарь",
+                "workflows": "Сценарии и повседневные задачи",
+                "warframe": "Помощник Warframe",
                 "meta": "Управление ассистентом",
                 "media": "Медиа и громкость",
                 "utils": "Вычисления и конвертер",
@@ -925,10 +977,35 @@ class ControlCenterApp(
     def refresh_skills(self):
         if "skills" not in self._built_pages:
             return
-        selected = self.skill_tree.selection()
-        self.skill_tree.delete(*self.skill_tree.get_children())
         query = self.skill_search.get().casefold()
         self.catalog = {item.id: item for item in self.runtime.manager.catalog()}
+        settings = (
+            self.runtime.manager.settings()
+            if callable(getattr(self.runtime.manager, "settings", None))
+            else self.config_mgr.snapshot()
+        )
+        signature = (
+            self.skill_tree,
+            query,
+            settings.get("safe_mode", False),
+            tuple(sorted(settings.get("skills", {}).items())),
+            tuple(
+                (
+                    item.id,
+                    item.description,
+                    item.category,
+                    tuple(item.keywords),
+                    getattr(item, "availability", None),
+                    getattr(item, "requires_windows", False),
+                )
+                for item in self.catalog.values()
+            ),
+        )
+        if signature == getattr(self, "_skill_render_signature", None):
+            return
+        self._skill_render_signature = signature
+        selected = self.skill_tree.selection()
+        self.skill_tree.delete(*self.skill_tree.get_children())
         categories = {
             "Clipboard": "Вычисления",
             "Media": "Медиа",
@@ -1404,16 +1481,26 @@ class ControlCenterApp(
 
         self._background(work, done=done)
 
+    def _focus_settings_search(self):
+        self.switch_page("settings")
+        self.settings_search_entry.focus_set()
+        self.settings_search_entry.selection_range(0, "end")
+        return "break"
+
     def build_settings_tab(self):
-        card = self.card(
-            self.page_bodies["settings"],
-            "Крест настроится сама",
-            "Микрофон и плеер выбираются автоматически. Модели и Steam ищутся на этом компьютере; ваши ручные настройки сохраняются.",
+        page = self.page_bodies["settings"]
+        search = tk.Frame(page, bg=self.theme["bg"])
+        search.pack(fill="x", pady=(0, 16))
+        self.label(search, "Найти настройку · Ctrl+F", muted=True).pack(anchor="w", pady=(0, 6))
+        self.settings_search = tk.StringVar()
+        self.settings_search_entry = ttk.Entry(search, textvariable=self.settings_search)
+        self.settings_search_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(search, text="Сбросить", command=lambda: self.settings_search.set("")).pack(
+            side="right", padx=(8, 0)
         )
-        self.label(card, textvariable=self.auto_setup_info, muted=True, wraplength=680).pack(
-            anchor="w", pady=(0, 12)
-        )
-        ttk.Button(card, text="Подобрать автоматически", command=self._auto_setup).pack(anchor="w")
+        self.settings_search_entry.bind("<Escape>", lambda e: self.settings_search.set(""))
+        self.settings_results = self.label(page, "", muted=True)
+        self.settings_results.pack(anchor="w", pady=(0, 8))
         card = self.card(self.page_bodies["settings"], "Профиль и оформление")
         self.entry_owner_name = self.field(card, "Ваше имя", self.owner_var)
         self.label(card, "Стиль общения", muted=True).pack(anchor="w")
@@ -1433,12 +1520,45 @@ class ControlCenterApp(
             )
             character.set(CHARACTERS[key])
 
-        self.personality_var.trace_add("write", describe)
+        previous = getattr(self, "_personality_trace", None)
+        if previous:
+            self.personality_var.trace_remove("write", previous)
+        self._personality_trace = self.personality_var.trace_add("write", describe)
         describe()
         self.label(card, textvariable=character, muted=True, wraplength=640).pack(
             anchor="w", pady=8
         )
-        ttk.Button(card, text="Пример ответа", command=self._preview_personality).pack(anchor="w")
+        preview_row = tk.Frame(card, bg=self.theme["card"])
+        preview_row.pack(fill="x", pady=(10, 8))
+        self.label(preview_row, "Предпросмотр", muted=True).pack(side="left", padx=(0, 12))
+        self.preview_situation = tk.StringVar(value="Знакомство")
+        ttk.Combobox(
+            preview_row,
+            textvariable=self.preview_situation,
+            values=("Знакомство", "Поддержка", "Разговор", "Юмор"),
+            state="readonly",
+            width=18,
+        ).pack(side="left")
+        self.personality_preview = tk.StringVar()
+        self.label(card, textvariable=self.personality_preview, wraplength=620).pack(
+            fill="x", pady=(0, 8)
+        )
+        self.label(
+            card,
+            "Локальный пример выбранного характера. Изменения применяются после сохранения.",
+            muted=True,
+            wraplength=620,
+        ).pack(anchor="w", pady=(0, 8))
+        self.preview_situation.trace_add("write", self._preview_personality)
+        for attr, variable in (
+            ("_preview_character_trace", self.personality_var),
+            ("_preview_owner_trace", self.owner_var),
+        ):
+            previous = getattr(self, attr, None)
+            if previous:
+                variable.trace_remove("write", previous)
+            setattr(self, attr, variable.trace_add("write", self._preview_personality))
+        self._preview_personality()
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=6)
         self.label(row, "Тема", width=24).pack(side="left")
@@ -1512,6 +1632,74 @@ class ControlCenterApp(
             anchor="w", pady=4
         )
 
+        card = self.card(
+            self.page_bodies["settings"],
+            "Крест настроится сама",
+            "Микрофон и плеер выбираются автоматически. Модели и Steam ищутся на этом компьютере; ваши ручные настройки сохраняются.",
+        )
+        self.label(card, textvariable=self.auto_setup_info, muted=True, wraplength=680).pack(
+            anchor="w", pady=(0, 12)
+        )
+        ttk.Button(card, text="Подобрать автоматически", command=self._auto_setup).pack(anchor="w")
+        card = self.card(
+            page, "Другие настройки", "Точные параметры находятся в соответствующем разделе."
+        )
+        for code, title in (
+            ("voice", "Голос · распознавание, паузы, порог и произношение"),
+            ("appearance", "Оформление · палитра и темы"),
+            ("security", "Доступность · масштаб и уменьшение движения"),
+            ("bot_status", "Подключения · состояние ботов"),
+        ):
+            ttk.Button(card, text=title, command=lambda k=code: self.switch_page(k)).pack(
+                fill="x", pady=3
+            )
+        self._settings_cards = [w for w in page.winfo_children() if isinstance(w, RoundedCard)]
+        self._settings_search_index = [
+            (w, self._settings_widget_text(w)) for w in self._settings_cards
+        ]
+        self.settings_search.trace_add("write", self._filter_settings)
+        self._filter_settings()
+
+    @staticmethod
+    def _settings_widget_text(widget):
+        # Index labels and button captions, never values (including secrets).
+        parts = []
+        if isinstance(widget, (tk.Label, ttk.Label, ttk.Button, ttk.Checkbutton)):
+            parts.append(str(widget.cget("text")))
+        for child in widget.winfo_children():
+            parts.append(ControlCenterApp._settings_widget_text(child))
+        return " ".join(parts).casefold().replace("ё", "е")
+
+    def _filter_settings(self, *_):
+        terms = self.settings_search.get().casefold().replace("ё", "е").split()
+        found = 0
+        for card, text in self._settings_search_index:
+            card.pack_forget()
+            if all(term in text for term in terms):
+                card.pack(fill="x", pady=(0, 16))
+                found += 1
+                if terms:
+                    self._reveal_setting_details(card, terms)
+        self.settings_results.configure(
+            text=(
+                f"Разделов найдено: {found}"
+                if terms and found
+                else "Ничего не найдено. Попробуйте «микрофон», «тема» или «имя»."
+                if terms
+                else ""
+            )
+        )
+        self.canvases["settings"].yview_moveto(0)
+
+    def _reveal_setting_details(self, widget, terms):
+        if isinstance(widget, Disclosure) and all(
+            term in self._settings_widget_text(widget) for term in terms
+        ):
+            widget.opened = True
+            widget._draw()
+        for child in widget.winfo_children():
+            self._reveal_setting_details(child, terms)
+
     def build_logs_tab(self):
         card = self.card(self.page_bodies["logs"], "Журнал событий")
         row = tk.Frame(card, bg=self.theme["card"])
@@ -1560,7 +1748,6 @@ class ControlCenterApp(
         data["media"]["preferred_app"] = self.media_source_var.get()
 
         data["warframe"] = self.warframe_settings_draft()
-        data["visual_effects"] = self.effects_draft()
         data["selected_theme"] = self.theme_var.get()
         data["command_aliases"] = dict(self.aliases)
         data["pronunciations"] = dict(self.pronunciations)
@@ -1633,6 +1820,7 @@ class ControlCenterApp(
                 "reminder_label",
                 "reminder_delay",
                 "skill_search",
+                "settings_search",
                 "daily_time",
                 "alias_name",
                 "alias_target",
@@ -1642,8 +1830,9 @@ class ControlCenterApp(
         built_pages = set(self._built_pages)
         core_pending = self.core_draft_values() if self.CORE_PAGES & built_pages else None
         self.wf_preserve()
-        if self.effects:
-            self.effects.close()
+        if self._transition_job:
+            self.after_cancel(self._transition_job)
+            self._transition_job = None
         self.shell.destroy()
         self._timer_rows = None
         self._reminder_rows = None
@@ -1689,30 +1878,7 @@ class ControlCenterApp(
         self._append_log("Ошибка: " + str(text))
 
     def _integration_action(self, filename, action):
-        if action in ("start", "restart") and not self.config_mgr.is_premium():
-            self._report_error("Подключение ботов доступно в Premium")
-            self.switch_page("license")
-            return
-        if filename in self.busy_services:
-            return
-        if action in ("start", "restart") and not self.save_all_settings(quiet=True):
-            return
-        self.busy_services.add(filename)
-        self.service_labels[filename].configure(text="Выполняется…")
-
-        def operation():
-            try:
-                result = getattr(self.integration, action)(filename)
-                self.post_ui(lambda: self._append_log(filename + ": " + result))
-            except Exception as exc:
-                from integrations import redact
-
-                self.integration.errors[filename] = redact(str(exc), self.config_mgr.snapshot())
-                raise
-            finally:
-                self.post_ui(lambda: self.busy_services.discard(filename))
-
-        self._background(operation)
+        return self._service_action(filename, action)
 
     def _auth(self, login=False):
         if not self.config_mgr.is_premium():
@@ -1991,47 +2157,7 @@ class ControlCenterApp(
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
             self._last_refresh = now
-            statuses = self.integration.refresh()
-            for key, (filename, title) in self.integration.MODULES.items():
-                if filename not in self.service_labels:
-                    continue
-                if filename not in self.busy_services:
-                    detail = self.integration.details(filename)
-                    self.service_labels[filename].configure(
-                        text="● " + statuses[key],
-                        fg=self.theme["accent"]
-                        if detail["running"]
-                        else self.theme["danger"]
-                        if detail["error"]
-                        else self.theme["sub_text"],
-                    )
-                    seconds = detail["uptime"]
-                    self.service_details[filename].configure(
-                        text=(
-                            f"PID {detail['pid']} · Работает {seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}"
-                            if detail["running"]
-                            else detail["error"]
-                            or "Заполните настройки сервиса, сохраните и нажмите «Запустить»."
-                        )
-                    )
-                    if detail["running"]:
-                        bridge = detail["bridge"]
-                        message = bridge.get(
-                            "text", "События моста ещё не получены; доступен журнал процесса."
-                        )
-                        if detail["error"]:
-                            message = detail["error"]
-                        self.service_details[filename].configure(
-                            text=f"PID {detail['pid']} · Работает {seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}\n"
-                            + message
-                        )
-                else:
-                    detail = self.integration.details(filename)
-                for action, button in self.service_buttons[filename].items():
-                    enabled = filename not in self.busy_services and (
-                        not detail["running"] if action == "start" else detail["running"]
-                    )
-                    button.configure(state="normal" if enabled else "disabled")
+            self._update_service_views()
             self._update_timers()
             self._update_reminders()
             if self.current_page in self.CORE_PAGES:
@@ -2134,9 +2260,6 @@ class ControlCenterApp(
 
     def destroy(self):
         # Cancel Tcl timers before their Python callbacks/widgets are destroyed.
-        effects = getattr(self, "effects", None)
-        if effects:
-            effects.close()
         try:
             for job in self.tk.call("after", "info"):
                 # Preserve callback ownership: child.destroy() deletes its own Tcl command.
@@ -2150,8 +2273,6 @@ class ControlCenterApp(
         indicator_controller.stop()
         logging.getLogger().removeHandler(self._log_handler)
         self._destroyed = True
-        if self.effects:
-            self.effects.close()
         self.destroy()
 
 

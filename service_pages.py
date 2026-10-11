@@ -11,7 +11,148 @@ import webbrowser
 from steam_service import read_cache
 
 
+def service_presentation(detail, *, installed=True, premium=True, busy=False):
+    """Pure presentation model shared by service cards and the status screen."""
+    running = detail.get("running", False)
+    error = detail.get("error", "")
+    busy = busy or bool(detail.get("operation"))
+    health = detail.get("health", "stopped")
+    if busy:
+        title, tone = "Выполняется…", "sub_text"
+        message = "Дождитесь завершения операции. Повторное подключение заблокировано."
+    elif not installed:
+        title, tone = "Не установлен", "danger"
+        message = "Файл сервиса не найден. Проверьте путь к скрипту в настройках сервиса."
+    elif error:
+        title, tone = "Ошибка подключения", "danger"
+        message = error + "\nПроверьте настройки доступа и журнал, затем переподключите сервис."
+    elif health == "ready":
+        title, tone = "Подключён", "accent"
+        message = detail.get("bridge", {}).get("text") or "Сервис подтвердил готовность."
+    elif running:
+        title, tone = "Ожидание готовности", "sub_text"
+        message = (
+            detail.get("bridge", {}).get("text")
+            or "Процесс запущен, но ещё не подтвердил подключение. Подробности — в журнале."
+        )
+        if detail.get("uptime", 0) >= 30:
+            message += "\nОжидание дольше 30 секунд: проверьте сеть и авторизацию. Пользовательский скрипт может не поддерживать мост."
+    else:
+        title, tone = "Остановлен", "sub_text"
+        message = "Сохраните настройки доступа, затем подключите или переподключите сервис."
+    if not premium:
+        message += "\nПодключение ботов доступно в Premium."
+    if detail.get("restart_in") is not None:
+        message += f"\nАвтовосстановление через {detail['restart_in']} с."
+    if running:
+        seconds = detail.get("uptime", 0)
+        message += f"\nPID {detail.get('pid')} · Время работы {seconds // 3600:02}:{seconds % 3600 // 60:02}:{seconds % 60:02}"
+    available = not busy and installed and premium
+    return {
+        "title": title,
+        "tone": tone,
+        "message": message,
+        "buttons": {
+            "start": available and not running,
+            "stop": not busy and (running or detail.get("restart_in") is not None),
+            "restart": available,
+        },
+    }
+
+
 class ServicePages:
+    def build_bot_status_tab(self):
+        self.bot_status_views = {}
+        card = self.card(
+            self.page_bodies["bot_status"],
+            "Состояние ботов",
+            "Готовность подтверждает сам сервис. Здесь видны подключения, причины ошибок и ожидание восстановления.",
+        )
+        self.label(
+            card, "Переподключение использует сохранённые настройки доступа.", muted=True
+        ).pack(anchor="w")
+        for filename, title in self.integration.MODULES.values():
+            card = self.card(self.page_bodies["bot_status"], title)
+            label = self.label(card, "Проверка состояния…")
+            label.pack(anchor="w", pady=4)
+            description = self.label(card, "", muted=True, wraplength=680)
+            description.pack(anchor="w")
+            row = tk.Frame(card, bg=self.theme["card"])
+            row.pack(fill="x", pady=8)
+            buttons = {}
+            for action, caption in (("restart", "Переподключить"), ("stop", "Остановить")):
+                button = ttk.Button(
+                    row,
+                    text=caption,
+                    command=lambda f=filename, a=action: self._integration_action(f, a),
+                )
+                button.pack(side="left", padx=(0, 6))
+                buttons[action] = button
+            ttk.Button(
+                row, text="Журнал →", command=lambda f=filename: self._open_service_log(f)
+            ).pack(side="right")
+            self.bot_status_views[filename] = (label, description, buttons)
+        self._update_service_views(refresh=False)
+
+    def _update_service_views(self, refresh=True):
+        if refresh:
+            self.integration.refresh()
+        premium = self.config_mgr.is_premium()
+        for filename, title in self.integration.MODULES.values():
+            detail = self.integration.details(filename)
+            view = service_presentation(
+                detail,
+                installed=detail.get("installed", True),
+                premium=premium,
+                busy=filename in self.busy_services,
+            )
+            widgets = []
+            if filename in self.service_labels:
+                widgets.append(
+                    (
+                        self.service_labels[filename],
+                        self.service_details[filename],
+                        self.service_buttons[filename],
+                    )
+                )
+            if filename in getattr(self, "bot_status_views", {}):
+                widgets.append(self.bot_status_views[filename])
+            for label, description, buttons in widgets:
+                if not label.winfo_exists():
+                    continue
+                label.configure(text="● " + view["title"], fg=self.theme[view["tone"]])
+                description.configure(text=view["message"])
+                for action, button in buttons.items():
+                    button.configure(state="normal" if view["buttons"].get(action) else "disabled")
+
+    def _service_action(self, filename, action):
+        if action not in ("start", "stop", "restart"):
+            return
+        if filename in self.busy_services:
+            return
+        if action in ("start", "restart"):
+            if not self.config_mgr.is_premium():
+                self._report_error("Подключение ботов доступно в Premium")
+                self.switch_page("license")
+                return
+            if not self.save_all_settings(quiet=True):
+                return
+        self.busy_services.add(filename)
+        self._update_service_views(refresh=False)
+
+        def finish():
+            self.busy_services.discard(filename)
+            self._update_service_views(refresh=False)
+
+        def operation():
+            try:
+                result = self.integration.perform(filename, action)
+                self.post_ui(lambda: self._append_log(filename + ": " + result))
+            finally:
+                self.post_ui(finish)
+
+        self._background(operation)
+
     def _startup_checks(self):
         import psutil
 
@@ -33,9 +174,9 @@ class ServicePages:
         row.pack(fill="x", pady=8)
         self.service_buttons[filename] = {}
         for action, caption in (
-            ("start", "Запустить"),
+            ("start", "Подключить"),
             ("stop", "Остановить"),
-            ("restart", "Перезапустить"),
+            ("restart", "Переподключить"),
         ):
             button = ttk.Button(
                 row,

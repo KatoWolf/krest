@@ -49,6 +49,8 @@ def check_kernel(config_path):
                 lock.close()
                 break
             time.sleep(0.1)
+        else:
+            raise RuntimeError("Ядро не завершилось после команды shutdown")
 
 
 def check_models(settings):

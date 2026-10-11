@@ -112,6 +112,7 @@ DEFAULT_CONFIG = {
             "basic",
             "workflows",
             "interactive",
+            "practical",
             "meta",
             "media",
             "utils",
@@ -142,6 +143,8 @@ def merge(default, values):
 
 
 def validate(data):
+    # Retire legacy decoration settings without changing themes or game overlays.
+    data["visual_effects"] = copy.deepcopy(DEFAULT_EFFECTS)
     validate_game_settings(data)
     validate_scenarios(data["scenarios"])
     remote = data["remote_control"]

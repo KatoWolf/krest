@@ -7,7 +7,10 @@ import requests
 import json
 import time
 import shutil
-from datetime import datetime
+import threading
+from storage import atomic_write_json
+from steam_service import SteamClient, SteamError, inventory_summary
+from datetime import datetime, timezone
 
 # --- ИНИЦИАЛИЗАЦИЯ КОНФИГА ---
 try:
@@ -60,6 +63,7 @@ from configuration import ConfigManager
 BASE_DIR = str(ConfigManager().filepath.parent)
 CACHE_FILE = os.path.join(BASE_DIR, "steam_cache.json")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+_CACHE_LOCK = threading.RLock()
 
 
 def add_log(text):
@@ -72,30 +76,40 @@ def add_log(text):
 
 
 # --- КЭШ STEAM: ОГРАНИЧЕНИЕ ПОВТОРНЫХ ЗАПРОСОВ ---
+def _cache_account():
+    return str(STEAM_ID or "")
+
+
 def get_cached_data(key, max_age_seconds):
     try:
-        if os.path.exists(CACHE_FILE):
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-                if key in cache:
-                    if time.time() - cache[key]["time"] < max_age_seconds:
-                        return cache[key]["data"]
-    except Exception as e:
-        add_log(f"Ошибка чтения кэша: {e}")
+        with _CACHE_LOCK, open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        if cache.get("account") != _cache_account():
+            return None
+        entry = cache.get(key, {})
+        age = time.time() - entry.get("time", 0)
+        if 0 <= age < max_age_seconds:
+            return entry.get("data")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
     return None
 
 
 def save_cached_data(key, data):
     try:
-        cache = {}
-        if os.path.exists(CACHE_FILE):
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-        cache[key] = {"time": time.time(), "data": data}
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        add_log(f"Ошибка сохранения кэша: {e}")
+        with _CACHE_LOCK:
+            try:
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+                if not isinstance(cache, dict) or cache.get("account") != _cache_account():
+                    cache = {}
+            except (OSError, ValueError):
+                cache = {}
+            cache["account"] = _cache_account()
+            cache[key] = {"time": time.time(), "data": data}
+            atomic_write_json(CACHE_FILE, cache)
+    except OSError:
+        add_log("Не удалось сохранить кэш Steam.")
 
 
 # --- ИНТЕРФЕЙС (ПАНЕЛЬ КНОПОК) ---
@@ -182,82 +196,65 @@ def get_sys_info():
     return f"🚀 CPU: {cpu}% | RAM: {ram}%\n🎮 Игра: {active_game}\n⏱ Uptime: {uptime}"
 
 
+def _steam_failure(key, exc):
+    cached = get_cached_data(key, 7 * 86400)
+    reason = str(exc) if isinstance(exc, SteamError) else "Steam вернул некорректные данные."
+    if cached:
+        return cached + "\n\n⚠️ Старые данные (до 7 дней). Обновление не удалось: " + reason
+    return "❌ " + reason
+
+
 def check_cs2_inventory(force_update=False):
     if not STEAM_ID:
-        return "❌ Ошибка: В конфиге нет `STEAM_ID`."
-    if not force_update:
-        cached = get_cached_data("cs2_inv", 900)
-        if cached:
-            return cached + "\n\n_(⚡ Данные из кэша)_"
-
+        return "❌ Укажите SteamID64 в настройках Steam."
+    cached = None if force_update else get_cached_data("cs2_inv", 900)
+    if cached:
+        return cached + "\n\n⚡ Данные из кэша (не старше 15 минут)."
     try:
-        r = requests.get(
-            f"https://steamcommunity.com/inventory/{STEAM_ID}/730/2?l=russian&count=1000",
-            timeout=10,
-        )
-        if r.status_code == 429:
-            old_cache = get_cached_data("cs2_inv", 999999)
-            if old_cache:
-                return old_cache + "\n\n_(⚠️ Steam Rate Limit. Показаны старые данные)_"
-            return "❌ Стим заблокировал запрос (Rate Limit)."
-        if r.status_code != 200:
-            return "❌ Инвентарь скрыт или API недоступен."
-
-        data = r.json()
-        if "descriptions" not in data:
-            return "✅ Инвентарь пуст."
-
-        locked_items = []
-        now = datetime.utcnow()
-        for desc in data["descriptions"]:
-            if desc.get("tradable") == 0 and "cache_expiration" in desc:
-                name = desc.get("market_name", desc.get("name", "Неизвестный предмет"))
-                exp_str = desc["cache_expiration"]
-                try:
-                    exp_time = datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ")
-                    delta = exp_time - now
-                    if delta.total_seconds() > 0:
-                        locked_items.append(
-                            f"🔒 `{name}`\n⏳ Бан спадёт через: **{delta.days}д {delta.seconds // 3600 % 24}ч**"
-                        )
-                except:
-                    locked_items.append(f"🔒 `{name}`\n⏳ Дата разбана: **{exp_str}**")
-
-        if not locked_items:
-            res = "✅ В инвентаре CS2 нет предметов с трейд-баном."
-        else:
-            list_str = "\n\n".join(locked_items[:20]) + (
-                f"\n\n...и еще {len(locked_items) - 20} шт." if len(locked_items) > 20 else ""
+        items = SteamClient(STEAM_API_KEY, STEAM_ID).inventory("730", "2")
+        summary = inventory_summary(items)
+        lines = [
+            "📦 Инвентарь CS2",
+            f"Всего: {summary['total']} · Обмен доступен: {summary['tradable']}",
+            f"Ограничены: {summary['locked']} · Статус неизвестен: {summary['unknown']}",
+        ]
+        restricted = [item for item in items if item["tradable"] is False]
+        for item in restricted[:20]:
+            unlock = item.get("unlock_at")
+            date = (
+                datetime.fromtimestamp(unlock, timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+                if unlock
+                else "Steam не указал дату"
             )
-            res = f"📦 **ИНВЕНТАРЬ CS2:**\n\n{list_str}"
-
-        save_cached_data("cs2_inv", res)
-        return res
-    except Exception as e:
-        return f"❌ Ошибка инвентаря: {e}"
+            lines.append(f"🔒 {item['name']} ×{item['amount']} · {date}")
+        if len(restricted) > 20:
+            lines.append(f"Ещё ограниченных позиций: {len(restricted) - 20}.")
+        result = "\n".join(lines)
+        save_cached_data("cs2_inv", result)
+        return result
+    except (SteamError, ValueError, KeyError, TypeError) as exc:
+        return _steam_failure("cs2_inv", exc)
 
 
 def check_active_trades():
     if not STEAM_API_KEY:
-        return "❌ Ошибка: Нет `STEAM_API_KEY`."
+        return "❌ Укажите Steam Web API Key в настройках Steam."
     cached = get_cached_data("active_trades", 300)
     if cached:
-        return cached
+        return cached + "\n\n⚡ Данные из кэша (не старше 5 минут)."
     try:
-        url = f"https://api.steampowered.com/IEconService/GetTradeOffers/v1/?key={STEAM_API_KEY}&get_received_offers=1&active_only=1"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 429:
-            return get_cached_data("active_trades", 999999) or "❌ Steam Rate Limit."
-        data = r.json()
-        offers = data.get("response", {}).get("trade_offers_received", [])
-        if not offers:
-            res = "🤝 Активных предложений обмена нет."
-        else:
-            res = f"🤝 **НОВЫЕ ТРЕЙДЫ!** У тебя **{len(offers)}** активных предложений на обмен."
-        save_cached_data("active_trades", res)
-        return res
-    except:
-        return "❌ Ошибка при проверке трейдов."
+        offers = SteamClient(STEAM_API_KEY, STEAM_ID).offers()
+        incoming = sum(offer["direction"] == "in" for offer in offers)
+        outgoing = sum(offer["direction"] == "out" for offer in offers)
+        result = (
+            f"🤝 Активные предложения обмена: входящих {incoming}, исходящих {outgoing}."
+            if offers
+            else "🤝 Активных предложений обмена нет."
+        )
+        save_cached_data("active_trades", result)
+        return result
+    except (SteamError, ValueError, KeyError, TypeError) as exc:
+        return _steam_failure("active_trades", exc)
 
 
 # --- ЗАГРУЗКА ФАЙЛОВ С ТЕЛЕФОНА НА ПК ---
@@ -316,7 +313,7 @@ def handle_remote_upload(message):
                 parse_mode="Markdown",
             )
     except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка приема файла: {e}")
+        bot.reply_to(message, f"❌ Ошибка приема файла: {type(e).__name__}")
 
 
 # --- ОБРАБОТКА КОМАНД И ТЕКСТА ---
@@ -420,7 +417,7 @@ def run_krest_service(shared_queue=None):
             print("--- [TG TERMINAL]: Потеряна связь. Переподключение... ---")
             time.sleep(3)
         except Exception as e:
-            print(f"--- [TG TERMINAL FATAL]: {e} ---")
+            print(f"--- [TG TERMINAL FATAL]: {type(e).__name__} ---")
             time.sleep(5)
 
 

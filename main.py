@@ -133,20 +133,24 @@ def main(argv=None):
     if args.check:
         from skill_manager import SkillManager
 
-        manager = SkillManager(settings.snapshot)
+        check_settings = settings.snapshot()
+        if args.safe_mode:
+            check_settings["safe_mode"] = True
+        manager = SkillManager(lambda: check_settings)
+        report = {
+            "skills": len(manager.catalog()),
+            "errors": manager.errors,
+            "builtin_skill_ids": sorted(
+                entry.id
+                for entry in manager.catalog()
+                if entry.func.__module__.startswith("skills.")
+            ),
+        }
         if args.check_output:
             from storage import atomic_write_json
 
-            atomic_write_json(
-                args.check_output, {"skills": len(manager.catalog()), "errors": manager.errors}
-            )
-        print(
-            json.dumps(
-                {"skills": len(manager.catalog()), "errors": manager.errors},
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
+            atomic_write_json(args.check_output, report)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
         return 1 if manager.errors else 0
     from process_lock import ProcessLock
 

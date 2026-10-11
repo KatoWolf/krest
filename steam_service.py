@@ -168,13 +168,15 @@ class SteamClient:
             include_appinfo=1,
             include_played_free_games=1,
         ).get("response", {})
-        if "game_count" not in data:
+        if not isinstance(data, dict) or "game_count" not in data:
             raise SteamError(
                 "Библиотека закрыта или недоступна. Разрешите видимость сведений об играх в Steam."
             )
         games = data.get("games", [])
         if not isinstance(games, list) or len(games) != int(data["game_count"]):
             raise SteamError("Получена неполная библиотека; прежний список сохранён")
+        if any(not isinstance(g, dict) or not str(g.get("appid", "")).isdigit() for g in games):
+            raise SteamError("Steam вернул некорректную библиотеку; прежний список сохранён")
         return [
             {
                 "appid": str(g["appid"]),
@@ -185,6 +187,8 @@ class SteamClient:
         ]
 
     def inventory(self, appid, contextid):
+        if not str(appid).isdigit() or not str(contextid).isdigit():
+            raise SteamError("AppID и ID контекста инвентаря должны быть числами")
         assets, descriptions, seen_pages = {}, {}, set()
         cursor = None
         for _ in range(100):
@@ -201,8 +205,14 @@ class SteamClient:
             ):
                 raise SteamError("Некорректный инвентарь")
             for desc in data.get("descriptions", []):
+                if not isinstance(desc, dict) or "classid" not in desc:
+                    raise SteamError("Steam вернул некорректное описание предмета")
                 descriptions[(str(desc["classid"]), str(desc.get("instanceid", "0")))] = desc
             for asset in data.get("assets", []):
+                if not isinstance(asset, dict) or not all(
+                    k in asset for k in ("assetid", "classid")
+                ):
+                    raise SteamError("Steam вернул некорректный предмет")
                 assets[str(asset["assetid"])] = asset
             if not data.get("more_items"):
                 break
@@ -241,7 +251,7 @@ class SteamClient:
         players = self.api("ISteamUser/GetPlayerBans/v1/", steamids=self.steam_id).get(
             "players", []
         )
-        if not players:
+        if not isinstance(players, list) or not players or not isinstance(players[0], dict):
             raise SteamError("Steam не вернул ограничения аккаунта")
         player = players[0]
         return {
@@ -252,25 +262,45 @@ class SteamClient:
         }
 
     def offers(self):
-        response = self.api(
-            "IEconService/GetTradeOffers/v1/",
-            get_received_offers=1,
-            get_sent_offers=1,
-            active_only=1,
-        ).get("response")
-        if not isinstance(response, dict):
-            raise SteamError("Steam не вернул список предложений обмена")
-        return [
-            {
-                "id": str(o["tradeofferid"]),
-                "direction": direction,
-                "state": o.get("trade_offer_state"),
-                "partner": o.get("accountid_other"),
-                "expires": o.get("expiration_time"),
-            }
-            for direction, key in (("in", "trade_offers_received"), ("out", "trade_offers_sent"))
-            for o in response.get(key, [])
-        ]
+        offers, seen_cursors = {}, set()
+        cursor = 0
+        for _ in range(100):
+            response = self.api(
+                "IEconService/GetTradeOffers/v1/",
+                get_received_offers=1,
+                get_sent_offers=1,
+                active_only=1,
+                cursor=cursor,
+            ).get("response")
+            if not isinstance(response, dict):
+                raise SteamError("Steam не вернул список предложений обмена")
+            for direction, key in (("in", "trade_offers_received"), ("out", "trade_offers_sent")):
+                page = response.get(key, [])
+                if not isinstance(page, list):
+                    raise SteamError("Steam вернул некорректный список обменов")
+                for offer in page:
+                    if (
+                        not isinstance(offer, dict)
+                        or not str(offer.get("tradeofferid", "")).isdigit()
+                    ):
+                        raise SteamError("Steam вернул некорректное предложение обмена")
+                    ident = str(offer["tradeofferid"])
+                    offers[(direction, ident)] = {
+                        "id": ident,
+                        "direction": direction,
+                        "state": offer.get("trade_offer_state"),
+                        "partner": offer.get("accountid_other"),
+                        "expires": offer.get("expiration_time"),
+                    }
+            cursor = str(response.get("next_cursor", 0))
+            if cursor == "0":
+                return list(offers.values())
+            if not cursor.isdigit() or cursor in seen_cursors:
+                raise SteamError(
+                    "Steam не отдал следующую страницу обменов; прежние данные сохранены"
+                )
+            seen_cursors.add(cursor)
+        raise SteamError("Слишком много страниц обменов; прежние данные сохранены")
 
 
 def inventory_summary(items):

@@ -467,7 +467,7 @@ def russian_words_to_number_str(text: str) -> str:
     if not text:
         return ""
 
-    expr = text.lower()
+    expr = re.sub(r"(?<=\d),(?=\d)", ".", text.lower())
 
     # Замена устных формулировок математических операций
     expr = re.sub(r"\bквадратный\s+корень\s+из\b", " sqrt ", expr)
@@ -551,14 +551,15 @@ def russian_words_to_number_str(text: str) -> str:
 def parse_number_from_text(text_val: str) -> float:
     """Преобразует текстовое или словесное числовое значение в float."""
     clean = text_val.strip().lower()
+    if not clean or len(clean) > 128:
+        raise ValueError("Введите число цифрами или русскими словами")
     converted = russian_words_to_number_str(clean)
-    match = re.search(r"\d+(?:\.\d+)?", converted)
-    if match:
-        try:
-            return float(match.group(0))
-        except ValueError:
-            pass
-    return 1.0
+    if not re.fullmatch(r"[+-]?\s*\d+(?:\.\d+)?", converted):
+        raise ValueError("Не удалось распознать число для перевода единиц")
+    value = float(converted.replace(" ", ""))
+    if not math.isfinite(value):
+        raise ValueError("Введите конечное число")
+    return value
 
 
 # ==========================================
@@ -704,10 +705,10 @@ def calc_expression_skill(text: str):
 
 @skill(
     patterns=[
-        r"сколько будет (?P<amount>[\d\.\,]+|\w+)\s*(?P<from_curr>\w+)\s*в\s*(?P<to_curr>\w+)",
-        r"переведи (?P<amount>[\d\.\,]+|\w+)\s*(?P<from_curr>\w+)\s*в\s*(?P<to_curr>\w+)",
+        r"сколько будет (?P<amount>[+-]?\d+(?:[.,]\d+)?|.+?)\s*(?P<from_curr>[^\W\d_]+)\s+в\s+(?P<to_curr>\w+)",
+        r"переведи (?P<amount>[+-]?\d+(?:[.,]\d+)?|.+?)\s*(?P<from_curr>[^\W\d_]+)\s+в\s+(?P<to_curr>\w+)",
     ],
-    description="Автономный конвертер валют, длины, массы и объемов данных",
+    description="Перевод единиц офлайн; валюты — по сетевому или сохранённому курсу",
     category="Clipboard",
 )
 def convert_currency_or_units(text, amount="1", from_curr="", to_curr=""):

@@ -14,7 +14,10 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-STATUS_FILE = os.path.join(os.getenv("KREST_DATA_DIR", BASE_DIR), "current_status.json")
+from app_paths import data_dir
+from storage import read_json
+
+STATUS_FILE = str(data_dir() / "current_status.json")
 
 try:
     import config
@@ -90,6 +93,7 @@ class KrestDS(discord.Client):
         super().__init__(*args, **kwargs)
         self.notifications_queue = notifications_queue
 
+        self._background_tasks = set()
         self.spam_control = {}
         self.last_outgoing = {}  # Для отслеживания личной активности KatoWolf
 
@@ -100,8 +104,24 @@ class KrestDS(discord.Client):
         print(f"--- [DS]: Сессия активна (Аккаунт: {self.user}). RAM Optimized. ---")
         if not getattr(self, "_background_started", False):
             self._background_started = True
-            self.loop.create_task(self.status_rotator())
-            self.loop.create_task(self.memory_cleaner())
+            self._spawn(self.status_rotator())
+            self._spawn(self.memory_cleaner())
+
+    def _spawn(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def close(self):
+        tasks = list(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self._background_started = False
+        await super().close()
 
     async def on_disconnect(self):
         from bridge_sdk import emit
@@ -116,13 +136,11 @@ class KrestDS(discord.Client):
 
     async def get_local_status(self):
         """Чтение статуса из файла (без запросов к интернету)"""
-        if os.path.exists(STATUS_FILE):
-            try:
-                with open(STATUS_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, ValueError):
-                pass
-        return {}
+        try:
+            value = read_json(STATUS_FILE)
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
     async def status_rotator(self):
         """Оптимизированная смена статуса (ТОЛЬКО цитаты)"""
@@ -161,7 +179,7 @@ class KrestDS(discord.Client):
         if message.author == self.user:
             if isinstance(message.channel, discord.DMChannel):
                 channel_id = message.channel.id
-                self.last_outgoing[channel_id] = time.time()
+                self.last_outgoing[channel_id] = time.monotonic()
                 # Сбрасываем анти-спам для этого собеседника
                 if channel_id in self.spam_control:
                     del self.spam_control[channel_id]
@@ -169,9 +187,8 @@ class KrestDS(discord.Client):
 
         # Только личка (DM) и игнорируем ботов
         if isinstance(message.channel, discord.DMChannel) and not message.author.bot:
-            user_id = message.author.id
             channel_id = message.channel.id
-            current_time = time.time()
+            current_time = time.monotonic()
 
             # 2. УМНАЯ ПРОВЕРКА АКТИВНОСТИ
             # Если ты сам общался с человеком менее 5 минут назад, автоответчик молчит
@@ -193,14 +210,12 @@ class KrestDS(discord.Client):
             is_urgent = any(word in text for word in ["срочно", "важно", "горит", "ответь"])
 
             # 3. Анти-спам (5 минут молчания, если не срочно)
-            if (
-                not is_urgent
-                and user_id in self.spam_control
-                and current_time - self.spam_control[user_id] < 300
+            if channel_id in self.spam_control and current_time - self.spam_control[channel_id] < (
+                60 if is_urgent else 300
             ):
                 return
 
-            self.spam_control[user_id] = current_time
+            self.spam_control[channel_id] = current_time
             print(f"--- [DS]: Пришло сообщение от {message.author.name} ---")
 
             try:
@@ -221,7 +236,7 @@ class KrestDS(discord.Client):
                     # Логика ответов (Идентична Telegram V3.0)
                     if message.attachments:
                         reply_text = (
-                            f"💠 **KREST_V3.0: Ошибка обработки**\n"
+                            f"💠 **КРЕСТ: Ошибка обработки**\n"
                             f"───\n"
                             f"{config.get_owner_name()} сейчас недоступен.\n"
                             f"Я — автоматический помощник. Вложения и голосовые сообщения в данный момент не распознаются.\n"
@@ -229,11 +244,11 @@ class KrestDS(discord.Client):
                         )
                     elif is_night:
                         reply_text = (
-                            f"💠 **KREST_V3.0: Ночной протокол**\n"
+                            f"💠 **КРЕСТ: Ночной протокол**\n"
                             f"───\n"
                             f"● `Статус:` Сон 🌙\n"
                             f"───\n"
-                            f"{config.get_owner_name()} сейчас спит. Уведомления отключены, он прочтет ваше сообщение утром."
+                            f"{config.get_owner_name()} может отдыхать. Сейчас действует ночной режим автоответчика."
                         )
                     elif is_playing or activity_type in [
                         "GAME",
@@ -245,29 +260,36 @@ class KrestDS(discord.Client):
                             full_msg if full_msg else f"{config.get_owner_name()} сейчас занят."
                         )
                         if is_urgent:
-                            context_msg = f"⚠️ Зафиксирован приоритетный сигнал.\n{context_msg}\nЯ поставила пометку «СРОЧНО» на твое сообщение."
+                            context_msg = f"⚠️ Зафиксирован приоритетный сигнал.\n{context_msg}\nСообщение содержит признак срочности."
 
-                        reply_text = (
-                            f"💠 **KREST_V3.0: Интеллектуальный ответ**\n───\n{context_msg}"
-                        )
+                        reply_text = f"💠 **КРЕСТ: Интеллектуальный ответ**\n───\n{context_msg}"
                     else:
                         reply_text = (
-                            f"💠 **KREST_V3.0: Автономный режим**\n"
+                            f"💠 **КРЕСТ: Автономный режим**\n"
                             f"───\n"
                             f"● `Статус:` Ожидание\n"
                             f"───\n"
-                            f"{config.get_owner_name()} отошел от терминала. Я передам ему сообщение, как только он вернется."
+                            f"{config.get_owner_name()} отошел от терминала. Ваше сообщение останется в этом чате."
                         )
 
                     # Формируем финальный текст с припиской об автоудалении
-                    final_text = f"{reply_text}\n\n_(Это автоматический ответ системы. Он исчезнет через 5 минут.)_"
+                    footer = "\n\n_(Автоответ КРЕСТ. Попробую удалить его через 5 минут.)_"
+                    body = reply_text.encode("utf-16-le")[: (1900 - len(footer)) * 2].decode(
+                        "utf-16-le", errors="ignore"
+                    )
+                    final_text = body + footer
+                    # The owner may have answered while the typing delay was running.
+                    if self.last_outgoing.get(channel_id, float("-inf")) >= current_time:
+                        return
 
                     # Отправляем ответ
-                    sent_msg = await message.channel.send(final_text)
+                    sent_msg = await message.channel.send(
+                        final_text, allowed_mentions=discord.AllowedMentions.none()
+                    )
                     print(f"--- [DS AutoReply]: Ответил пользователю {message.author.name} ---")
 
                     # Фоново запускаем таймер на удаление
-                    self.loop.create_task(self.auto_delete_message(sent_msg, 300))
+                    self._spawn(self.auto_delete_message(sent_msg, 300))
 
                 # 4. Передаем имя в очередь для озвучки Крест (только днем)
                 if self.notifications_queue is not None and not is_night:
@@ -278,7 +300,7 @@ class KrestDS(discord.Client):
                         pass
 
             except Exception as e:
-                print(f"--- [DS Error]: Сбой обработки сообщения: {e} ---")
+                print(f"--- [DS Error]: Сбой обработки сообщения: {type(e).__name__} ---")
 
 
 def start_ds_bridge(notifications_queue=None):
@@ -302,7 +324,7 @@ def start_ds_bridge(notifications_queue=None):
         except discord.LoginFailure as e:
             raise RuntimeError("Discord отклонил токен бота") from e
         except Exception as e:
-            print(f"--- [DS Critical Error]: {e} ---")
+            print(f"--- [DS Critical Error]: {type(e).__name__} ---")
 
         print("--- [DS]: Потеряно соединение. Перезапуск через 10 секунд... ---")
         time.sleep(10)

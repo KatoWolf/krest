@@ -6,6 +6,7 @@ BUILTIN_MODULES = (
     "interactive",
     "media",
     "meta",
+    "practical",
     "steam",
     "system_mon",
     "timers_alarms",

@@ -1,0 +1,15 @@
+{
+  "duration_seconds": 601.3,
+  "jobs": 60,
+  "queue_full_rejections": 0,
+  "disconnect_reconnect_cycles": 20,
+  "rss_start_mb": 29.95,
+  "rss_end_mb": 31.89,
+  "rss_max_mb": 31.89,
+  "cpu_mean_one_core_percent": 2.09,
+  "snapshot_ms_p95": 10.85,
+  "fd_start": 6,
+  "fd_end": 6,
+  "thread_max": 8,
+  "scope": "linux, no microphone, models or live accounts"
+}

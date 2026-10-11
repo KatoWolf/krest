@@ -86,7 +86,7 @@ class SetupWindow(tk.Tk):
         )
         self.details.pack(fill="both", expand=True)
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.after(100, self.poll)
+        self._poll_after = self.after(100, self.poll)
         self.check()
 
     def background(self, work):
@@ -95,20 +95,26 @@ class SetupWindow(tk.Tk):
         self.progress.start(16)
         self.button.configure(state="disabled")
 
+        events = self.events
+
         def worker():
             try:
                 work()
             except Exception as exc:
-                self.events.put(("error", str(exc)))
+                events.put(("error", str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def check(self):
+        # Workers own plain data only; closing the window must not transfer the
+        # last reference to a Tk variable/interpreter to a background thread.
+        choose, executable, profile = self.choose_environment, self.executable, self.profile
+        events = self.events
+
         def work():
-            if self.choose_environment:
-                self.executable = choose_environment(ROOT)
-            report = inspect(self.executable, self.profile) if self.executable.is_file() else None
-            self.events.put(("checked", report))
+            selected = choose_environment(ROOT) if choose else executable
+            report = inspect(selected, profile) if selected.is_file() else None
+            events.put(("checked", (report, selected)))
 
         self.background(work)
 
@@ -120,6 +126,9 @@ class SetupWindow(tk.Tk):
             "Подключаю компоненты. Можно оставить это окно открытым — команды вводить не нужно."
         )
 
+        executable, profile = self.executable, self.profile
+        events, cancel = self.events, self.cancel
+
         def work():
             lock = ProcessLock(ROOT / ".setup.lock")
             if not lock.acquire():
@@ -127,10 +136,10 @@ class SetupWindow(tk.Tk):
                     "Установка уже идёт в другом окне Крест. Дождитесь её завершения."
                 )
             try:
-                emit = lambda line: self.events.put(("log", line))
-                if not self.executable.is_file():
+                emit = lambda line: events.put(("log", line))
+                if not executable.is_file():
                     # Never install into a guessed or system interpreter for a repair request.
-                    if self.profile != "all":
+                    if profile != "all":
                         raise RuntimeError(
                             "Среда запущенной Крест недоступна. Закройте Крест и откройте start.bat."
                         )
@@ -139,26 +148,26 @@ class SetupWindow(tk.Tk):
                             str(console_python(sys.executable)),
                             "-m",
                             "venv",
-                            str(self.executable.parent.parent),
+                            str(executable.parent.parent),
                         ],
                         emit,
-                        self.cancel,
+                        cancel,
                     )
                 run_command(
-                    [str(console_python(self.executable)), "-m", "ensurepip", "--upgrade"],
+                    [str(console_python(executable)), "-m", "ensurepip", "--upgrade"],
                     emit,
-                    self.cancel,
+                    cancel,
                 )
-                report = inspect(self.executable, self.profile)
-                for command in install_commands(self.executable, self.profile, report):
-                    run_command(command, emit, self.cancel)
-                verified = inspect(self.executable, self.profile)
+                report = inspect(executable, profile)
+                for command in install_commands(executable, profile, report):
+                    run_command(command, emit, cancel)
+                verified = inspect(executable, profile)
                 if verified["missing"] or verified["broken"]:
                     raise RuntimeError(
                         "Часть компонентов не подключилась. Нажмите кнопку ещё раз.\n"
                         + ", ".join(verified["missing"] + verified["broken"])
                     )
-                self.events.put(("installed", None))
+                events.put(("installed", None))
             finally:
                 lock.close()
 
@@ -193,6 +202,7 @@ class SetupWindow(tk.Tk):
                     self.log_panel.toggle()
                 self.button.configure(text="Повторить подключение")
             elif kind == "checked":
+                value, self.executable = value
                 self.report = value
                 self.ready = value is not None and not value["missing"] and not value["broken"]
                 if self.ready:
@@ -223,7 +233,30 @@ class SetupWindow(tk.Tk):
                 if self.launch:
                     self.finish()
                     return
-        self.after(100, self.poll)
+        self._poll_after = self.after(100, self.poll)
+
+    def destroy(self):
+        self.cancel.set()
+        if self._poll_after is not None:
+            self.after_cancel(self._poll_after)
+            self._poll_after = None
+        self.progress.stop()
+        # Variable.__del__ calls Tcl. Break the root → variable → root cycle
+        # while we are still on the GUI thread, before a worker can trigger GC.
+        self.status = None
+        descendants = []
+        pending = list(self.children.values())
+        while pending:
+            widget = pending.pop()
+            descendants.append(widget)
+            pending.extend(widget.children.values())
+        super().destroy()
+        # Composite widgets keep Python attributes pointing to their children.
+        # Tk.destroy clears children dictionaries, but not child.master: break
+        # those remaining cycles so the Tcl interpreter cannot be GC'd later
+        # by the install worker (Tcl_AsyncDelete otherwise aborts the process).
+        for widget in descendants:
+            widget.master = None
 
     def finish(self):
         if self.launch:
