@@ -49,13 +49,13 @@ def apply_style(root, colours):
         ("Nav.TButton", c["sidebar"], c["card_hover"], c["sub_text"]),
         ("Selected.Nav.TButton", c["glow"], c["card_hover"], c["text"]),
         ("Tab.TButton", c["bg"], c["card_hover"], c["sub_text"]),
-        ("Selected.Tab.TButton", c["card_hover"], c["border"], c["text"]),
+        ("Selected.Tab.TButton", c["glow"], c["card_hover"], c["accent"]),
     ]:
         style.configure(
             name,
             background=base,
             foreground=fg,
-            padding=(14, 10),
+            padding=(12, 8) if "Tab" in name else (14, 10),
             borderwidth=0,
             relief="flat",
             focusthickness=0,

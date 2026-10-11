@@ -10,14 +10,28 @@ class SourceUpdater:
         self.root, self.config = Path(root), config
 
     def git(self, *args):
-        result = subprocess.run(
-            ["git", "-C", str(self.root), *args], capture_output=True, text=True, timeout=45
-        )
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.root), *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+            )
+        except FileNotFoundError as exc:
+            raise ValueError(
+                "Для обновления исходников нужен Git for Windows: git-scm.com/download/win"
+            ) from exc
         if result.returncode:
             raise ValueError("Git: " + result.stderr.strip()[:1000])
         return result.stdout.strip()
 
     def check(self):
+        if not (self.root / ".git").exists():
+            raise ValueError(
+                "Эта копия скачана как ZIP. Скачайте новую версию с github.com/KatoWolf/krest и распакуйте отдельно, сохранив model и личные файлы. Для update.bat нужна копия, полученная через git clone."
+            )
         self.git("rev-parse", "--show-toplevel")
         remote = self.git("remote", "get-url", "origin")
         if not remote:
@@ -71,7 +85,7 @@ class SourceUpdater:
                 {"previous": state["current"], "updated": state["target"], "backup": backup.name},
             )
             self.git("merge", "--ff-only", state["target"])
-            return "Исходники обновлены. Установите зависимости выбранного режима и выполните python main.py --check."
+            return "Исходники обновлены. Запустите start.bat: он проверит и подготовит зависимости новой версии."
         finally:
             for lock in locks:
                 lock.close()

@@ -381,7 +381,11 @@ def good_morning_ritual(text: str):
     month_name = months[now.month - 1]
     time_str = now.strftime("%H:%M")
 
-    greeting = f"Доброе утро! Сегодня {day_name}, {now.day} {month_name}. Время {time_str}."
+    from personality import reply
+
+    greeting = (
+        reply("morning", state) + f" Сегодня {day_name}, {now.day} {month_name}. Время {time_str}."
+    )
 
     # 2. Информация о ресурсах системы
     sys_info = []
@@ -395,10 +399,7 @@ def good_morning_ritual(text: str):
             sys_info.append(f"Заряд аккумулятора {battery.percent}%, ноутбук {plugged}.")
 
     status_str = " ".join(sys_info)
-    name = state.owner_name
-    full_speech = (
-        (f"{name}, " if name else "") + f"{greeting} {status_str} " + daily_briefing(state)
-    )
+    full_speech = f"{greeting} {status_str} " + daily_briefing(state)
 
     if state.is_muted:
         show_toast("Доброе утро!", full_speech)
@@ -567,6 +568,136 @@ def quiz_answer(state, answer):
         "тихий океан" if expected == "тихий" else expected,
         "6" if expected == "шесть" else expected,
     )
-    return (
-        "Верно!" if correct else "Правильный ответ: " + expected + "."
-    ) + " Для продолжения скажите: следующий вопрос."
+    from personality import reply
+
+    response = reply("quiz_right" if correct else "quiz_wrong", state)
+    if not correct:
+        response += " Правильный ответ: " + expected + "."
+    return response + " Для продолжения скажите: следующий вопрос."
+
+
+@skill(
+    keywords=["до встречи", "пока", "до свидания"],
+    description="Попрощаться с Крест",
+    category="Общение",
+)
+def chat_farewell(state):
+    from personality import reply
+
+    return reply("farewell", state)
+
+
+@skill(
+    keywords=["я вернулся", "я вернулась", "снова здесь"],
+    description="Вернуться к разговору",
+    category="Общение",
+)
+def chat_return(state):
+    from personality import reply
+
+    return reply("return", state)
+
+
+@skill(
+    keywords=["у меня получилось", "я справился", "я справилась", "я победил", "я победила"],
+    description="Поделиться успехом",
+    category="Общение",
+)
+def chat_achievement(state):
+    from personality import reply
+
+    return reply("achievement", state)
+
+
+@skill(
+    keywords=[
+        "меня все бесит",
+        "меня всё бесит",
+        "я злюсь",
+        "день не задался",
+        "ничего не получается",
+    ],
+    description="Поддержка в неудачный момент",
+    category="Общение",
+)
+def chat_frustration(state):
+    from personality import reply
+
+    return reply("frustration", state)
+
+
+@skill(
+    keywords=["помоги сосредоточиться", "не могу сосредоточиться"],
+    description="Совет для начала работы",
+    category="Общение",
+)
+def chat_focus(state):
+    from personality import reply
+
+    return reply("focus", state)
+
+
+@skill(
+    keywords=["мне нужен перерыв", "пора отдохнуть", "хочу отдохнуть"],
+    description="Идея короткого отдыха",
+    category="Общение",
+)
+def chat_break(state):
+    from personality import reply
+
+    return reply("break", state)
+
+
+@skill(
+    keywords=["спокойной ночи", "я иду спать"],
+    description="Пожелание спокойной ночи",
+    category="Общение",
+)
+def chat_goodnight(state):
+    from personality import reply
+
+    return reply("goodnight", state)
+
+
+@skill(
+    keywords=["вдохнови меня", "мне нужна мотивация", "замотивируй меня"],
+    description="Небольшой импульс к действию",
+    category="Общение",
+)
+def chat_motivation(state):
+    from personality import reply
+
+    return reply("motivation", state)
+
+
+@skill(
+    keywords=["ты классная", "ты крутая", "ты мне нравишься"],
+    description="Реакция на добрые слова",
+    category="Общение",
+)
+def chat_compliment(state):
+    from personality import reply
+
+    return reply("compliment", state)
+
+
+@skill(
+    keywords=["пожелай удачи в игре", "пожелай удачи на миссии"],
+    description="Игровое напутствие",
+    category="Общение",
+)
+def chat_gaming(state):
+    from personality import reply
+
+    return reply("gaming", state)
+
+
+@skill(
+    keywords=["ты меня слышишь", "ты на связи", "слушаешь меня"],
+    description="Проверить, что Крест отвечает",
+    category="Общение",
+)
+def chat_attention(state):
+    from personality import reply
+
+    return reply("attention", state)

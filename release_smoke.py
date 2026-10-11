@@ -109,6 +109,21 @@ def check_dependencies():
         ]
     for module in modules:
         importlib.import_module(module)
+    if os.name == "nt":
+        from concurrent.futures import ThreadPoolExecutor
+        from media_rating import uia_apartment
+
+        def read_desktop():
+            with uia_apartment():
+                from pywinauto import Desktop
+
+                return len(Desktop(backend="uia").windows())
+
+        # Ratings and diagnostics run on workers. Import success alone doesn't
+        # verify per-thread COM initialization. This only reads window metadata.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda _: read_desktop(), range(2)))
+        print("UI Automation проверена в фоновых потоках без нажатий.")
     import torch
 
     if torch.tensor([1.0, 2.0]).sum().item() != 3:

@@ -12,7 +12,7 @@ import time
 import threading
 from storage import atomic_write_json
 from scenarios import DEFAULT_SCENARIOS, validate_scenarios
-from warframe_config import DEFAULT_WARFRAME, DEFAULT_EFFECTS, validate_game_settings
+from warframe_config import DEFAULT_WARFRAME, validate_game_settings
 
 from app_paths import data_dir
 
@@ -20,7 +20,6 @@ CONFIG_PATH = data_dir() / "config.json"
 DEFAULT_CONFIG = {
     "schema_version": 2,
     "warframe": DEFAULT_WARFRAME,
-    "visual_effects": DEFAULT_EFFECTS,
     "owner_name": "",
     "profile": {"onboarding_completed": False, "personality": "friendly"},
     "license": {"code": ""},
@@ -158,6 +157,8 @@ def merge(default, values):
 
 
 def validate(data):
+    # Retire particle settings from older installations on load and save.
+    data.pop("visual_effects", None)
     validate_game_settings(data)
     validate_scenarios(data["scenarios"])
     remote = data["remote_control"]

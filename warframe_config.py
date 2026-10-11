@@ -1,4 +1,4 @@
-"""Warframe and appearance settings, independent of game/network modules."""
+"""Warframe settings, independent of game/network modules."""
 
 DEFAULT_WARFRAME = {
     "enabled": True,
@@ -34,7 +34,6 @@ DEFAULT_WARFRAME = {
     "disk_free_gb": 5,
     "temperature_limit": 85,
 }
-DEFAULT_EFFECTS = {"mode": "off", "intensity": 2, "pause_in_game": True}
 
 
 def validate_game_settings(data):
@@ -65,11 +64,3 @@ def validate_game_settings(data):
         for v in cfg["cycles"]
     ):
         raise ValueError("Неизвестный цикл Warframe")
-    effects = data["visual_effects"]
-    if (
-        effects["mode"] not in ("off", "snow", "blood", "embers", "stars")
-        or type(effects["intensity"]) is not int
-        or not 1 <= effects["intensity"] <= 3
-        or type(effects["pause_in_game"]) is not bool
-    ):
-        raise ValueError("Некорректные параметры эффектов оформления")

@@ -195,7 +195,10 @@ class SkillManager:
 
     def match(self, text):
         clean = text.casefold().strip(" ,.!?")
-        if re.match(r"^(?:не|не надо|не нужно)\s", clean) and clean != "не нравится":
+        if re.match(r"^(?:не|не надо|не нужно)\s", clean) and clean not in (
+            "не нравится",
+            "не могу сосредоточиться",
+        ):
             return None
         candidates = []
         for entry in self.catalog():

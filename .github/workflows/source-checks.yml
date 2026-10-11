@@ -21,6 +21,20 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m ruff check .
+      - name: Validate Windows launcher scripts
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call packaging\find_python.bat
+          if errorlevel 1 exit /b 1
+          "%KREST_PYTHON%" %KREST_PY_ARGS% -c "import sys; assert sys.version_info[:2] in ((3,11),(3,12))"
+      - name: Parse Windows update launcher
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'packaging/update_source.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors) { throw ($errors | Out-String) }
       - run: python main.py --check
       - name: Run an isolated child kernel and a real command
         shell: bash

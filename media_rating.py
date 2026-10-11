@@ -1,11 +1,14 @@
-"""Conservative desktop UI Automation adapter for track ratings.
+"""Track ratings through the verified desktop player's accessibility tree.
 
-A like is not part of SMTC. Only an unambiguous button in a verified player
-window is invoked. Browser tabs and global key combinations are never used.
+SMTC handles transport controls; it has no rating API. Ratings require a named
+button in the current-track panel. Never guess a click position or send hotkeys.
 """
 
-import time
+from contextlib import contextmanager
+import os
 import re
+import time
+
 import psutil
 from media_control import MediaError
 
@@ -19,6 +22,12 @@ LABELS = {
         "добавить в любимое",
         "добавить в избранное",
         "save to your liked songs",
+        "добавить в коллекцию",
+        "добавить трек в коллекцию",
+        "добавить в любимые треки",
+        "добавить трек в избранное",
+        "добавить трек в любимое",
+        "добавить в мою музыку",
     },
     "unlike": {
         "убрать из любимого",
@@ -28,62 +37,159 @@ LABELS = {
         "удалить из избранного",
         "remove from your liked songs",
         "unlike",
+        "удалить из коллекции",
+        "удалить трек из коллекции",
+        "убрать из коллекции",
+        "удалить из любимых треков",
+        "удалить трек из избранного",
+        "больше не нравится",
     },
-    "dislike": {"не нравится", "дизлайк", "dislike"},
+    "dislike": {
+        "не нравится",
+        "дизлайк",
+        "dislike",
+        "не рекомендовать этот трек",
+        "не рекомендовать",
+    },
+}
+TRANSPORT = {
+    "пауза",
+    "приостановить",
+    "приостановить воспроизведение",
+    "воспроизвести",
+    "играть",
+    "продолжить воспроизведение",
+    "play",
+    "pause",
+    "следующий трек",
+    "предыдущий трек",
+    "next track",
+    "previous track",
+    "следующий",
+    "предыдущий",
 }
 
 
+def normalize_label(value):
+    value = " ".join(value.casefold().replace("ё", "е").split()).strip()
+    # Accessible tooltips can include keyboard hints; don't strip arbitrary track names.
+    return re.sub(r"\s*\((?:пробел|space|[a-zа-я]|(?:ctrl|alt|shift)\s*\+[^)]+)\)$", "", value)
+
+
 def player_processes(app_id):
-    value = re.sub(r"[^a-z0-9]", "", app_id.casefold())
-    if "yandexmusic" in value or "yandex.yandexmusic" in value:
+    value = re.sub(r"[^a-zа-я0-9]", "", app_id.casefold())
+    if any(token in value for token in ("yandexmusic", "yandexdesktopmusic", "яндексмузыка")):
         return {"yandexmusic.exe", "yandex music.exe", "яндекс музыка.exe"}
     if "spotify" in value:
         return {"spotify.exe"}
     raise MediaError(
-        "Для этого источника нет прямого управления отметками. Поддержаны доступные кнопки настольных Яндекс Музыки и Spotify; браузерные вкладки пока не подключены."
+        "У этого источника нет адаптера отметок. Поддерживаются доступные кнопки настольных Яндекс Музыки и Spotify."
     )
 
 
+@contextmanager
+def uia_apartment():
+    # The GUI and the kernel call this adapter from worker threads, not the import thread.
+    if os.name != "nt":
+        yield
+        return
+    # Let pywinauto negotiate the process COM mode before importing comtypes.
+    # Forcing MTA after comtypes' implicit STA initialization raises 0x80010106.
+    try:
+        import pywinauto  # noqa: F401
+        import comtypes
+    except ImportError as exc:
+        raise MediaError(
+            "Откройте Музыка → Подключить управление музыкой: нужны компоненты кнопок плеера."
+        ) from exc
+    owned = False
+    try:
+        comtypes.CoInitializeEx()
+        owned = True
+    except OSError as exc:
+        if (getattr(exc, "winerror", 0) or 0) & 0xFFFFFFFF != 0x80010106:
+            raise
+        # An existing apartment is usable, but wasn't acquired by this scope.
+    try:
+        yield
+    finally:
+        if owned:
+            comtypes.CoUninitialize()
+
+
 def _label(button):
-    return button.window_text().strip().casefold()
+    try:
+        return normalize_label(button.window_text())
+    except Exception:
+        return ""
 
 
 def _toggle(button):
     try:
-        return button.get_toggle_state()
+        value = button.get_toggle_state()
+        return value if value in (0, 1) else None
     except Exception:
         return None
 
 
-def apply_rating(buttons, action):
-    if action not in LABELS:
-        raise MediaError("Неизвестная отметка трека.")
+def _available(button):
+    try:
+        return button.is_enabled() and button.is_visible()
+    except Exception:
+        return False
+
+
+def _rating_button(buttons, action):
     opposite = "unlike" if action == "like" else "like"
     accepted = LABELS[action] | (LABELS[opposite] if action != "dislike" else set())
-    matches = [b for b in buttons if _label(b) in accepted and b.is_enabled() and b.is_visible()]
+    matches = [b for b in buttons if _label(b) in accepted and _available(b)]
     if len(matches) != 1:
         raise MediaError(
-            "Не удалось однозначно найти кнопку текущего трека. Откройте экран плеера; в этой версии приложения кнопка может быть недоступна автоматизации."
+            "Не удалось однозначно найти кнопку текущего трека. Разверните Яндекс Музыку с нижней панелью плеера и повторите команду. Диагностика доступна в меню «Музыка»."
         )
-    button = matches[0]
-    before, toggle = _label(button), _toggle(button)
+    return matches[0]
+
+
+def apply_rating(buttons, action, refresh=None, verify=None):
+    if action not in LABELS:
+        raise MediaError("Неизвестная отметка трека.")
+    button = _rating_button(buttons, action)
+    opposite = "unlike" if action == "like" else "like"
     desired = 0 if action == "unlike" else 1
-    already = (
-        toggle == desired
-        if toggle is not None
-        else (action != "dislike" and before in LABELS[opposite])
-    )
-    if already:
+
+    def is_desired(candidate):
+        state = _toggle(candidate)
+        return (
+            state == desired
+            if state is not None
+            else (action != "dislike" and _label(candidate) in LABELS[opposite])
+        )
+
+    if verify:
+        verify()
+    if is_desired(button):
         return {"success": True, "message": "Нужная отметка уже установлена."}
-    if toggle is not None:
-        button.toggle()
-    else:
-        button.invoke()
-    for _ in range(8):
+    try:
+        if _toggle(button) is not None:
+            button.toggle()
+        else:
+            button.invoke()
+    except Exception as exc:
+        # Do not retry a click: an unconfirmed first invocation might have succeeded.
+        raise MediaError(
+            "Плеер не принял нажатие кнопки. Откройте его окно и повторите команду."
+        ) from exc
+    for _ in range(10):
         time.sleep(0.15)
-        if _toggle(button) == desired or (
-            action != "dislike" and _label(button) in LABELS[opposite]
-        ):
+        if refresh:
+            try:
+                # Electron can replace the button node after a React re-render.
+                button = _rating_button(refresh(), action)
+            except MediaError:
+                continue
+        if is_desired(button):
+            if verify:
+                verify()
             return {
                 "success": True,
                 "message": {
@@ -97,39 +203,164 @@ def apply_rating(buttons, action):
     )
 
 
+def _enable_accessibility(handle):
+    """Ask Chromium for its native accessibility object without moving focus."""
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    send = ctypes.windll.user32.SendMessageTimeoutW
+    send.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+        wintypes.UINT,
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    send.restype = wintypes.LPARAM
+    result = ctypes.c_size_t()
+    send(handle, 0x003D, 0, -4, 0x0002, 400, ctypes.byref(result))  # WM_GETOBJECT, OBJID_CLIENT
+
+
+def _elements(window):
+    return window.descendants()
+
+
+def _has_track(elements, data):
+    labels = {_label(e) for e in elements}
+    title, artist = normalize_label(data["title"]), normalize_label(data.get("artist", ""))
+    if not title:
+        return False
+    # Text nodes may be links or groups, not just UIA Text controls.
+    title_found = title in labels or any(
+        label in (f"{title} — {artist}", f"{artist} — {title}", f"{title}, {artist}")
+        for label in labels
+        if artist
+    )
+    return title_found
+
+
 def find_player_window(data):
     names = player_processes(data["app_id"])
     try:
         from pywinauto import Desktop
     except ImportError as exc:
-        raise MediaError("Для кнопок плеера откройте Музыка → Подключить управление музыкой. Крест установит компоненты сама.") from exc
+        raise MediaError(
+            "Откройте Музыка → Подключить управление музыкой: Крест установит компоненты сама."
+        ) from exc
     pids = set()
     for proc in psutil.process_iter(["pid", "name"]):
         if (proc.info["name"] or "").casefold() in names:
             pids.add(proc.info["pid"])
-    windows = []
-    for window in Desktop(backend="uia").windows():
-        if window.process_id() not in pids:
+    # Native discovery also works when Electron hasn't exposed its UIA tree yet.
+    handles = []
+    for window in Desktop(backend="win32").windows():
+        try:
+            if window.process_id() in pids and window.is_visible():
+                handles.append(window.handle)
+        except Exception:
             continue
-        # Confirm the track in this window; never blindly click a background app.
-        texts = [
-            window.window_text(),
-            *[x.window_text() for x in window.descendants(control_type="Text")],
-        ]
-        if data["title"].casefold() in [x.strip().casefold() for x in texts]:
-            windows.append(window)
+    windows = []
+    desktop = Desktop(backend="uia")
+    for handle in handles[:8]:
+        try:
+            _enable_accessibility(handle)
+            window = desktop.window(handle=handle).wrapper_object()
+            for attempt in range(3):
+                if _has_track(_elements(window), data):
+                    windows.append(window)
+                    break
+                if attempt < 2:
+                    time.sleep(0.2)
+        except Exception:
+            continue
     if len(windows) != 1:
         raise MediaError(
-            "Откройте экран текущего трека в настольном плеере. Не удалось подтвердить окно и название трека."
+            "Не удалось прочитать текущий трек в окне плеера. Разверните Яндекс Музыку, оставьте нижнюю панель видимой и повторите. Если не поможет, откройте «Музыка → Диагностика плеера»."
         )
     return windows[0]
 
 
+def track_buttons(window, data):
+    """Prefer the smallest ancestor that contains track text AND transport controls."""
+    elements = _elements(window)
+    title = normalize_label(data["title"])
+    anchors = [e for e in elements if _label(e) == title]
+    candidates = []
+    for anchor in anchors[:12]:
+        parent = anchor
+        for _ in range(7):
+            try:
+                parent = parent.parent()
+                if parent is None or parent == window:
+                    break
+                buttons = parent.descendants(control_type="Button")
+                labels = {_label(b) for b in buttons if _available(b)}
+                if labels & TRANSPORT and labels & set().union(*LABELS.values()):
+                    candidates.append((len(buttons), buttons))
+                    break
+            except Exception:
+                break
+    if candidates:
+        candidates.sort(key=lambda row: row[0])
+        smallest = candidates[0][0]
+        # Merge equivalent-size panels; ambiguity must reach _rating_button.
+        result, seen = [], set()
+        for size, buttons in candidates:
+            if size != smallest:
+                break
+            for button in buttons:
+                try:
+                    key = tuple(button.element_info.runtime_id)
+                except Exception:
+                    key = id(button)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(button)
+        return result
+    # Flat accessibility trees have no named player container. Use the actual
+    # transport row to filter named controls, never to synthesize click positions.
+    buttons = window.descendants(control_type="Button")
+    transports = [b for b in buttons if _label(b) in TRANSPORT and _available(b)]
+    result = []
+    for button in buttons:
+        if _label(button) not in set().union(*LABELS.values()) or not _available(button):
+            continue
+        try:
+            rect = button.rectangle()
+            cy = (rect.top + rect.bottom) / 2
+            for transport in transports:
+                tr = transport.rectangle()
+                row_y = (tr.top + tr.bottom) / 2
+                tolerance = max(32, tr.bottom - tr.top)
+                if abs(cy - row_y) > tolerance:
+                    continue
+                if any(
+                    abs((anchor.rectangle().top + anchor.rectangle().bottom) / 2 - row_y)
+                    <= tolerance
+                    for anchor in anchors
+                ):
+                    result.append(button)
+                    break
+        except Exception:
+            continue
+    return result
+
+
 def change_rating(data, action):
-    window = find_player_window(data)
     from media_control import query
 
-    current = query(data["app_id"])
-    if (current["title"], current["artist"]) != (data["title"], data["artist"]):
-        raise MediaError("Трек сменился во время проверки. Повторите команду для нового трека.")
-    return apply_rating(window.descendants(control_type="Button"), action)
+    def verify():
+        current = query(data["app_id"])
+        if (current["title"], current["artist"]) != (data["title"], data["artist"]):
+            raise MediaError(
+                "Трек сменился во время проверки. Проверьте отметку и повторите для нового трека."
+            )
+
+    with uia_apartment():
+        window = find_player_window(data)
+        refresh = lambda: track_buttons(window, data)
+        return apply_rating(refresh(), action, refresh=refresh, verify=verify)

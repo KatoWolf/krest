@@ -69,9 +69,19 @@ def validate_module(filename, cfg):
     if filename == "discord_account.py" and not cfg["discord_account"]["enabled"]:
         raise ValueError("Включите личную сессию на странице «Мой Discord»")
     if filename == "main.py":
-        if not (BASE_DIR / "model").is_dir() or not (BASE_DIR / "model_silero.pt").is_file():
+        from voice_models import discover_models
+
+        models = discover_models(cfg)
+        missing = [
+            label
+            for key, label in (("vosk_path", "Vosk"), ("silero_path", "Silero"))
+            if not models[key]
+        ]
+        if missing:
             raise RuntimeError(
-                "Добавьте модель Vosk в model/ и Silero в model_silero.pt. См. README."
+                "Не найдены модели: "
+                + ", ".join(missing)
+                + ". Поместите их в папку model рядом с Крест или откройте раздел «Голос»."
             )
     if filename == "tg_bridge.py" and not (BASE_DIR / "krest_user_session.session").exists():
         raise RuntimeError("Сначала войдите в Telegram с помощью кнопок Код / Войти.")

@@ -19,6 +19,8 @@ class MediaError(RuntimeError):
 def app_name(app_id):
     for token, name in [
         ("yandexmusic", "Яндекс Музыка"),
+        ("yandexdesktopmusic", "Яндекс Музыка"),
+        ("яндексмузыка", "Яндекс Музыка"),
         ("yandex.yandexmusic", "Яндекс Музыка"),
         ("spotify", "Spotify"),
         ("chrome", "Chrome"),
@@ -27,7 +29,7 @@ def app_name(app_id):
         ("aimp", "AIMP"),
         ("vlc", "VLC"),
     ]:
-        if re.sub(r"[^a-z0-9]", "", token) in re.sub(r"[^a-z0-9]", "", app_id.lower()):
+        if re.sub(r"[^a-zа-я0-9]", "", token) in re.sub(r"[^a-zа-я0-9]", "", app_id.lower()):
             return name
     return app_id or "Плеер"
 
@@ -234,21 +236,28 @@ def diagnostics(preferred=""):
         for name, enabled in data["capabilities"].items()
     )
     try:
-        from media_rating import find_player_window, _label, _toggle, LABELS
+        from media_rating import (
+            find_player_window,
+            track_buttons,
+            uia_apartment,
+            _label,
+            _toggle,
+            LABELS,
+        )
 
-        window = find_player_window(data)
-        buttons = window.descendants(control_type="Button")
-        candidates = [b for b in buttons if _label(b) in set().union(*LABELS.values())]
-        lines.append(f"Кнопок отметки найдено: {len(candidates)}")
-        for button in candidates:
-            lines.append(
-                f"{button.window_text()} · доступна: {button.is_enabled()} · видна: {button.is_visible()} · состояние: {_toggle(button)}"
-            )
-        if not candidates:
-            lines.append(
-                "Кнопка отметки не распознана. Доступные названия: "
-                + "; ".join(b.window_text() for b in buttons[:40])
-            )
+        with uia_apartment():
+            window = find_player_window(data)
+            buttons = track_buttons(window, data)
+            candidates = [b for b in buttons if _label(b) in set().union(*LABELS.values())]
+            lines.append(f"Кнопок отметки найдено: {len(candidates)}")
+            for button in candidates:
+                lines.append(
+                    f"{button.window_text()} · доступна: {button.is_enabled()} · видна: {button.is_visible()} · состояние: {_toggle(button)}"
+                )
+            if not candidates:
+                lines.append(
+                    "Названия кнопок панели: " + "; ".join(b.window_text() for b in buttons[:40])
+                )
     except Exception as exc:
         lines.append("Лайк: " + str(exc))
     return "\n".join(lines)

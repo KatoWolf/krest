@@ -17,7 +17,7 @@ from ui_dialogs import messagebox, simpledialog
 from core_pages import CorePages
 from skill_import_pages import SkillImportPages
 from warframe_pages import WarframePages, PAGE_NAMES
-from menu_effects import AppearancePages, MenuEffects
+from appearance_pages import AppearancePages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -138,7 +138,6 @@ class ControlCenterApp(
         self.init_product_pages()
         self.init_workflows()
         self.init_warframe()
-        self.init_appearance()
         self.service_configs = self.config_mgr.snapshot()["services"]
         self.service_autostart = {}
         self.service_restart = {}
@@ -376,11 +375,8 @@ class ControlCenterApp(
         self.label(header, textvariable=self.page_subtitle, muted=True).pack(
             anchor="w", pady=(6, 0)
         )
-        self.effects_header = tk.Canvas(body, bg=self.theme["bg"], height=14, highlightthickness=0)
-        self.effects_header.pack(fill="x", pady=(0, 6))
-        if self.effects:
-            self.effects.close()
-        self.effects = MenuEffects(self, self.effects_header)
+        self._subnav_group = None
+        self._subnav_buttons = {}
         self.subnav = tk.Frame(body, bg=self.theme["bg"])
         self.subnav.pack(fill="x", pady=(0, 10))
         footer = tk.Frame(body, bg=self.theme["bg"])
@@ -519,7 +515,7 @@ class ControlCenterApp(
         group = next(g for g in self.NAV_GROUPS if code in g[2])
         for key, button in self.group_buttons.items():
             button.configure(style="Selected.Nav.TButton" if key == group[0] else "Nav.TButton")
-        self.page_title.set(group[1])
+        self.page_title.set(names[code])
         subtitles = {
             "actions": "Всё нужное для вашего дня — в одном месте.",
             "music": "Ваш плеер, текущий трек и управление воспроизведением.",
@@ -531,23 +527,28 @@ class ControlCenterApp(
             "settings": "Настройте под себя. Остальное Крест подберёт автоматически.",
         }
         self.page_subtitle.set(subtitles[group[0]])
-        for child in self.subnav.winfo_children():
-            child.destroy()
-        if len(group[2]) > 1:
-            for i, key in enumerate(group[2]):
-                ttk.Button(
-                    self.subnav,
-                    text=names[key]
-                    + (
-                        " · Premium"
-                        if key in self.BOT_PAGES and not self.config_mgr.is_premium()
-                        else ""
-                    ),
-                    style="Selected.Tab.TButton" if key == code else "Tab.TButton",
-                    command=lambda k=key: self.switch_page(k),
-                ).grid(row=i // 4, column=i % 4, sticky="ew", padx=(0, 5), pady=(0, 4))
-            for i in range(4):
-                self.subnav.columnconfigure(i, weight=1, uniform="tabs")
+        if self._subnav_group != group[0]:
+            for child in self.subnav.winfo_children():
+                child.destroy()
+            self._subnav_buttons = {}
+            self._subnav_group = group[0]
+            if len(group[2]) > 1:
+                for i, key in enumerate(group[2]):
+                    button = ttk.Button(self.subnav, command=lambda k=key: self.switch_page(k))
+                    button.grid(row=i // 4, column=i % 4, sticky="ew", padx=(0, 5), pady=(0, 4))
+                    self._subnav_buttons[key] = button
+                for i in range(4):
+                    self.subnav.columnconfigure(i, weight=1, uniform="tabs")
+        for key, button in self._subnav_buttons.items():
+            button.configure(
+                text=names[key]
+                + (
+                    " · Premium"
+                    if key in self.BOT_PAGES and not self.config_mgr.is_premium()
+                    else ""
+                ),
+                style="Selected.Tab.TButton" if key == code else "Tab.TButton",
+            )
         self.current_page = code
         if code in self.BOT_PAGES and not self.config_mgr.is_premium():
             self._show_locked_page(code)
@@ -1467,11 +1468,20 @@ class ControlCenterApp(
             )
             character.set(CHARACTERS[key])
 
-        self.personality_var.trace_add("write", describe)
+        old_trace = getattr(self, "_character_trace", None)
+        if old_trace:
+            self.personality_var.trace_remove("write", old_trace)
+        self._character_trace = self.personality_var.trace_add("write", describe)
         describe()
         self.label(card, textvariable=character, muted=True, wraplength=640).pack(
             anchor="w", pady=8
         )
+        self.label(
+            card,
+            "Попробуйте голосом: «я вернулся», «у меня получилось», «помоги сосредоточиться», «пожелай удачи в игре».",
+            muted=True,
+            wraplength=640,
+        ).pack(anchor="w", pady=(0, 10))
         ttk.Button(card, text="Пример ответа", command=self._preview_personality).pack(anchor="w")
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=6)
@@ -1594,7 +1604,6 @@ class ControlCenterApp(
         data["media"]["preferred_app"] = self.media_source_var.get()
 
         data["warframe"] = self.warframe_settings_draft()
-        data["visual_effects"] = self.effects_draft()
         data["selected_theme"] = self.theme_var.get()
         data["command_aliases"] = dict(self.aliases)
         data["pronunciations"] = dict(self.pronunciations)
@@ -1699,8 +1708,6 @@ class ControlCenterApp(
         built_pages = set(self._built_pages)
         core_pending = self.core_draft_values() if self.CORE_PAGES & built_pages else None
         self.wf_preserve()
-        if self.effects:
-            self.effects.close()
         self.shell.destroy()
         self._timer_rows = None
         self._reminder_rows = None
@@ -2197,9 +2204,6 @@ class ControlCenterApp(
 
     def destroy(self):
         # Cancel Tcl timers before their Python callbacks/widgets are destroyed.
-        effects = getattr(self, "effects", None)
-        if effects:
-            effects.close()
         try:
             for job in self.tk.call("after", "info"):
                 # Preserve callback ownership: child.destroy() deletes its own Tcl command.
@@ -2213,8 +2217,6 @@ class ControlCenterApp(
         indicator_controller.stop()
         logging.getLogger().removeHandler(self._log_handler)
         self._destroyed = True
-        if self.effects:
-            self.effects.close()
         self.destroy()
 
 

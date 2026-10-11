@@ -7,7 +7,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 import licensing
-from themes import THEMES, PREMIUM_THEMES
+from themes import PREMIUM_THEMES
 
 from personality import PERSONALITIES
 
@@ -342,22 +342,62 @@ class ProductPages:
             "Подключение ботов и дополнительные темы оформления.",
         )
         self.label(card, textvariable=self.license_status_var, large=True).pack(anchor="w", pady=10)
+        comparison = tk.Frame(card, bg=self.theme["card"])
+        comparison.pack(fill="x", pady=(0, 12))
+        for i, (title, details) in enumerate(
+            [
+                (
+                    "Включено для всех",
+                    "Голос и управление ПК\nМузыка, напоминания, навыки\nПомощники Warframe и Dota",
+                ),
+                (
+                    "Возможности Premium",
+                    "Боты Telegram, Discord и Steam\nСвои скрипты и мосты\nДополнительные темы оформления",
+                ),
+            ]
+        ):
+            tile = tk.Frame(comparison, bg=self.theme["sidebar"], padx=14, pady=12)
+            tile.grid(row=0, column=i, sticky="nsew", padx=(0, 8) if i == 0 else (0, 0))
+            comparison.columnconfigure(i, weight=1, uniform="editions")
+            label = self.label(tile, title)
+            label.configure(
+                font=(UI_FONT, 11, "bold"), fg=self.theme["accent"] if i else self.theme["text"]
+            )
+            label.pack(anchor="w", pady=(0, 8))
+            self.label(tile, details, muted=True, wraplength=320).pack(anchor="w")
         self.label(
             card,
-            "Обычная версия\nГолос, музыка, все локальные навыки, напоминания, автосортировка и три базовые темы.\n\nPremium\nTelegram, Discord, Steam-монитор, собственные скрипты и мосты; четыре дополнительные темы.",
+            "Скопируйте код целиком и нажмите «Вставить и активировать». Вручную переписывать его не нужно.",
+            muted=True,
             wraplength=680,
-        ).pack(anchor="w", pady=10)
-        self.field(card, "Код доступа", self.license_code_var, secret=True)
+        ).pack(anchor="w", pady=(8, 4))
+        self.license_code_entry = self.field(
+            card, "Код доступа", self.license_code_var, secret=True
+        )
+        self.license_code_entry.bind("<<Paste>>", lambda event: self._paste_premium())
+        self.license_code_entry.bind("<Shift-Insert>", lambda event: self._paste_premium())
+        self.license_code_entry.bind("<Control-KeyPress>", self._premium_shortcut)
+        self.license_code_entry.bind("<Return>", self._premium_enter)
+        self.license_code_entry.bind("<Button-3>", self._premium_context_menu)
         self.label(card, textvariable=self.license_feedback_var, muted=True, wraplength=680).pack(
             anchor="w"
         )
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=10)
         ttk.Button(
-            row, text="Активировать", style="Accent.TButton", command=self._activate_premium
+            row,
+            text="Вставить и активировать",
+            style="Accent.TButton",
+            command=lambda: self._paste_premium(activate=True),
         ).pack(side="left")
-        ttk.Button(row, text="Отключить на этом ПК", command=self._deactivate_premium).pack(
+        ttk.Button(row, text="Вставить из буфера", command=self._paste_premium).pack(
             side="left", padx=8
+        )
+        ttk.Button(row, text="Активировать", command=self._activate_premium).pack(side="left")
+        row = tk.Frame(card, bg=self.theme["card"])
+        row.pack(fill="x", pady=(0, 10))
+        ttk.Button(row, text="Отключить на этом ПК", command=self._deactivate_premium).pack(
+            side="left"
         )
         self.label(
             card,
@@ -367,42 +407,12 @@ class ProductPages:
         ).pack(anchor="w")
         card = self.card(
             self.page_bodies["license"],
-            "Палитра Крест",
-            "Базовые и дополнительные темы. Выбранная тема применяется сразу; сохраните изменения.",
+            "Ваше оформление",
+            "Все палитры собраны в разделе «Оформление».",
         )
-        for i, (name, theme) in enumerate(THEMES.items()):
-            if i % 2 == 0:
-                row = tk.Frame(card, bg=self.theme["card"])
-                row.pack(fill="x", pady=5)
-            tile = tk.Frame(
-                row,
-                bg=theme["sidebar"],
-                padx=12,
-                pady=10,
-                highlightthickness=1,
-                highlightbackground=theme["border"],
-            )
-            tile.pack(side="left", fill="x", expand=True, padx=(0, 8))
-            tk.Label(
-                tile,
-                text=name + (" · Premium" if name in PREMIUM_THEMES else ""),
-                bg=theme["sidebar"],
-                fg=theme["text"],
-                font=(UI_FONT, 10, "bold"),
-            ).pack(anchor="w")
-            swatches = tk.Frame(tile, bg=theme["sidebar"])
-            swatches.pack(anchor="w", pady=8)
-            for color in ["bg", "card_hover", "accent", "success"]:
-                tk.Label(swatches, bg=theme[color], width=5, height=1).pack(side="left", padx=2)
-            ttk.Button(tile, text="Применить", command=lambda n=name: self.apply_theme(n)).pack(
-                anchor="w"
-            )
-        card = self.card(
-            self.page_bodies["license"],
-            "О программе",
-            "Локальный помощник для компьютера. Версия в исходном коде.",
+        ttk.Button(card, text="Выбрать тему", command=lambda: self.switch_page("appearance")).pack(
+            anchor="w"
         )
-        ttk.Button(card, text="Проверить модули", command=self._diagnostics).pack(anchor="w")
         self._update_license_view()
 
     def _update_license_view(self):
@@ -418,9 +428,80 @@ class ProductPages:
         if hasattr(self, "edition_label"):
             self.edition_label.configure(text="PREMIUM" if state["premium"] else "ОБЫЧНАЯ ВЕРСИЯ")
 
+    @staticmethod
+    def _normalize_premium_code(text):
+        if len(text) > 8192:
+            raise ValueError("Слишком много текста. Скопируйте только код активации.")
+        return "".join(text.removeprefix("\ufeff").split())
+
+    def _paste_premium(self, activate=False):
+        try:
+            code = self._normalize_premium_code(self.clipboard_get())
+        except tk.TclError:
+            self.license_feedback_var.set("В буфере нет текста. Сначала скопируйте код активации.")
+            return "break"
+        except ValueError as exc:
+            self.license_feedback_var.set(str(exc))
+            return "break"
+        if not code.startswith("KREST1.") or code.count(".") != 2:
+            self.license_feedback_var.set(
+                "В буфере не найден полный код. Скопируйте строку, начинающуюся с KREST1."
+            )
+            return "break"
+        # Replace the whole field, so a repeated paste never duplicates the code.
+        self.license_code_var.set(code)
+        self.license_code_entry.icursor("end")
+        self.license_code_entry.xview_moveto(1)
+        self.license_feedback_var.set("Код вставлен целиком. Нажмите «Активировать».")
+        if activate:
+            self._activate_premium()
+        return "break"
+
+    def _premium_shortcut(self, event):
+        # Windows supplies the same virtual key even when the Russian layout is active.
+        import os
+
+        if (
+            event.keysym.casefold() in ("v", "cyrillic_em")
+            or os.name == "nt"
+            and event.keycode == 86
+        ):
+            return self._paste_premium()
+
+    def _premium_enter(self, event=None):
+        self._activate_premium()
+        return "break"
+
+    def _premium_context_menu(self, event):
+        menu = getattr(self, "_premium_menu", None)
+        if menu is None or not menu.winfo_exists():
+            from ui_design import contrasting_text
+
+            menu = self._premium_menu = tk.Menu(
+                self.license_code_entry,
+                tearoff=False,
+                bg=self.theme["card"],
+                fg=self.theme["text"],
+                activebackground=self.theme["accent"],
+                activeforeground=contrasting_text(self.theme["accent"]),
+            )
+            menu.add_command(label="Вставить из буфера", command=self._paste_premium)
+            menu.add_command(
+                label="Вставить и активировать", command=lambda: self._paste_premium(activate=True)
+            )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
+
     def _activate_premium(self):
         draft = self.config_mgr.snapshot()
-        draft["license"]["code"] = self.license_code_var.get().strip()
+        try:
+            draft["license"]["code"] = self._normalize_premium_code(self.license_code_var.get())
+        except ValueError as exc:
+            self.license_feedback_var.set(str(exc))
+            return
         state = licensing.status(draft)
         if not state["premium"]:
             self.license_feedback_var.set(
