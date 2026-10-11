@@ -15,6 +15,7 @@ import time
 
 COLORS = {
     "idle": "#75bde8",
+    "learning": "#69d2d0",
     "listening": "#5ce2ad",
     "busy": "#ffc56b",
     "speaking": "#c2a0ff",
@@ -23,6 +24,7 @@ COLORS = {
 }
 LABELS = {
     "idle": "Наблюдаю",
+    "learning": "Запоминаю",
     "listening": "Слушаю",
     "busy": "Выполняю",
     "speaking": "Отвечаю",
@@ -51,6 +53,8 @@ def indicator_state(data, now=None):
         return "error"
     if 0 < now - game.get("notice_at", 0) < 6:
         return "notice"
+    if game.get("study", {}).get("active"):
+        return "learning"
     return "idle"
 
 
@@ -302,6 +306,21 @@ def run_overlay(config_path):
             cross_height = height
             panel = game.get("panel", {})
             route = game.get("route", {})
+            study = game.get("study", {})
+            if study.get("active") and panel.get("kind") == "study":
+                seconds = study.get("seconds", 0)
+                panel = {
+                    "title": "Аполлон · запись показа",
+                    "lines": [
+                        "Валькирия Прайм · цель: Акси",
+                        study.get("message", "Управление у вас"),
+                        f"{seconds // 60}:{seconds % 60:02d} · кадров: {study.get('frames', 0)} · меток: {study.get('labels', 0)}",
+                        study.get("last_label") or "«Варфрейм метка ключ» — отметить событие",
+                        "Добыча не проверена · автопилот не обучен",
+                        "«Закончи показ варфрейм» — сохранить",
+                    ],
+                    "until": panel.get("until", 0),
+                }
             if route.get("mode") in ("recording", "playing"):
                 panel = {
                     "title": "Запись маршрута"

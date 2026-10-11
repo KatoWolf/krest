@@ -69,6 +69,18 @@ class WarframeService:
         self.panel = {}
         self._hint_screen = ""
         self._network_thread = None
+        from warframe_training import MissionStudy
+
+        self.study = MissionStudy(
+            self.root,
+            allowed=lambda: (
+                self.cfg()["enabled"]
+                and not self.stop.is_set()
+                and not self.runtime.settings().get("safe_mode")
+            ),
+        )
+        self._study_auto_attempted = False
+        self._study_notice_at = 0
         from game_routes import RouteController
 
         self.routes = RouteController(
@@ -79,7 +91,12 @@ class WarframeService:
                 and not self.runtime.settings().get("safe_mode")
             ),
         )
-        from game_vision import GameVision
+        from game_vision import GameVision, SCREENS
+        from game_visual_memory import VisualMemory
+
+        self.visual_memory = VisualMemory(
+            self.root / "warframe_visual_memory.json", {row[0]: row[1] for row in SCREENS}
+        )
 
         self.vision = GameVision(
             self.store,
@@ -89,6 +106,8 @@ class WarframeService:
                 and self.cfg()["enabled"]
                 and not self.runtime.settings().get("safe_mode")
             ),
+            memory=self.visual_memory,
+            learning_allowed=lambda: self.cfg().get("study_auto", True) or self.study.active,
         )
 
     def cfg(self):
@@ -105,6 +124,7 @@ class WarframeService:
     def close(self):
         self.stop.set()
         self.routes.close()
+        self.study.close()
         self.vision.close()
         if self.thread:
             self.thread.join(timeout=1)
@@ -119,6 +139,7 @@ class WarframeService:
                 else {},
                 "vision": self.vision.snapshot(),
                 "route": self.routes.snapshot(),
+                "study": self.study.snapshot(),
                 "started": self.started,
                 "busy": bool(self.busy),
                 "operation": self.operation,
@@ -149,6 +170,7 @@ class WarframeService:
             "baro": (world["data"].get("voidTrader") or {}) if world else {},
             "source": world["source"] if world else WORLD_BASE + self.cfg()["platform"],
             "catalogs": copy.deepcopy(self.catalog.info),
+            "learning": self.study.learning_report() + "\n\n" + self.visual_memory.report(),
         }
 
     def request(self, action, args):
@@ -278,6 +300,33 @@ class WarframeService:
                 else:
                     self._on_stop(now)
         self.vision.tick(cfg.get("vision_enabled", True), self.running, now)
+        if not cfg.get("study_auto", True) and self.study.automatic and self.study.active:
+            self.study.finish()
+        if not self.running or not cfg.get("study_auto", False):
+            self._study_auto_attempted = False
+        elif not self._study_auto_attempted or self.study.next_segment:
+            self._study_auto_attempted = True
+            if not self.study.snapshot()["active"]:
+                try:
+                    continuing = self.study.next_segment
+                    self.study.next_segment = False
+                    self.study.start(automatic=True)
+                    self._study_notice_at = now
+                    if not continuing:
+                        self.notice(
+                            "Фоновое обучение Warframe включено: локальные показы и память экранов. Управление у вас.",
+                            "study-auto-" + str(int(now)),
+                        )
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.error = "Запись показов: " + str(exc)
+        self.study.observe(self.vision.snapshot())
+        study = self.study.snapshot()
+        if study["active"] and now - self._study_notice_at >= 300:
+            self._study_notice_at = now
+            self.notice(
+                f"Показ Аполлона: {study['seconds'] // 60} мин, кадров {study['frames']}, меток {study['labels']}. Управление у вас.",
+                "study-progress-" + str(int(now // 300)),
+            )
         if now - self._last_local >= 5:
             self._last_local = now
             self._local_notices(now)
@@ -406,6 +455,7 @@ class WarframeService:
             self._volumes = []
 
     def _on_stop(self, now):
+        self.study.finish()
         self._restore_profile()
         self.store.add(
             "journal", "Конец сессии", notes="Продолжительность: " + remaining(now - self.started)
@@ -573,6 +623,36 @@ class WarframeService:
     def _action(self, action, **args):
         state = self.store.snapshot()
         aliases = state["aliases"]
+        if action.startswith("study_"):
+            if action == "study_start":
+                text = self.study.start()
+                self._study_auto_attempted = True
+                self._study_notice_at = time.time()
+            elif action == "study_stop":
+                text = self.study.finish()
+            elif action == "study_mark":
+                text = self.study.mark(args.get("label", ""))
+            elif action == "study_folder":
+                if os.name != "nt":
+                    raise ValueError("Открытие папки доступно в Windows: " + str(self.study.root))
+                self.study.root.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(self.study.root))
+                text = (
+                    "Открыта папка локальных показов. Записи никуда не отправляются автоматически."
+                )
+            else:
+                text = (
+                    self.study.report()
+                    + "\n\n"
+                    + self.study.learning_report()
+                    + "\n\n"
+                    + self.visual_memory.report()
+                )
+            if action != "study_folder":
+                self.show_panel("Обучение · Аполлон", self.study.panel()["lines"], seconds=30)
+                with self.lock:
+                    self.panel["kind"] = "study"
+            return {"text": text}
         if action.startswith("route_"):
             methods = {
                 "route_record": self.routes.record,
@@ -1093,6 +1173,11 @@ class WarframeService:
 
 
 ACTIONS = {
+    "study_start",
+    "study_stop",
+    "study_mark",
+    "study_report",
+    "study_folder",
     "route_record",
     "route_save",
     "route_request",

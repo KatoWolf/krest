@@ -109,18 +109,29 @@ def observe_screen():
     try:
         if foreground_game_rect() != bounds:
             raise ValueError("Окно игры изменилось; кадр пропущен")
+        from game_visual_memory import signature
+
+        feature = signature(image)
         text = asyncio.run(asyncio.wait_for(_read_image(image), timeout=8))
         if foreground_game_rect() != bounds:
             raise ValueError("Окно игры изменилось; результат пропущен")
         # Raw text/chat never becomes persistent memory; only a small known screen label does.
-        return classify_screen(text)
+        return {**classify_screen(text), "feature": feature}
     finally:
         image.close()
 
 
 class GameVision:
-    def __init__(self, store, observe=observe_screen, allowed=lambda: True):
+    def __init__(
+        self,
+        store,
+        observe=observe_screen,
+        allowed=lambda: True,
+        memory=None,
+        learning_allowed=lambda: True,
+    ):
         self.store, self.observe, self.allowed = store, observe, allowed
+        self.memory, self.learning_allowed = memory, learning_allowed
         self.lock = threading.RLock()
         self.closed = threading.Event()
         self.thread = None
@@ -142,11 +153,15 @@ class GameVision:
     def tick(self, enabled, running, now=None):
         now = time.time() if now is None else now
         if not enabled or not running:
+            if self.memory:
+                self.memory.forget_pending()
             with self.lock:
                 self.state.update(
                     status="Зрение выключено" if not enabled else "Ожидаю запуск Warframe",
                     screen="unknown",
                     label="",
+                    visual_guess="unknown",
+                    visual_label="",
                 )
             self.candidate = self.confirmed = ""
             return
@@ -164,10 +179,22 @@ class GameVision:
             if self.closed.is_set() or not self.allowed():
                 return
             code = result["screen"]
+            feature = result.pop("feature", None)
+            result.update(visual_guess="unknown", visual_label="")
+            if self.memory:
+                if self.learning_allowed():
+                    prediction = self.memory.observe(code, feature)
+                    result["visual_guess"] = prediction
+                    result["visual_label"] = self.memory.screens.get(prediction, "")
+                else:
+                    self.memory.forget_pending()
             with self.lock:
-                self.state.update(
-                    result, status="Прочитан экран: " + result["label"], observed=time.time()
-                )
+                status = "Прочитан экран: " + result["label"]
+                if code == "unknown" and result["visual_label"]:
+                    status = (
+                        "По памяти похоже на «" + result["visual_label"] + "»; OCR не подтвердил"
+                    )
+                self.state.update(result, status=status, observed=time.time())
             if code == self.candidate and code != self.confirmed:
                 self.confirmed = code
                 if code != "unknown":
@@ -178,15 +205,27 @@ class GameVision:
                     )
             self.candidate = code
         except ValueError:
+            if self.memory:
+                self.memory.forget_pending()
             with self.lock:
                 self.state.update(
-                    status="Ожидаю активное окно Warframe", screen="unknown", label=""
+                    status="Ожидаю активное окно Warframe",
+                    screen="unknown",
+                    label="",
+                    visual_guess="unknown",
+                    visual_label="",
                 )
             self.candidate = self.confirmed = ""
         except Exception as exc:
+            if self.memory:
+                self.memory.forget_pending()
             with self.lock:
                 self.state.update(
-                    status="Зрение недоступно: " + str(exc)[:250], screen="unknown", label=""
+                    status="Зрение недоступно: " + str(exc)[:250],
+                    screen="unknown",
+                    label="",
+                    visual_guess="unknown",
+                    visual_label="",
                 )
             self.next_scan = time.time() + 90
         finally:

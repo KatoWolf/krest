@@ -11,6 +11,7 @@ from warframe_config import DEFAULT_WARFRAME
 
 PAGE_NAMES = [
     ("wf_home", "Навигатор"),
+    ("wf_learning", "Обучение"),
     ("wf_goals", "Цели и дела"),
     ("wf_arsenal", "Арсенал"),
     ("wf_market", "Рынок"),
@@ -53,6 +54,8 @@ class WarframePages:
         self.wf_refreshing = False
         self.wf_refreshed = 0
         self.wf_vision = tk.StringVar(self, value="Ожидаю активное окно Warframe")
+        self.wf_learning = tk.StringVar(self, value="Отчёт обучения загружается…")
+        self.wf_study_state = tk.StringVar(self, value="Ожидаю запуск игры")
         self.wf_status = tk.StringVar(self, value="Игра не обнаружена")
         self.wf_source = tk.StringVar(
             self, value="Данные мира ещё не запрошены. Личные записи доступны без сети."
@@ -299,6 +302,9 @@ class WarframePages:
             data.get("status", {}).get("vision", {}).get("status", "Ожидаю активное окно Warframe")
         )
         self.wf_status.set(label)
+        study = status.get("study", {})
+        self.wf_study_state.set(study.get("message", "Ожидаю запуск игры"))
+        self.wf_learning.set(data.get("learning", "Нет отчёта обучения"))
         source = (
             ("Сохранённые данные" if status["stale"] else "Обновлено")
             + " · "
@@ -402,6 +408,7 @@ class WarframePages:
         self.wf_output_widgets = {}
         self.wf_texts = {}
         self.build_wf_home()
+        self.build_wf_learning()
         self.build_wf_goals()
         self.build_wf_arsenal()
         self.build_wf_market()
@@ -442,12 +449,13 @@ class WarframePages:
                 ("Подсказка", lambda: self.wf_call("guide")),
                 ("План на 30 минут", lambda: self.wf_call("plan", minutes=30)),
                 ("Скрыть сводку", lambda: self.wf_call("hide_panel")),
+                ("Чему учится Крест", lambda: self.switch_page("wf_learning")),
             ],
         )
         routes = self.card(
             page,
-            "Ухожу от компьютера",
-            "Крест не обучается бою и не гарантирует фарм. Экспериментальный маршрут повторяет только до минуты клавиш движения один раз, без мыши и атак.",
+            "Короткий маршрут",
+            "Фоновое обучение собирает опыт отдельно. Этот экспериментальный маршрут повторяет до минуты клавиш движения один раз, без мыши и атак.",
         )
         routes = self.advanced(routes, "Как записать и остановить маршрут")
         self.label(
@@ -499,6 +507,46 @@ class WarframePages:
         row = self.wf_selected("events")
         if row:
             self.wf_call("add_task", name=row["name"][:200], period="once", notes=row["reward"])
+
+    def build_wf_learning(self):
+        page = self.page_bodies["wf_learning"]
+        card = self.card(
+            page,
+            "Учусь рядом с вами",
+            "Профиль: Аполлон на Луа · реликвии Акси · Валькирия Прайм. Узел и экипировка в игре пока не подтверждаются автоматически.",
+        )
+        ttk.Checkbutton(
+            card,
+            text="Автоматически собирать опыт, пока открыт Warframe",
+            variable=self.wf_vars["study_auto"],
+            command=lambda: self.save_all_settings(quiet=True),
+        ).pack(anchor="w", pady=8)
+        self.label(card, textvariable=self.wf_study_state, wraplength=650).pack(anchor="w", pady=8)
+        self.label(
+            card,
+            "Запускается вместе с игрой. При сворачивании захват приостанавливается. Кадр раз в 5 секунд, память экранов — по OCR-наблюдениям. Управление остаётся у вас.",
+            muted=True,
+            wraplength=650,
+        ).pack(anchor="w", pady=6)
+        self.wf_buttons(
+            card,
+            [
+                ("Отчёт под крестом", lambda: self.wf_call("study_report")),
+                ("Остановить запись", lambda: self.wf_call("study_stop")),
+                ("Открыть записи", lambda: self.wf_call("study_folder")),
+            ],
+        )
+        report = self.card(page, "Что уже умею и что ещё изучаю")
+        self.label(report, textvariable=self.wf_learning, wraplength=660).pack(anchor="w", pady=8)
+        details = self.advanced(
+            self.card(page, "Как устроено обучение"), "Данные и дополнительные команды"
+        )
+        self.label(
+            details,
+            "Локальная память сохраняет небольшие образцы знакомых экранов и сверяет предположения с новым OCR. Статистика нажатий помогает описывать привычки; она не доказывает успешный бой.\n\nАвтоматические показы делятся на отрезки по 20 минут. Старые автоматические записи заменяются в пределах 512 МБ; сохраняется статистика последних 100 показов. Ручные показы не удаляются автоматически. Файлы остаются на вашем компьютере, кадры могут содержать видимый игровой чат.\n\nНеобязательно: «варфрейм метка ключ / проводник / демолист / защита / провал / награда / эвакуация». Для отдельного ручного показа — «начни показ аполлон». Отчёт — «чему научилась в варфрейме». Самостоятельное прохождение ещё не обучено.",
+            muted=True,
+            wraplength=650,
+        ).pack(anchor="w", pady=8)
 
     def build_wf_goals(self):
         page = self.page_bodies["wf_goals"]
@@ -1191,7 +1239,7 @@ class WarframePages:
         card = self.card(
             page,
             "Крест во время игры",
-            "Обнаружение процесса автоматически включает помощника. По умолчанию ничего не захватывается с экрана.",
+            "Обнаружение процесса включает помощника. Фоновое обучение использует только активное окно Warframe; управление им — на вкладке «Обучение».",
         )
         for key, label in [
             ("enabled", "Помощник Warframe включён"),

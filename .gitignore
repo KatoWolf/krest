@@ -65,6 +65,8 @@ test-results.xml
 nuitka-crash-report.xml
 
 warframe_route.json
+warframe_training/
+warframe_visual_memory.json
 .pyarmor/
 *.patched.spec
 

@@ -302,3 +302,40 @@ def route_confirm(state):
 )
 def route_stop(state):
     return run(state, "route_stop")
+
+
+@skill(
+    keywords=["начни показ аполлон", "начни показ варфрейм", "запиши мое прохождение"],
+    description="Записать показ Аполлона: кадры и клавиши активного Warframe, управление у игрока",
+    category="Warframe",
+)
+def study_start(state):
+    return run(state, "study_start")
+
+
+@skill(
+    keywords=["закончи показ варфрейм", "останови запись показа"],
+    description="Завершить показ и сохранить локальный отчёт",
+    category="Warframe",
+)
+def study_stop(state):
+    return run(state, "study_stop")
+
+
+@skill(
+    patterns=[r"варфрейм метка (?P<label>.+)"],
+    examples=["варфрейм метка ключ", "варфрейм метка демолист"],
+    description="Отметить ключ, проводник, демолиста, защиту, провал, награду или эвакуацию в показе",
+    category="Warframe",
+)
+def study_mark(label, state):
+    return run(state, "study_mark", label=label)
+
+
+@skill(
+    keywords=["отчет по обучению", "чему научилась в варфрейме", "как идет фарм"],
+    description="Показать собранные примеры и реальные ограничения обучения Warframe",
+    category="Warframe",
+)
+def study_report(state):
+    return run(state, "study_report")

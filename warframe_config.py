@@ -5,6 +5,7 @@ DEFAULT_WARFRAME = {
     "vision_enabled": True,
     "context_hints": True,
     "route_enabled": False,
+    "study_auto": True,
     "platform": "pc",
     "poll_seconds": 120,
     "auto_summary": True,

@@ -102,6 +102,7 @@ def audit_distribution(dist):
         "tg_auth_temp.json",
         "warframe_state.json",
         "warframe_route.json",
+        "warframe_visual_memory.json",
     }
     own_sources = {p.name for p in ROOT.glob("*.py")}
     for path in Path(dist).rglob("*"):
