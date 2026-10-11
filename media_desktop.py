@@ -46,7 +46,10 @@ def request(operation, data=None, action=""):
             try:
                 response = json.loads(line[len(PREFIX) :])
                 if response.get("error"):
-                    raise MediaError(response["error"])
+                    detail = response["error"]
+                    if operation == "probe" and response.get("traceback"):
+                        detail += "\n" + response["traceback"]
+                    raise MediaError(detail)
                 value = response["result"]
                 if result.returncode or not isinstance(value, dict):
                     break
@@ -98,6 +101,10 @@ def run_worker():
         if operation == "probe" and exc.__cause__:
             detail += " · " + repr(exc.__cause__)
         response = {"error": detail}
+        if operation == "probe":
+            import traceback
+
+            response["traceback"] = traceback.format_exc()
         code = 1
     print(PREFIX + json.dumps(response, ensure_ascii=True), flush=True)
     return code
