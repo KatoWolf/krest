@@ -59,6 +59,7 @@ def request(operation, data=None, action=""):
 
 
 def run_worker():
+    operation = ""
     try:
         if os.name != "nt":
             raise MediaError("Доступ к кнопкам требует Windows.")
@@ -93,7 +94,10 @@ def run_worker():
         response = {"result": result}
         code = 0
     except Exception as exc:
-        response = {"error": str(exc)}
+        detail = str(exc)
+        if operation == "probe" and exc.__cause__:
+            detail += " · " + repr(exc.__cause__)
+        response = {"error": detail}
         code = 1
     print(PREFIX + json.dumps(response, ensure_ascii=True), flush=True)
     return code

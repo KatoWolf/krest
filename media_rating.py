@@ -96,8 +96,13 @@ def uia_apartment():
     # Only called on the main thread of a short-lived desktop helper. Its COM
     # objects never cross threads and cannot block the voice/GUI process.
     try:
-        import pywinauto  # noqa: F401
         import comtypes
+        import comtypes.client
+
+        # Concurrent helpers must not write/import a half-generated shared
+        # UIAutomationClient.py. comtypes supports generating wrappers in memory.
+        comtypes.client.gen_dir = None
+        import pywinauto  # noqa: F401
     except ImportError as exc:
         raise MediaError(
             "Откройте Музыка → Подключить управление музыкой: нужны компоненты кнопок плеера."
