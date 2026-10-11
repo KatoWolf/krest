@@ -6,7 +6,21 @@ import logging
 from dataclasses import asdict
 
 
+def configure_output():
+    """Frozen Python ignores PYTHONIOENCODING; pipes still need Unicode output."""
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                # Embedded launchers may supply an already closed/replaced stream.
+                pass
+
+
 def main(argv=None):
+    configure_output()
     parser = argparse.ArgumentParser(description="КРЕСТ — локальный ассистент")
     parser.add_argument(
         "--check",
