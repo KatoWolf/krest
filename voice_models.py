@@ -17,7 +17,9 @@ def is_silero(path):
     try:
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
-            return any(name.endswith("/tts_models/model.pkl") for name in names) and any(
+            # PackageExporter uses the exact name passed to save_pickle; the
+            # official Silero package saves "model", without a .pkl extension.
+            return any(name.endswith("/tts_models/model") for name in names) and any(
                 name.endswith("/.data/version") for name in names
             )
     except (OSError, ValueError, zipfile.BadZipFile):

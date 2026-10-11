@@ -181,11 +181,20 @@ class VoicePages:
     def _auto_connect_microphone(self):
         if self.audio_test_busy:
             return
-        self.settings_vars["microphone"].set("")
-        self.settings_vars["speech_auto_threshold"].set(True)
-        self.settings_vars["voice_auto_start"].set(True)
-        if self.save_all_settings():
-            self._microphone_action("reconnect")
+        changes = {"microphone": "", "speech_auto_threshold": True, "voice_auto_start": True}
+        cfg = self.config_mgr.snapshot()
+        cfg["app_settings"].update(changes)
+        try:
+            self.config_mgr.save_config(cfg)
+        except (OSError, ValueError) as exc:
+            self._report_error("Не удалось сохранить настройки микрофона: " + str(exc))
+            return
+        dirty = self.dirty
+        for key, value in changes.items():
+            self.settings_vars[key].set(value)
+        self.dirty = dirty
+        self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
+        self._microphone_action("reconnect")
 
     def _microphone_permissions(self):
         import os

@@ -151,6 +151,8 @@ def enable():
             engine.initialize_models(models)
         _model_signature = signature
         engine.configure(_settings)
+        if was_loaded:
+            engine.request_microphone_refresh()
         if engine.rec is None:
             raise RuntimeError(
                 "Модель Vosk найдена, но не загрузилась: "

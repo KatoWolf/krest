@@ -124,6 +124,7 @@ _last_audio_at = 0
 _last_backend_refresh = 0
 _failed_microphones = {}
 _last_nonzero_audio_at = 0
+_refresh_audio_requested = False
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -416,6 +417,7 @@ def audio_callback(indata, frames, time_info, status):
 
 def start_microphone() -> bool:
     """Безопасная инициализация / перезапуск микрофона."""
+    global _refresh_audio_requested
     global \
         stream, \
         last_mic_error_time, \
@@ -445,14 +447,15 @@ def start_microphone() -> bool:
         from audio_devices import open_microphone, refresh_idle_backend
 
         if (
-            last_mic_error_time
-            and not is_speaking
+            _refresh_audio_requested
+            or last_mic_error_time
             and time.monotonic() - _last_backend_refresh > 15
-        ):
+        ) and not is_speaking:
             with _play_lock:
                 if not is_speaking:
                     refresh_idle_backend(sd)
                     _last_backend_refresh = time.monotonic()
+                    _refresh_audio_requested = False
         now = time.monotonic()
         avoid = {key for key, until in _failed_microphones.items() if until > now}
         # Do not retain indices: Windows can renumber them after USB reconnection.
@@ -483,6 +486,13 @@ def start_microphone() -> bool:
         metrics.update(connected=False, mic_error=str(e), rms=0, peak=0)
         stream = None
         return False
+
+
+def request_microphone_refresh():
+    global _refresh_audio_requested, last_mic_error_time
+    _refresh_audio_requested = True
+    last_mic_error_time = 0
+    _failed_microphones.clear()
 
 
 def fix_wake_word(text):

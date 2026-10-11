@@ -125,6 +125,12 @@ def check_dependencies():
     for module in modules:
         print("Проверка библиотеки: " + module, flush=True)
         importlib.import_module(module)
+    import sounddevice
+    from audio_devices import input_candidates
+
+    print(
+        "PortAudio: устройств ввода найдено " + str(len(input_candidates(sounddevice))), flush=True
+    )
     if os.name == "nt":
         from concurrent.futures import ThreadPoolExecutor
         from media_desktop import request
