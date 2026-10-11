@@ -126,7 +126,7 @@ def enable():
             from app_paths import compiled
 
             action = (
-                "Переустановите Крест через установщик"
+                "Распакуйте свежий ZIP Крест целиком в новую папку"
                 if compiled()
                 else "Откройте start.bat для подготовки голоса"
             )
@@ -164,6 +164,26 @@ def enable():
         if not active:
             engine.start_microphone()
         _engine = engine
+
+
+def tts_progress(text):
+    engine = _engine
+    if engine is not None:
+        engine.metrics["tts_progress"] = text
+
+
+def refresh_tts(models, cancelled=lambda: False):
+    """Attach a downloaded voice without reinitializing recognition or audio input."""
+    global _model_signature
+    with _engine_lock, _speech_lock:
+        engine = _engine
+        if engine is None or cancelled():
+            return False
+        if engine.model_tts is None:
+            engine.initialize_tts(models["silero_path"])
+        engine.metrics["models"] = dict(models)
+        _model_signature = tuple(models.values())
+        return engine.model_tts is not None
 
 
 def disable():

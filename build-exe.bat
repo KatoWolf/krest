@@ -12,6 +12,7 @@ if not exist .build-venv\Scripts\python.exe (
 .build-venv\Scripts\python.exe -c "import sys; assert sys.version_info[:2] in ((3,11),(3,12)) and sys.maxsize > 2**32" >nul 2>&1
 if errorlevel 1 goto invalid_cache
 echo Preparing the EXE builder. First run downloads dependencies.
+echo Vosk and Silero models are included automatically. The voice is tested before creating the ZIP.
 .build-venv\Scripts\python.exe -m pip install "torch>=2.2,<3" --index-url https://download.pytorch.org/whl/cpu
 if errorlevel 1 goto failed
 .build-venv\Scripts\python.exe -m pip install -r requirements-windows.txt -r requirements-voice.txt -r requirements-build.txt

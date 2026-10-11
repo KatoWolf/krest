@@ -61,9 +61,10 @@ def check_kernel(config_path):
 
 def check_models(settings):
     """Test compiled model loaders and synthesis, without requiring CI audio hardware."""
-    from model_setup import prepare
+    from voice_models import discover_models
 
-    paths = prepare(settings, progress=print)
+    # Never download here: the test must exercise what a recipient gets in the ZIP.
+    paths = discover_models(settings)
     if not all(paths.values()):
         raise RuntimeError("Сборка не подготовила обе голосовые модели")
     import config
@@ -74,19 +75,9 @@ def check_models(settings):
     if engine.rec is None or engine.model_tts is None:
         raise RuntimeError("Сборка не загрузила модели: " + str(engine.metrics))
     engine.rec.AcceptWaveform(bytes(3200))
-    import torch
     import numpy as np
 
-    with torch.no_grad():
-        try:
-            audio = engine.model_tts.apply_tts(
-                text="Проверка голоса Крест.", speaker="xenia", sample_rate=24000
-            )
-        except Exception:
-            audio = engine.model_tts.apply_tts(
-                text="Проверка голоса Крест.", speaker="kseniya", sample_rate=24000
-            )
-    samples = audio.numpy()
+    samples = engine.synthesize(engine.prepare_text("Крест готова. Громкость 80%. Время 12:05."))
     if samples.size < 240 or not np.isfinite(samples).all() or not np.any(samples):
         raise RuntimeError("Синтез в сборке не вернул корректный звук")
     print("Vosk и синтез Silero проверены без микрофона и динамиков.")

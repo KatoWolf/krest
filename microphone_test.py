@@ -59,6 +59,10 @@ class MicrophoneTest:
                 )
             if not parts:
                 raise RuntimeError("Микрофон не вернул звук")
+            if not any(levels):
+                raise RuntimeError(
+                    "Микрофон передаёт тишину. Проверьте кнопку mute на гарнитуре и уровень входа в Windows."
+                )
             if calibrate:
                 typical = sorted(levels)[min(len(levels) - 1, int(len(levels) * 0.9))]
                 self.noise_threshold = min(5000, max(50, int(typical * 2 + 30)))

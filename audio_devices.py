@@ -8,6 +8,27 @@ import warnings
 LOOPBACK_NAMES = ("stereo mix", "стерео микшер", "what u hear", "loopback", "monitor of")
 
 
+def microphone_access():
+    """Read Windows privacy state; never change permissions on the user's behalf."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+
+        path = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for suffix in ("", r"\NonPackaged"):
+                try:
+                    with winreg.OpenKey(hive, path + suffix) as key:
+                        if str(winreg.QueryValueEx(key, "Value")[0]).casefold() == "deny":
+                            return "Windows запретила доступ к микрофону. Включите доступ для классических приложений в параметрах конфиденциальности."
+                except OSError:
+                    pass
+    except (ImportError, OSError):
+        pass
+    return ""
+
+
 def input_candidates(sd, preferred=""):
     """Prefer explicit input, system default, then physical microphones. Never use output-only devices."""
     preferred = str(preferred).strip()
@@ -30,6 +51,18 @@ def input_candidates(sd, preferred=""):
         default = int(sd.default.device[0])
     except (AttributeError, ValueError, TypeError, IndexError):
         default = -1
+    # WASAPI uses the current Windows endpoint and native shared-mode audio.
+    defaults = [default]
+    hosts = {}
+    try:
+        for index, host in enumerate(sd.query_hostapis()):
+            hosts[index] = host["name"]
+            if "wasapi" in host["name"].casefold() and host.get("default_input_device", -1) >= 0:
+                defaults.insert(0, host["default_input_device"])
+    except (AttributeError, TypeError, RuntimeError):
+        pass
+    for item in devices:
+        item["host_name"] = hosts.get(item.get("hostapi"), "")
 
     def score(item):
         name = item["name"].casefold()
@@ -43,8 +76,9 @@ def input_candidates(sd, preferred=""):
         return (
             not explicit,
             not physical,
-            item["index"] != default,
+            defaults.index(item["index"]) if item["index"] in defaults else len(defaults),
             not any(part in name for part in ("microphone", "микрофон", "headset", "гарнитур")),
+            "wasapi" not in item["host_name"].casefold(),
             item["index"],
         )
 
@@ -101,13 +135,20 @@ class PCMConverter:
         return result.tobytes()
 
 
-def open_microphone(sd, preferred, callback, target_rate=16000):
-    candidates = input_candidates(sd, preferred)
+def open_microphone(sd, preferred, callback, target_rate=16000, *, avoid=()):
+    access = microphone_access()
+    if access:
+        raise RuntimeError(access)
+    candidates = [
+        item
+        for item in input_candidates(sd, preferred)
+        if (item["name"], item.get("hostapi")) not in avoid
+    ]
     errors = []
     for info in candidates:
         rates = list(
             dict.fromkeys(
-                [target_rate, int(info.get("default_samplerate", target_rate)), 48000, 44100]
+                [int(info.get("default_samplerate", target_rate)), target_rate, 48000, 44100]
             )
         )
         for rate in rates:
@@ -132,7 +173,9 @@ def open_microphone(sd, preferred, callback, target_rate=16000):
                         samplerate=rate,
                         channels=channels,
                         dtype="int16",
-                        blocksize=max(160, int(rate * 0.05)),
+                        # Let the host choose its supported period (USB/Bluetooth/WASAPI).
+                        blocksize=0,
+                        latency="high",
                         callback=capture,
                     )
                     stream.start()
@@ -152,6 +195,8 @@ def open_microphone(sd, preferred, callback, target_rate=16000):
                         except Exception:
                             pass
     detail = errors[-1][:300] if errors else "Windows не сообщает доступных устройств ввода"
+    if avoid and not candidates:
+        detail = "Доступные входы перестали передавать звук. Проверяю переподключение."
     raise RuntimeError(
         "Не удалось открыть микрофон. Проверьте подключение и разрешение доступа к микрофону. "
         + detail

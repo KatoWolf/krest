@@ -6,9 +6,10 @@ import shutil
 import tempfile
 import urllib.request
 import zipfile
+import time
 
 from app_paths import data_dir
-from voice_models import discover_models, is_vosk
+from voice_models import discover_models, is_vosk, is_silero
 
 VOSK_URL = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
 SILERO_URL = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
@@ -71,15 +72,48 @@ def unpack_vosk(archive, destination):
     return models[0]
 
 
-def prepare(settings, progress=lambda text: None, cancelled=lambda: False):
+def _download_checked(url, target, progress, cancelled):
+    for attempt in range(3):
+        if cancelled():
+            raise InterruptedError("Подготовка голоса остановлена")
+        try:
+            download(url, target, progress, cancelled)
+            return
+        except InterruptedError:
+            raise
+        except (OSError, ValueError, RuntimeError):
+            target.unlink(missing_ok=True)
+            if attempt == 2:
+                raise
+            progress(f"Загрузка прервалась. Повтор {attempt + 2} из 3…")
+            for _ in range(10 * (attempt + 1)):
+                if cancelled():
+                    raise InterruptedError("Подготовка голоса остановлена")
+                time.sleep(0.1)
+
+
+def prepare(
+    settings,
+    progress=lambda text: None,
+    cancelled=lambda: False,
+    *,
+    components=("vosk_path", "silero_path"),
+    force=False,
+    destination=None,
+):
     models = discover_models(settings)
-    if os.name != "nt" or not settings.get("app_settings", {}).get("voice_auto_models", True):
+    requested = set(components)
+    if not requested <= {"vosk_path", "silero_path"}:
+        raise ValueError("Неизвестный компонент голоса")
+    if not force and (
+        os.name != "nt" or not settings.get("app_settings", {}).get("voice_auto_models", True)
+    ):
         return models
-    if all(models.values()):
+    if all(models[key] for key in requested):
         return models
     from process_lock import ProcessLock
 
-    folder = data_dir() / "models"
+    folder = Path(destination) if destination is not None else data_dir() / "models"
     folder.mkdir(parents=True, exist_ok=True)
     lock = ProcessLock(folder / ".download.lock")
     if not lock.acquire():
@@ -87,34 +121,41 @@ def prepare(settings, progress=lambda text: None, cancelled=lambda: False):
     try:
         with tempfile.TemporaryDirectory(prefix=".prepare-", dir=folder) as temp:
             temp = Path(temp)
-            if not models["vosk_path"]:
-                target = folder / "vosk-model-small-ru-0.22"
-                if not is_vosk(target):
-                    progress("Первый запуск: загружаю русскую модель распознавания Vosk…")
-                    download(VOSK_URL, temp / "vosk.zip", progress, cancelled)
-                    source = unpack_vosk(temp / "vosk.zip", temp / "unpacked")
-                    if target.exists():
-                        raise RuntimeError(
-                            "Папка модели уже существует, но неполна: " + str(target)
-                        )
-                    source.rename(target)
-            if not models["silero_path"]:
-                target = folder / "v4_ru.pt"
-                if not target.exists():
-                    progress("Первый запуск: загружаю голос Silero…")
+            for key, filename, url, title, valid in (
+                ("vosk_path", "vosk-model-small-ru-0.22", VOSK_URL, "распознавание Vosk", is_vosk),
+                ("silero_path", "v4_ru.pt", SILERO_URL, "голос Silero", is_silero),
+            ):
+                if key not in requested or models[key]:
+                    continue
+                target = folder / filename
+                if not valid(target):
+                    progress("Подготовка: загружаю " + title + "…")
                     try:
-                        download(SILERO_URL, temp / "silero.pt", progress, cancelled)
+                        archive = temp / (filename + ".download")
+                        _download_checked(url, archive, progress, cancelled)
                         if cancelled():
                             raise InterruptedError("Подготовка голоса остановлена")
-                        if not zipfile.is_zipfile(temp / "silero.pt"):
-                            raise ValueError("Сервер вернул неполный пакет Silero")
-                        shutil.move(str(temp / "silero.pt"), target)
+                        source = (
+                            unpack_vosk(archive, temp / "unpacked")
+                            if key == "vosk_path"
+                            else archive
+                        )
+                        if not valid(source):
+                            raise ValueError("Файл модели повреждён или имеет неподходящий формат")
+                        # Only replace a broken managed cache; user-supplied files
+                        # outside this folder are preserved.
+                        if target.exists():
+                            target.rename(folder / (filename + ".broken-" + str(time.time_ns())))
+                        shutil.move(str(source), target)
                     except InterruptedError:
                         raise
                     except (OSError, ValueError, RuntimeError) as exc:
-                        progress(
-                            "Распознавание готово. Голос Silero пока не скачан: " + str(exc)[:160]
-                        )
-        return discover_models(settings)
+                        message = "Не удалось подготовить " + title + ": " + str(exc)[:180]
+                        if force:
+                            raise RuntimeError(message) from exc
+                        progress(message + ". Загрузка будет повторена автоматически.")
+                        continue
+                models[key] = str(target.resolve())
+        return models
     finally:
         lock.close()

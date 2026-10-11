@@ -537,6 +537,7 @@ class AssistantRuntime:
 
     def _voice_attempt(self):
         failure = ""
+        tts_stop = threading.Event()
         self.voice_status = "Подключаю голос: ищу модели и микрофон…"
         self.events.put(("voice", self.voice_status))
         try:
@@ -550,11 +551,19 @@ class AssistantRuntime:
                 self.settings(),
                 report,
                 lambda: self.stop_event.is_set() or self._voice_stop.is_set(),
+                components=("vosk_path",),
             )
             if self.stop_event.is_set() or self._voice_stop.is_set():
                 return
             with self._voice_control:
                 voice.enable()
+            if not voice.telemetry().get("tts_ready"):
+                threading.Thread(
+                    target=self._tts_recovery,
+                    args=(tts_stop,),
+                    daemon=True,
+                    name="krest-voice-recovery",
+                ).start()
             connected = bool(voice.telemetry().get("connected"))
             self.voice_status = (
                 "Слушаю обращение «Крест»" if connected else "Ищу доступный микрофон…"
@@ -590,11 +599,51 @@ class AssistantRuntime:
             failure = str(exc)
             self.events.put(("error", f"Голос: {exc}"))
         finally:
+            tts_stop.set()
             with self._voice_control:
                 voice.disable()
             self.voice_status = failure or "Микрофон на паузе"
             self.events.put(("voice", self.voice_status))
         return failure
+
+    def _tts_recovery(self, stopped):
+        from model_setup import prepare
+
+        def cancelled():
+            return stopped.is_set() or self.stop_event.is_set() or self._voice_stop.is_set()
+
+        delay = 60
+        while not cancelled():
+            try:
+                voice.tts_progress("Подключаю голос Silero…")
+                models = prepare(
+                    self.settings(),
+                    voice.tts_progress,
+                    cancelled,
+                    components=("silero_path",),
+                )
+                if cancelled():
+                    return
+                if models["silero_path"] and voice.refresh_tts(models, cancelled):
+                    self.events.put(("voice", "Голос Silero подключён"))
+                    return
+                if not self.settings().get("app_settings", {}).get("voice_auto_models", True):
+                    voice.tts_progress(
+                        "Автозагрузка моделей выключена. Добавьте Silero в папку model."
+                    )
+                else:
+                    detail = voice.telemetry().get("tts_progress", "")
+                    voice.tts_progress(
+                        detail.split(" · Повторю")[0] + f" · Повторю через {delay} секунд"
+                    )
+            except InterruptedError:
+                return
+            except Exception as exc:
+                voice.tts_progress(f"Silero: {str(exc)[:200]} · Повторю через {delay} секунд")
+            for _ in range(delay):
+                if cancelled() or stopped.wait(1):
+                    return
+            delay = min(300, delay * 2)
 
     def arm_voice(self):
         voice.stop_speaking()

@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 
 
 def run_checked(command, **kwargs):
@@ -132,7 +132,7 @@ def audit_distribution(dist):
             raise RuntimeError("Открытый исходник Крест в сборке: " + str(relative))
 
 
-def smoke_test(dist):
+def smoke_test(dist, *, with_models=True):
     executable = Path(dist) / "Krest.exe"
     with tempfile.TemporaryDirectory(prefix="krest-release-check-") as temp:
         root = Path(temp)
@@ -152,19 +152,30 @@ def smoke_test(dist):
         run_checked(
             [str(executable), "--release-import-check", "--config", str(cfg)], cwd=root, timeout=180
         )
+        if with_models:
+            run_checked(
+                [str(executable), "--release-model-check", "--config", str(cfg)],
+                cwd=root,
+                timeout=240,
+            )
 
 
 def copy_models(dist):
     # Copy discovered models only, never the whole user's model/project directory.
     sys.path.insert(0, str(ROOT))
-    from voice_models import discover_models
+    from model_setup import prepare
     from configuration import ConfigManager
 
-    found = discover_models(ConfigManager().snapshot(), ROOT)
+    found = prepare(
+        ConfigManager().snapshot(),
+        progress=print,
+        force=True,
+        destination=ROOT / "build" / "speech-models",
+    )
+    if not all(found.values()):
+        raise RuntimeError("Для готового ZIP необходимы обе модели: Vosk и Silero")
     folder = Path(dist) / "model"
     for key, filename in (("vosk_path", "vosk"), ("silero_path", "model_silero.pt")):
-        if not found[key]:
-            continue
         folder.mkdir(exist_ok=True)
         source = Path(found[key])
         if source.is_dir():
@@ -184,8 +195,19 @@ def main():
         help="Обфускация PyArmor; ошибка не вызывает незащищённую пересборку",
     )
     parser.add_argument("--license", help="Лицензия PyArmor для регистрации в авторской среде")
-    parser.add_argument(
-        "--with-models", action="store_true", help="Положить найденные модели в model рядом с EXE"
+    models = parser.add_mutually_exclusive_group()
+    models.add_argument(
+        "--with-models",
+        dest="with_models",
+        action="store_true",
+        default=True,
+        help="Включить Vosk и Silero в ZIP (по умолчанию); скачать отсутствующие модели",
+    )
+    models.add_argument(
+        "--without-models",
+        dest="with_models",
+        action="store_false",
+        help="Облегчённый ZIP: модели потребуется скачать при первом запуске",
     )
     args = parser.parse_args()
     output = ROOT / "dist"
@@ -228,7 +250,7 @@ def main():
     if args.with_models:
         copy_models(dist)
     audit_distribution(dist)
-    smoke_test(dist)
+    smoke_test(dist, with_models=args.with_models)
     output.mkdir(exist_ok=True)
     target = output / "Krest"
     if target.exists():
@@ -241,13 +263,21 @@ def main():
         print("Предыдущая сборка сохранена: " + str(previous))
     shutil.move(str(dist), str(target))
     archive = output / (
-        "Krest-Windows-" + VERSION + ("-protected" if args.protect else "") + ".zip"
+        "Krest-Windows-"
+        + VERSION
+        + ("-protected" if args.protect else "")
+        + ("" if args.with_models else "-online-setup")
+        + ".zip"
     )
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as result:
         for path in target.rglob("*"):
             if path.is_file():
                 result.write(path, path.relative_to(output))
     print("::notice::EXE, skills, child kernel and native runtime imports passed.")
+    if args.with_models:
+        print(
+            "::notice::Bundled Vosk and real Silero synthesis passed from a clean profile, offline."
+        )
     print("Готово: " + str(target / "Krest.exe"))
     print("Архив для передачи: " + str(archive))
     if args.protect:

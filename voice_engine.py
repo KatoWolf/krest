@@ -3,10 +3,12 @@ import sys
 import json
 import queue
 
+torch_import_error = ""
 try:
     import torch
-except (ImportError, OSError):
+except (ImportError, OSError) as exc:
     torch = None
+    torch_import_error = str(exc)[:240]
 import sounddevice as sd
 import vosk
 
@@ -120,6 +122,8 @@ last_mic_error_time = 0
 _microphone_setting = None
 _last_audio_at = 0
 _last_backend_refresh = 0
+_failed_microphones = {}
+_last_nonzero_audio_at = 0
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -238,25 +242,8 @@ def auto_accentuate_name(name: str = "", pronunciation: str = None) -> str:
         low = char.lower()
         ru_text += translit_map.get(low, char)
 
-    if "+" in ru_text:
-        return ru_text
-
-    vowels = "аеёиоуыэюяАЕЁИОУЫЭЮЯ"
-    words = ru_text.split()
-    accented_words = []
-
-    for word in words:
-        vowel_indices = [i for i, c in enumerate(word) if c in vowels]
-        if not vowel_indices:
-            accented_words.append(word)
-        elif len(vowel_indices) == 1:
-            idx = vowel_indices[0]
-            accented_words.append(word[: idx + 1] + "+" + word[idx + 1 :])
-        else:
-            idx = vowel_indices[-2] if len(vowel_indices) >= 2 else vowel_indices[0]
-            accented_words.append(word[: idx + 1] + "+" + word[idx + 1 :])
-
-    return " ".join(accented_words)
+    # Unknown names use Silero's accent model; guessed stress distorted names.
+    return ru_text
 
 
 def clear_audio_queue():
@@ -268,20 +255,24 @@ def clear_audio_queue():
             break
 
 
-def manage_disk_cache(max_files=200):
-    """Очистка старого кэша озвучки."""
+def manage_disk_cache(max_files=200, max_bytes=64 * 1024 * 1024):
+    """Bound both the number and total size of synthesized replies."""
     try:
-        files = [
-            os.path.join(TTS_CACHE_DIR, f) for f in os.listdir(TTS_CACHE_DIR) if f.endswith(".npy")
-        ]
-        if len(files) > max_files:
-            files.sort(key=os.path.getatime)
-            for f in files[:-max_files]:
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
-    except Exception:
+        files = sorted(
+            (
+                os.path.join(TTS_CACHE_DIR, f)
+                for f in os.listdir(TTS_CACHE_DIR)
+                if f.endswith(".npy")
+            ),
+            key=os.path.getatime,
+            reverse=True,
+        )
+        used = 0
+        for index, path in enumerate(files):
+            used += os.path.getsize(path)
+            if index >= max_files or used > max_bytes:
+                os.remove(path)
+    except OSError:
         pass
 
 
@@ -289,7 +280,7 @@ def manage_disk_cache(max_files=200):
 
 
 def initialize_models(models=None):
-    global rec, model_vosk, model_tts, device, vosk_path, silero_path
+    global rec, model_vosk, vosk_path, silero_path
     if models:
         vosk_path, silero_path = models["vosk_path"], models["silero_path"]
     metrics.pop("model_error", None)
@@ -321,36 +312,64 @@ def initialize_models(models=None):
             f"--- [CRITICAL]: Ошибка загрузки Vosk. Путь: {vosk_path} | Ошибка: {e} ---"
         )
 
-    logging.getLogger(__name__).info(
-        "--- [VOICE ENGINE]: Инициализация вокального аппарата V4... ---"
-    )
-    device = torch.device("cpu") if torch is not None else None
+    initialize_tts(silero_path)
+
+
+def initialize_tts(path):
+    """Replace only the synthesizer; recognition and the microphone stay active."""
+    global model_tts, silero_path, device
+    silero_path = path
     model_tts = None
+    metrics.update(tts_ready=False, tts_error="")
+    if torch is None:
+        metrics["tts_error"] = "Не загрузился голосовой движок PyTorch: " + torch_import_error
+        return False
+    if not os.path.isfile(path):
+        metrics["tts_error"] = "Модель Silero отсутствует или повреждена."
+        return False
+    try:
+        device = torch.device("cpu")
+        candidate = torch.package.PackageImporter(path).load_pickle("tts_models", "model")
+        candidate.to(device)
+        model_tts = candidate
+        # A model is ready only after a real synthesis, not merely deserialization.
+        synthesize("Крест готова.")
+    except Exception as exc:
+        model_tts = None
+        metrics["tts_error"] = "Не удалось загрузить Silero: " + str(exc)[:240]
+        logging.getLogger(__name__).warning(metrics["tts_error"])
+        return False
+    metrics.update(tts_ready=True, tts_progress="Голос Silero готов", tts_error="")
+    return True
 
-    if torch is not None and os.path.isfile(silero_path):
-        try:
-            model_tts = torch.package.PackageImporter(silero_path).load_pickle(
-                "tts_models", "model"
-            )
-            model_tts.to(device)
-        except Exception as exc:
-            metrics["tts_error"] = str(exc)[:300]
-            model_tts = None
 
-    if model_tts is None:
-        logging.getLogger(__name__).info(
-            "--- [VOICE]: Добавьте доверенную модель Silero в model_silero.pt ---"
-        )
+def synthesize(text):
+    """The same bounded CPU synthesis path is used by runtime and release checks."""
+    if model_tts is None or torch is None:
+        raise RuntimeError("Silero ещё не готова")
+    # v4 uses xenia; some older drop-in packages offer kseniya instead.
+    speakers = getattr(model_tts, "speakers", ())
+    speaker = "kseniya" if "xenia" not in speakers and "kseniya" in speakers else "xenia"
+    with torch.no_grad():
+        samples = model_tts.apply_tts(
+            text=text,
+            speaker=speaker,
+            sample_rate=24000,
+            put_accent=True,
+            put_yo=True,
+        ).numpy()
+    return validate_audio(samples)
 
-    if model_tts is not None:
-        logging.getLogger(__name__).info(
-            "--- [VOICE ENGINE]: Аппаратный прогрев нейросети (Pre-warming)... ---"
-        )
-        try:
-            model_tts.apply_tts(text=".", speaker="xenia", sample_rate=24000)
-        except Exception:
-            pass
-        logging.getLogger(__name__).info("[VOICE ENGINE]: Системы готовы к мгновенному ответу!")
+
+def validate_audio(samples):
+    samples = np.asarray(samples, dtype=np.float32)
+    if (
+        samples.ndim != 1
+        or not 240 <= samples.size <= 24000 * 120
+        or not np.isfinite(samples).all()
+    ):
+        raise ValueError("Silero вернула некорректный звук")
+    return samples
 
 
 initialize_models()
@@ -377,13 +396,15 @@ def interrupt():
 
 
 def audio_callback(indata, frames, time_info, status):
-    global _last_audio_at
+    global _last_audio_at, _last_nonzero_audio_at
     _last_audio_at = time.monotonic()
     metrics["connected"] = True
     if is_speaking:
         return
     data = bytes(indata)
     rms, peak = pcm_levels(data)
+    if peak > 0:
+        _last_nonzero_audio_at = _last_audio_at
     metrics.update(rms=rms, peak=peak)
     try:
         q.put_nowait((data, rms))
@@ -395,7 +416,13 @@ def audio_callback(indata, frames, time_info, status):
 
 def start_microphone() -> bool:
     """Безопасная инициализация / перезапуск микрофона."""
-    global stream, last_mic_error_time, _microphone_setting, _last_audio_at, _last_backend_refresh
+    global \
+        stream, \
+        last_mic_error_time, \
+        _microphone_setting, \
+        _last_audio_at, \
+        _last_backend_refresh, \
+        _last_nonzero_audio_at
 
     # Защита от слишком частых попыток перезапуска при сбое устройства
     if time.time() - last_mic_error_time < 3.0:
@@ -426,16 +453,26 @@ def start_microphone() -> bool:
                 if not is_speaking:
                     refresh_idle_backend(sd)
                     _last_backend_refresh = time.monotonic()
-        stream, info = open_microphone(sd, selected, audio_callback, SAMPLE_RATE)
+        now = time.monotonic()
+        avoid = {key for key, until in _failed_microphones.items() if until > now}
+        # Do not retain indices: Windows can renumber them after USB reconnection.
+        if avoid:
+            stream, info = open_microphone(sd, selected, audio_callback, SAMPLE_RATE, avoid=avoid)
+        else:
+            stream, info = open_microphone(sd, selected, audio_callback, SAMPLE_RATE)
         _microphone_setting = str(selected)
         _last_audio_at = time.monotonic()
+        _last_nonzero_audio_at = _last_audio_at
         _noise.reset(int(settings.get("speech_threshold", 200)))
         metrics.update(
             connected=True,
             device_name=info["name"],
             device_index=info["index"],
             input_rate=info["input_rate"],
+            hostapi=info.get("hostapi"),
+            host_name=info.get("host_name", ""),
             mic_error="",
+            mic_hint="",
         )
         clear_audio_queue()
         _reset_recognizer()
@@ -477,13 +514,26 @@ def listen():
         active = stream is not None and stream.active
     except Exception:
         active = False
+    stalled = bool(_last_audio_at and now - _last_audio_at > 5)
+    if stalled and metrics.get("device_name"):
+        _failed_microphones[(metrics["device_name"], metrics.get("hostapi"))] = now + 60
+        metrics.update(
+            connected=False, mic_hint="Микрофон перестал передавать звук. Подключаю другой вход…"
+        )
+        # Only mark a stalled stream once; subsequent retries may still fail.
+        metrics["device_name"] = ""
     if (
         not active
         or (_microphone_setting is not None and selected != _microphone_setting)
-        or (_last_audio_at and time.monotonic() - _last_audio_at > 5)
+        or stalled
     ):
         if not start_microphone():
             return ""
+    metrics["mic_hint"] = (
+        "Микрофон подключён, но передаёт тишину. Проверьте кнопку mute на гарнитуре и уровень входа в Windows."
+        if _last_nonzero_audio_at and now - _last_nonzero_audio_at > 8
+        else ""
+    )
     _endpoint.threshold = int(cfg.get("speech_threshold", 200))
     metrics["threshold"] = _endpoint.threshold
     _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
@@ -537,21 +587,15 @@ def listen():
 # --- Синтез речи (TTS) ---
 
 
-def inject_human_breaths(text: str) -> str:
-    words = text.split()
-    if len(words) > 8:
-        if not any(p in words[4] for p in [",", ".", "!", "?", "-", ":"]):
-            words[4] += ","
-    return " ".join(words)
-
-
 def clean_text_for_tts(text: str) -> str:
     text = re.sub(r"[*_`~\[\]\(\)\{\}]", "", text)
-    text = re.sub(r"#\w+", "", text)
+    text = re.sub(r"#(?=\w)", "", text)
+    text = re.sub(r"(?<=[\w])\s*\n+\s*", ". ", text)
+    text = re.sub(r"[—–]", ", ", text)
     text = re.sub(r" - ", ", ", text)
     text = re.sub(r"[^а-яА-ЯёЁa-zA-Z0-9\s\.,!?\:\;+]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return inject_human_breaths(text)
+    return text
 
 
 def transliterate_english(text: str) -> str:
@@ -566,9 +610,9 @@ def transliterate_english(text: str) -> str:
         r"\bsteam\b": "ст+им",
         r"\bgame\b": "гейм",
         r"\bplay\b": "плей",
-        r"\bcpu\b": "ц э пэ +у",
-        r"\bram\b": "р+ам",
-        r"\bgpu\b": "вид+юха",
+        r"\bcpu\b": "проц+ессор",
+        r"\bram\b": "операт+ивная п+амять",
+        r"\bgpu\b": "видеок+арта",
         r"\bfps\b": "фэ пэ +эс",
         r"\bpc\b": "пэк+а",
     }
@@ -613,7 +657,7 @@ def transliterate_english(text: str) -> str:
 
 
 def apply_cyberpunk_dsp(
-    audio_data: np.ndarray, sr: int = 24000, fade_time: float = 0.03
+    audio_data: np.ndarray, sr: int = 24000, fade_time: float = 0.008
 ) -> np.ndarray:
     fade_length = int(sr * fade_time)
     if len(audio_data) > fade_length * 2:
@@ -669,6 +713,9 @@ def prepare_text(text):
         clean_text = re.sub(pattern, replacement, clean_text, flags=re.IGNORECASE)
 
     try:
+        clean_text = re.sub(
+            r"\d+[.,]\d+", lambda m: num2words(m.group().replace(",", "."), lang="ru"), clean_text
+        )
         clean_text = re.sub(r"\d+", lambda m: num2words(int(m.group()), lang="ru"), clean_text)
     except Exception:
         pass
@@ -684,91 +731,72 @@ def prepare_text(text):
     return clean_text
 
 
-def speak(text: str, cancelled=lambda: False):
-    """Синтез речи и воспроизведение ответа."""
-    global is_speaking, model_tts, rec
-    if not text or model_tts is None:
-        return
+def cached_synthesis(text):
+    # Version the cache when pronunciation/audio processing changes.
+    key = "2:xenia:24000:" + str(silero_path) + ":" + str(os.path.getmtime(silero_path)) + text
+    path = os.path.join(TTS_CACHE_DIR, hashlib.sha256(key.encode("utf-8")).hexdigest() + ".npy")
+    if os.path.isfile(path):
+        try:
+            if os.path.getsize(path) > 12 * 1024 * 1024:
+                raise ValueError("Oversized audio cache")
+            samples = validate_audio(np.load(path, allow_pickle=False))
+            os.utime(path, None)
+            return samples
+        except (OSError, ValueError, EOFError):
+            pass
+    samples = synthesize(text)
+    try:
+        # A crash cannot publish a partial cache entry.
+        with open(path + ".tmp", "wb") as output:
+            np.save(output, samples, allow_pickle=False)
+        os.replace(path + ".tmp", path)
+        manage_disk_cache()
+    except OSError:
+        pass
+    return samples
 
-    if cancelled():
+
+def speak(text: str, cancelled=lambda: False):
+    """Speak sentence-sized pieces, keeping CPU/memory and cancellation bounded."""
+    global is_speaking
+    if not text or model_tts is None or cancelled():
         return
+    from speech_tools import speech_chunks
+
     _cancel_speech.clear()
     is_speaking = True
     with _recognizer_lock:
         clear_audio_queue()
         _reset_recognizer()
-
     try:
-        clean_text = prepare_text(text)
-        hash_name = hashlib.sha256(
-            (
-                str(silero_path) + ":xenia:24000:" + str(os.path.getmtime(silero_path)) + clean_text
-            ).encode("utf-8")
-        ).hexdigest()
-        cache_file_path = os.path.join(TTS_CACHE_DIR, f"{hash_name}.npy")
-
-        audio_np = None
-
-        if os.path.exists(cache_file_path):
-            try:
-                with torch.no_grad():
-                    audio_np = np.load(cache_file_path)
-                os.utime(cache_file_path, None)
-            except Exception:
-                audio_np = None
-
-        if audio_np is None:
-            with torch.no_grad():
-                try:
-                    audio_tensor = model_tts.apply_tts(
-                        text=clean_text,
-                        speaker="xenia",
-                        sample_rate=24000,
-                        put_accent=True,
-                        put_yo=True,
-                    )
-                except Exception:
-                    audio_tensor = model_tts.apply_tts(
-                        text=clean_text,
-                        speaker="kseniya",
-                        sample_rate=24000,
-                        put_accent=True,
-                        put_yo=True,
-                    )
-                audio_np = audio_tensor.numpy()
-
-            try:
-                np.save(cache_file_path, audio_np)
-                manage_disk_cache(max_files=200)
-            except Exception:
-                pass
-
-        if cancelled() or _cancel_speech.is_set():
-            return
-        if _settings_getter().get("app_settings", {}).get("voice_effect", True):
-            audio_np = apply_cyberpunk_dsp(audio_np, sr=24000, fade_time=0.03)
-
-        volume = _settings_getter().get("app_settings", {}).get("voice_volume", 80) / 100
-        if volume != 1.0:
-            audio_np = audio_np * volume
-            audio_np = np.clip(audio_np, -1.0, 1.0)
-
-        with _play_lock:
+        for part in speech_chunks(prepare_text(text)):
             if cancelled() or _cancel_speech.is_set():
                 return
-            sd.play(audio_np, 24000)
-        sd.wait()
-
-    except Exception as e:
-        logging.getLogger(__name__).info(f"\n--- [Ошибка Neural TTS]: {e} ---")
+            audio_np = cached_synthesis(part)
+            if cancelled() or _cancel_speech.is_set():
+                return
+            settings = _settings_getter().get("app_settings", {})
+            if settings.get("voice_effect", True):
+                audio_np = apply_cyberpunk_dsp(audio_np.copy())
+            volume = max(0, min(100, settings.get("voice_volume", 80))) / 100
+            audio_np = audio_np * volume
+            # Scale excessive peaks instead of hard clipping syllables.
+            peak = float(np.max(np.abs(audio_np)))
+            if peak > 0.98:
+                audio_np *= 0.98 / peak
+            with _play_lock:
+                if cancelled() or _cancel_speech.is_set():
+                    return
+                sd.play(audio_np, 24000)
+            sd.wait()
+        metrics["tts_error"] = ""
+    except Exception as exc:
+        metrics["tts_error"] = "Ошибка озвучки: " + str(exc)[:240]
+        logging.getLogger(__name__).warning(metrics["tts_error"])
     finally:
-        # Пауза перед включением микрофона, чтобы колонки не перехватили хвост речи
+        # Keep the speaker tail out of recognition.
         time.sleep(0.2)
         with _recognizer_lock:
             _reset_recognizer()
         clear_audio_queue()
         is_speaking = False
-
-        logging.getLogger(__name__).info(
-            "\n--- [Сенсоры Активны]: Ожидаю голосовых команд... ---" + " " * 15
-        )

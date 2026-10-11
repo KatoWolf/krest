@@ -134,6 +134,36 @@ def verbalize_numbers(text):
         return f"{hours} {unit(hours, ('час', 'часа', 'часов'))} {minutes} {unit(minutes, ('минута', 'минуты', 'минут'))}"
 
     text = re.sub(r"\b(\d{1,2}):(\d{2})\b", clock, text)
+
+    def quantity(match):
+        number, suffix = match.groups()
+        forms = (
+            ("процент", "процента", "процентов")
+            if suffix == "%"
+            else ("градус", "градуса", "градусов")
+        )
+        if "." in number or "," in number:
+            unit = forms[1]
+        else:
+            value = int(number)
+            unit = (
+                forms[2]
+                if 11 <= value % 100 <= 14
+                else forms[0]
+                if value % 10 == 1
+                else forms[1]
+                if 2 <= value % 10 <= 4
+                else forms[2]
+            )
+        return (
+            number
+            + " "
+            + unit
+            + (" Цельсия" if "c" in suffix.lower() or "с" in suffix.lower() else "")
+        )
+
+    text = re.sub(r"(\d+(?:[.,]\d+)?)\s*(%|°\s*[CСcс]?)", quantity, text)
+    text = re.sub(r"(?<!\w)[−-](?=\d)", "минус ", text)
     for short, full in (
         ("ГБ", "гигабайт"),
         ("МБ", "мегабайт"),
@@ -142,6 +172,23 @@ def verbalize_numbers(text):
     ):
         text = re.sub(r"(?<=\d)\s*" + short + r"\b", " " + full, text, flags=re.I)
     return text
+
+
+def speech_chunks(text, limit=240):
+    """Keep full sentences when possible and bound long unpunctuated replies."""
+    pending = ""
+    for sentence in re.split(r"(?<=[.!?;])\s+", text.strip()):
+        for word in sentence.split():
+            if pending and len(pending) + 1 + len(word) > limit:
+                yield pending
+                pending = ""
+            while len(word) > limit:
+                yield word[:limit]
+                word = word[limit:]
+            pending = (pending + " " + word).strip()
+        if pending:
+            yield pending
+            pending = ""
 
 
 class AdaptiveNoiseFloor:

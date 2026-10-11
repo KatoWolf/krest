@@ -43,7 +43,8 @@ class VoicePages:
             variable=self.settings_vars["voice_auto_start"],
         ).pack(anchor="w", pady=4)
         ttk.Checkbutton(
-            card, text="Автоматически скачивать отсутствующие модели с официальных серверов",
+            card,
+            text="Автоматически скачивать отсутствующие модели с официальных серверов",
             variable=self.settings_vars["voice_auto_models"],
         ).pack(anchor="w", pady=4)
         self.label(card, textvariable=self.voice_var, muted=True).pack(anchor="w")
@@ -100,7 +101,7 @@ class VoicePages:
         card = self.card(
             self.page_bodies["voice"],
             "Проверка микрофона",
-            "Выключите голос. Для измерения фона помолчите пять секунд; для тестовой записи произнесите команду. Запись остаётся только в памяти.",
+            "Крест выбирает системный микрофон и подстраивается к фону. Для проверки голос временно приостанавливается и затем возвращается сам. Запись остаётся только в памяти.",
         )
         self.label(
             card,
@@ -108,12 +109,19 @@ class VoicePages:
             muted=True,
             wraplength=680,
         ).pack(anchor="w", pady=6)
-        self.field(card, "Имя / индекс микрофона", self.settings_vars["microphone"])
         ttk.Button(
             card,
-            text="Выбирать автоматически",
-            command=lambda: self.settings_vars["microphone"].set(""),
+            text="Автоматически подключить микрофон",
+            style="Accent.TButton",
+            command=self._auto_connect_microphone,
         ).pack(anchor="w", pady=4)
+        ttk.Button(
+            card,
+            text="Разрешение микрофона в Windows",
+            command=self._microphone_permissions,
+        ).pack(anchor="w", pady=4)
+        advanced = self.advanced(card, "Выбрать конкретный микрофон")
+        self.field(advanced, "Имя / индекс микрофона", self.settings_vars["microphone"])
         ttk.Button(
             card,
             text="Настроить порог автоматически · 5 секунд тишины",
@@ -170,6 +178,23 @@ class VoicePages:
             self.runtime.arm_voice()
         return "break"
 
+    def _auto_connect_microphone(self):
+        if self.audio_test_busy:
+            return
+        self.settings_vars["microphone"].set("")
+        self.settings_vars["speech_auto_threshold"].set(True)
+        self.settings_vars["voice_auto_start"].set(True)
+        if self.save_all_settings():
+            self._microphone_action("reconnect")
+
+    def _microphone_permissions(self):
+        import os
+
+        if os.name == "nt":
+            self._background(lambda: os.startfile("ms-settings:privacy-microphone"))
+        else:
+            self.mic_test_status.set("Разрешите доступ к микрофону в настройках вашей системы.")
+
     def _microphone_action(self, action):
         if self.audio_test_busy:
             return
@@ -197,7 +222,9 @@ class VoicePages:
                                 "Голос ещё освобождает микрофон. Повторите проверку."
                             )
                         time.sleep(0.05)
-                if action == "play":
+                if action == "reconnect":
+                    result = "Автовыбор включён. Подключаю микрофон; его состояние показано выше."
+                elif action == "play":
                     self.microphone_test.playback()
                     result = "Воспроизведение завершено"
                 else:
@@ -216,7 +243,7 @@ class VoicePages:
                 self.post_ui(lambda: self.mic_test_status.set(message))
                 raise
             finally:
-                if resume and not self.closing:
+                if (resume or action == "reconnect") and not self.closing:
                     self.runtime.start_voice()
                 self.post_ui(lambda: setattr(self, "audio_test_busy", False))
 
@@ -347,6 +374,8 @@ class VoicePages:
             )
         if data.get("mic_error"):
             text += "\n" + data["mic_error"][:240]
+        if data.get("mic_hint"):
+            text += "\n" + data["mic_hint"][:240]
         if peak >= 32700:
             text += " · Перегрузка: уменьшите усиление"
         if data.get("dropped"):
@@ -355,6 +384,10 @@ class VoicePages:
             text += "\nСлышу: " + data["partial"][:180]
         if data.get("connected") and data.get("tts_ready") is False:
             text += "\nСлышу вас. Озвучка недоступна — ответы пока видны в меню."
+        if data.get("tts_ready") is False and data.get("tts_progress"):
+            text += "\n" + data["tts_progress"][:300]
+        if data.get("tts_error"):
+            text += "\n" + data["tts_error"][:300]
         for key in ("mic_level_label", "home_mic_detail"):
             widget = getattr(self, key, None)
             if widget is not None and widget.winfo_exists():

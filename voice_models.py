@@ -1,6 +1,7 @@
 """Bounded discovery of drop-in Vosk/Silero models beside sources or the EXE."""
 
 from pathlib import Path
+import zipfile
 
 BASE_DIR = Path(__file__).resolve().parent
 TTS_NAMES = ("model_silero.pt", "silero.pt", "silero-ru.pt", "v4_ru.pt", "v3_1_ru.pt", "v3_ru.pt")
@@ -9,6 +10,18 @@ SKIP = {".git", ".venv", ".build-venv", "node_modules", "__pycache__", "build", 
 
 def is_vosk(path):
     return (path / "am" / "final.mdl").is_file() and (path / "conf" / "model.conf").is_file()
+
+
+def is_silero(path):
+    """Check the Torch package index without unpickling or importing a model."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            return any(name.endswith("/tts_models/model.pkl") for name in names) and any(
+                name.endswith("/.data/version") for name in names
+            )
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return False
 
 
 def _folders(root, max_depth=3, budget=200):
@@ -75,12 +88,12 @@ def discover_models(settings, base_dir=None):
             vosk = ready[0]
         elif data_dir() / "models/vosk-model-small-ru-0.22" in ready:
             vosk = data_dir() / "models/vosk-model-small-ru-0.22"
-    silero = configured["silero_path"] if configured["silero_path"].is_file() else None
+    silero = configured["silero_path"] if is_silero(configured["silero_path"]) else None
     if silero is None:
         ready = []
         for folder in candidates:
-            ready.extend(folder / name for name in TTS_NAMES if (folder / name).is_file())
-            ready.extend(p for p in folder.glob("*silero*.pt") if p.is_file())
+            ready.extend(folder / name for name in TTS_NAMES if is_silero(folder / name))
+            ready.extend(p for p in folder.glob("*silero*.pt") if is_silero(p))
         ready = list(dict.fromkeys(ready))
         local = [
             p for p in ready if p == primary / "model_silero.pt" or primary / "model" in p.parents
