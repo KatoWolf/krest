@@ -52,21 +52,21 @@ LABELS = {
         "не рекомендовать",
     },
 }
-TRANSPORT = {
-    "пауза",
-    "приостановить",
-    "приостановить воспроизведение",
-    "воспроизвести",
-    "играть",
-    "продолжить воспроизведение",
-    "play",
-    "pause",
+# Recommendation cards can contain Play + Like too. A transport panel must
+# contain track navigation, or the active Pause button, to distinguish it.
+PLAYER_ANCHORS = {
     "следующий трек",
     "предыдущий трек",
-    "next track",
-    "previous track",
     "следующий",
     "предыдущий",
+    "next track",
+    "previous track",
+    "next",
+    "previous",
+    "пауза",
+    "pause",
+    "приостановить",
+    "приостановить воспроизведение",
 }
 
 
@@ -299,7 +299,7 @@ def track_buttons(window, data):
                     break
                 buttons = parent.descendants(control_type="Button")
                 labels = {_label(b) for b in buttons if _available(b)}
-                if labels & TRANSPORT and labels & set().union(*LABELS.values()):
+                if labels & PLAYER_ANCHORS and labels & set().union(*LABELS.values()):
                     candidates.append((len(buttons), buttons))
                     break
             except Exception:
@@ -324,7 +324,7 @@ def track_buttons(window, data):
     # Flat accessibility trees have no named player container. Use the actual
     # transport row to filter named controls, never to synthesize click positions.
     buttons = window.descendants(control_type="Button")
-    transports = [b for b in buttons if _label(b) in TRANSPORT and _available(b)]
+    transports = [b for b in buttons if _label(b) in PLAYER_ANCHORS and _available(b)]
     result = []
     for button in buttons:
         if _label(button) not in set().union(*LABELS.values()) or not _available(button):
