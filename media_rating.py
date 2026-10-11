@@ -93,11 +93,8 @@ def uia_apartment():
     if os.name != "nt":
         yield
         return
-    import sys
-
-    # Also cover direct use of the adapter outside main.py. Bootstrap sets this
-    # before imports in normal source/EXE launches, so UIA's singleton is MTA.
-    sys.coinit_flags = 0
+    # Only called on the main thread of a short-lived desktop helper. Its COM
+    # objects never cross threads and cannot block the voice/GUI process.
     try:
         import pywinauto  # noqa: F401
         import comtypes
@@ -355,8 +352,19 @@ def track_buttons(window, data):
     return result
 
 
+def perform_rating(data, action):
+    with uia_apartment():
+        window = find_player_window(data)
+        refresh = lambda: track_buttons(window, data)
+        # Recheck the panel with the expected title before and after invocation.
+        return apply_rating(
+            refresh(), action, refresh=refresh, verify=lambda: _rating_button(refresh(), action)
+        )
+
+
 def change_rating(data, action):
     from media_control import query
+    from media_desktop import request
 
     def verify():
         current = query(data["app_id"])
@@ -365,7 +373,24 @@ def change_rating(data, action):
                 "Трек сменился во время проверки. Проверьте отметку и повторите для нового трека."
             )
 
+    verify()
+    result = request("rating", data, action)
+    verify()
+    return result
+
+
+def inspect_player(data):
     with uia_apartment():
         window = find_player_window(data)
-        refresh = lambda: track_buttons(window, data)
-        return apply_rating(refresh(), action, refresh=refresh, verify=verify)
+        buttons = track_buttons(window, data)
+        candidates = [b for b in buttons if _label(b) in set().union(*LABELS.values())]
+        lines = [f"Кнопок отметки найдено: {len(candidates)}"]
+        for button in candidates:
+            lines.append(
+                f"{button.window_text()} · доступна: {button.is_enabled()} · видна: {button.is_visible()} · состояние: {_toggle(button)}"
+            )
+        if not candidates:
+            lines.append(
+                "Названия кнопок панели: " + "; ".join(b.window_text() for b in buttons[:40])
+            )
+        return lines

@@ -10,10 +10,6 @@ def configure_output():
     """Frozen Python ignores PYTHONIOENCODING; pipes still need Unicode output."""
     import sys
 
-    if sys.platform == "win32":
-        # UI Automation's shared COM objects are used by kernel/GUI workers.
-        # Creating them in STA can deadlock when the main thread waits for a worker.
-        sys.coinit_flags = 0  # COINIT_MULTITHREADED, before any Windows imports
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:
@@ -34,6 +30,7 @@ def main(argv=None):
     parser.add_argument("--check-output", help=argparse.SUPPRESS)
     parser.add_argument("--release-model-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-import-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--desktop-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--service", help=argparse.SUPPRESS)
     parser.add_argument("--external-script", help=argparse.SUPPRESS)
@@ -58,6 +55,10 @@ def main(argv=None):
     parser.add_argument("--status", action="store_true", help="Состояние работающего ядра")
     parser.add_argument("--stop-kernel", action="store_true", help="Завершить ядро и его сервисы")
     args = parser.parse_args(argv)
+    if args.desktop_worker:
+        from media_desktop import run_worker
+
+        return run_worker()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import os
 

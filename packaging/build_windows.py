@@ -45,6 +45,12 @@ def run_checked(command, **kwargs):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+            reader.join(timeout=3)
+            detail = f"Command timed out after {timeout}s. Last output: " + "".join(tail)[-2500:]
+            print(
+                "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
+                flush=True,
+            )
             raise
         finally:
             reader.join(timeout=3)

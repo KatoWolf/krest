@@ -36,7 +36,7 @@ jobs:
       - name: Check command catalog
         run: python main.py --check
       - name: Check native libraries and background UI Automation before packaging
-        run: python -c "import subprocess, sys; subprocess.run([sys.executable, 'main.py', '--release-import-check'], check=True, timeout=90)"
+        run: python -c "import runpy, sys; runpy.run_path('packaging/build_windows.py')['run_checked']([sys.executable, 'main.py', '--release-import-check'], timeout=90)"
       - name: Package EXE and check the packaged runtime
         run: python packaging/build_windows.py
       - uses: actions/upload-artifact@v4

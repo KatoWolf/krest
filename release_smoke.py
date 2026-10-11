@@ -104,26 +104,21 @@ def check_dependencies():
         modules += [
             "winsdk.windows.media.control",
             "winsdk.windows.media.ocr",
-            "pywinauto",
             "pycaw.pycaw",
         ]
     for module in modules:
+        print("Проверка библиотеки: " + module, flush=True)
         importlib.import_module(module)
     if os.name == "nt":
         from concurrent.futures import ThreadPoolExecutor
-        from media_rating import uia_apartment
+        from media_desktop import request
 
-        def read_desktop():
-            with uia_apartment():
-                from pywinauto import Desktop
-
-                return len(Desktop(backend="uia").windows())
-
-        # Ratings and diagnostics run on workers. Import success alone doesn't
-        # verify per-thread COM initialization. This only reads window metadata.
+        print("Проверка изолированного UI Automation из фоновых потоков…", flush=True)
         with ThreadPoolExecutor(max_workers=2) as pool:
-            list(pool.map(lambda _: read_desktop(), range(2)))
-        print("UI Automation проверена в фоновых потоках без нажатий.")
+            results = list(pool.map(lambda _: request("probe"), range(2)))
+        if any(not isinstance(r.get("windows"), int) for r in results):
+            raise RuntimeError("Помощник плеера не вернул результат UI Automation")
+        print("UI Automation: оба помощника завершились без нажатий.", flush=True)
     import torch
 
     if torch.tensor([1.0, 2.0]).sum().item() != 3:

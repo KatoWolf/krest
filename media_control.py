@@ -236,28 +236,9 @@ def diagnostics(preferred=""):
         for name, enabled in data["capabilities"].items()
     )
     try:
-        from media_rating import (
-            find_player_window,
-            track_buttons,
-            uia_apartment,
-            _label,
-            _toggle,
-            LABELS,
-        )
+        from media_desktop import request
 
-        with uia_apartment():
-            window = find_player_window(data)
-            buttons = track_buttons(window, data)
-            candidates = [b for b in buttons if _label(b) in set().union(*LABELS.values())]
-            lines.append(f"Кнопок отметки найдено: {len(candidates)}")
-            for button in candidates:
-                lines.append(
-                    f"{button.window_text()} · доступна: {button.is_enabled()} · видна: {button.is_visible()} · состояние: {_toggle(button)}"
-                )
-            if not candidates:
-                lines.append(
-                    "Названия кнопок панели: " + "; ".join(b.window_text() for b in buttons[:40])
-                )
+        lines.extend(request("diagnostics", data)["lines"])
     except Exception as exc:
         lines.append("Лайк: " + str(exc))
     return "\n".join(lines)
