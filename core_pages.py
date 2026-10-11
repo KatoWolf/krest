@@ -602,6 +602,8 @@ class CorePages:
         self.remote_commands = tk.Text(
             card,
             height=7,
+            width=1,
+            wrap="word",
             bg=self.theme["sidebar"],
             fg=self.theme["text"],
             insertbackground=self.theme["text"],
@@ -612,7 +614,7 @@ class CorePages:
         )
         self.remote_commands.pack(fill="x", pady=10)
         self.remote_commands.insert("1.0", "\n".join(cfg["remote_control"]["allowed_commands"]))
-        self._buttons(
+        self.flow_buttons(
             card,
             [
                 ("Базовые команды", self._default_remote_commands),
@@ -651,7 +653,7 @@ class CorePages:
             "Восстановление и диагностика",
             "Копия включает задачи, память, историю и настройки. Токены и код Premium исключаются; автоматизации в копии отключены.",
         )
-        self._buttons(
+        self.flow_buttons(
             card,
             [
                 ("Создать копию", self._backup),

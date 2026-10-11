@@ -37,6 +37,7 @@ def app(tmp_path):
     ui.integration.stop_all()
     indicator_controller.stop()
     logging.getLogger().removeHandler(ui._log_handler)
+    ui.tk.call("tk", "scaling", ui._base_scaling)
     ui.destroy()
 
 
@@ -152,4 +153,104 @@ def test_compact_large_text_navigation_reveals_focused_bottom_section(app):
     assert (
         app.page_bodies["appearance"].winfo_reqwidth() <= app.canvases["appearance"].winfo_width()
     )
+    assert not app.test_errors
+
+
+@pytest.mark.parametrize("scale", [100, 150])
+def test_search_scrolls_to_actual_field_and_keeps_search_focus(app, scale):
+    from tkinter import ttk
+
+    app.tk.call("tk", "scaling", app._base_scaling * scale / 100)
+    app.apply_theme("Emerald Cyber")
+    app.geometry("1020x700")
+    app.switch_page("settings")
+    app.settings_vars["weather_city"].set("Томск")
+    app.update()
+    app.settings_search_entry.focus_force()
+
+    def descendants(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from descendants(child)
+
+    for query, key in (
+        ("микрофон", "microphone"),
+        ("silero", "silero_path"),
+        ("город", "weather_city"),
+    ):
+        app.settings_search.set(query)
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.005)
+        field = next(
+            w
+            for w in descendants(app.page_bodies["settings"])
+            if isinstance(w, ttk.Entry)
+            and str(w.cget("textvariable")) == str(app.settings_vars[key])
+        )
+        canvas = app.canvases["settings"]
+        assert canvas.winfo_rooty() <= field.winfo_rooty()
+        assert (
+            field.winfo_rooty() + field.winfo_height()
+            <= canvas.winfo_rooty() + canvas.winfo_height()
+        )
+        assert app.focus_get() is app.settings_search_entry
+        assert app.settings_search_entry.winfo_viewable()
+        assert app._settings_scroll_job is None
+    assert app.settings_vars["weather_city"].get() == "Томск"
+    for query in ("м", "мик", "микрофон", "silero", "город"):
+        app.settings_search.set(query)
+    old_job = app._settings_scroll_job
+    app.apply_theme("Amethyst Modern")
+    assert old_job not in app.tk.call("after", "info")
+    deadline = time.monotonic() + 0.1
+    while time.monotonic() < deadline:
+        app.update()
+        time.sleep(0.005)
+    assert app._settings_scroll_job is None
+    assert not app.test_errors
+
+
+def test_large_text_headers_tabs_and_voice_security_controls_fit(app, monkeypatch):
+    from tkinter import ttk
+    from themes import THEMES
+
+    app.tk.call("tk", "scaling", app._base_scaling * 1.5)
+    app.geometry("1020x700")
+    monkeypatch.setattr(app.config_mgr, "is_premium", lambda: True)
+
+    def descendants(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from descendants(child)
+
+    for theme in THEMES:
+        app.apply_theme(theme)
+        for code in ("bot_status", "voice", "security"):
+            app.switch_page(code)
+            app.update()
+            title = app.header_title_widget
+            assert title.winfo_width() >= title.winfo_reqwidth(), (theme, code, "title")
+            for button in app.subnav.winfo_children():
+                assert button.winfo_width() >= button.winfo_reqwidth(), (
+                    theme,
+                    code,
+                    button.cget("text"),
+                )
+            canvas = app.canvases[code]
+            left, right = canvas.winfo_rootx(), canvas.winfo_rootx() + canvas.winfo_width()
+            for widget in descendants(app.page_bodies[code]):
+                if isinstance(widget, (ttk.Button, ttk.Checkbutton)) and widget.winfo_ismapped():
+                    assert left <= widget.winfo_rootx(), (theme, code, widget.cget("text"))
+                    assert widget.winfo_rootx() + widget.winfo_width() <= right, (
+                        theme,
+                        code,
+                        widget.cget("text"),
+                    )
+                    assert widget.winfo_width() >= widget.winfo_reqwidth(), (
+                        theme,
+                        code,
+                        widget.cget("text"),
+                    )
     assert not app.test_errors

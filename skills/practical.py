@@ -16,7 +16,7 @@ def number(value):
         result = Decimal(value)
     except InvalidOperation as exc:
         raise ValueError("Не удалось прочитать число.") from exc
-    if abs(result) > Decimal("1000000000000"):
+    if result.copy_abs() > Decimal("1000000000000"):
         raise ValueError("Допустимы числа по модулю до 1 000 000 000 000.")
     return result
 
@@ -65,8 +65,10 @@ def discount(percent, amount):
         rate, total = number(percent), number(amount)
         if not 0 <= rate <= 100 or total < 0:
             return error("Скидка должна быть от 0 до 100%, цена — неотрицательной.")
-        saving = (total * rate / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return f"После скидки: {formatted(total - saving, True)}. Экономия: {formatted(saving, True)}."
+        with localcontext() as context:
+            context.prec = 80
+            saving = (total * rate / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            return f"После скидки: {formatted(total - saving, True)}. Экономия: {formatted(saving, True)}."
     except ValueError as exc:
         return error(str(exc))
 
@@ -83,15 +85,17 @@ def split_bill(amount, people, tip="0"):
             return error("Сумма должна быть неотрицательной, число людей — целым от 1 до 10000.")
         if not 0 <= rate <= 100:
             return error("Чаевые должны быть от 0 до 100%.")
-        total = (total * (1 + rate / 100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        cents = int(total * 100)
-        base, extra = divmod(cents, int(count))
-        if not extra:
-            shares = f"По {formatted(Decimal(base) / 100, True)} с человека."
-        else:
-            shares = (f"{extra} чел. по {formatted(Decimal(base + 1) / 100, True)}, "
-                      f"{int(count) - extra} чел. по {formatted(Decimal(base) / 100, True)}.")
-        return f"Всего с чаевыми: {formatted(total, True)}. {shares}"
+        with localcontext() as context:
+            context.prec = 80
+            total = (total * (1 + rate / 100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            cents = int(total * 100)
+            base, extra = divmod(cents, int(count))
+            if not extra:
+                shares = f"По {formatted(Decimal(base) / 100, True)} с человека."
+            else:
+                shares = (f"{extra} чел. по {formatted(Decimal(base + 1) / 100, True)}, "
+                          f"{int(count) - extra} чел. по {formatted(Decimal(base) / 100, True)}.")
+            return f"Всего с чаевыми: {formatted(total, True)}. {shares}"
     except ValueError as exc:
         return error(str(exc))
 

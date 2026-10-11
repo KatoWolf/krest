@@ -1,0 +1,29 @@
+import sys,tempfile,json,logging
+sys.path.insert(0,'/workspace/krest')
+from pathlib import Path
+from unittest.mock import patch
+from welcome_gui import ControlCenterApp,indicator_controller,THEMES
+import time
+import tkinter as tk
+from tkinter import ttk
+from PIL import ImageGrab
+r={}
+with tempfile.TemporaryDirectory() as d,patch('app_runtime.AssistantRuntime.start'),patch('welcome_gui.ControlCenterApp.wf_refresh'),patch('welcome_gui.ControlCenterApp._refresh_music'):
+ a=ControlCenterApp(config_path=Path(d)/'config.json');a.onboarding.place_forget();a.geometry('1020x700+0+0');a.update(); errors=[];a.report_callback_exception=lambda *e:errors.append(str(e))
+ with patch.object(a.config_mgr,'is_premium',return_value=True):
+  a.switch_page('settings');a.settings_search_entry.focus_force();a.settings_search.set('микрофон');a.update();time.sleep(.05);a.update()
+  def walk(w):
+   for c in w.winfo_children():yield c;yield from walk(c)
+  target=next(w for w in walk(a.page_bodies['settings']) if isinstance(w,ttk.Entry) and str(w.cget('textvariable'))==str(a.settings_vars['microphone']))
+  a.update()
+  r['microphone']={'target_y':target.winfo_rooty(),'canvas_bottom':a.canvases['settings'].winfo_rooty()+a.canvases['settings'].winfo_height(),'yview':a.canvases['settings'].yview(),'focused':str(a.focus_get())==str(target)}
+  a.settings_search.set('discord');a.update();r['discord_search_results']=a.settings_results.cget('text')
+  a.settings_search.set('');a.owner_var.set('DO NOT SAVE');a.preview_situation.set('Поддержка'); before=a.config_mgr.snapshot()
+  a.personality_var.set(list(__import__('product_pages').PERSONALITIES.values())[-1]);a.update();r['preview_saved']=a.config_mgr.snapshot()!=before
+  for theme in THEMES:
+   a.tk.call('tk','scaling',a._base_scaling*1.5);a.apply_theme(theme);a.update();
+   for page in ('settings','appearance','bot_status','voice','security'):
+    a.switch_page(page);a.update();time.sleep(.05);a.update();r[theme+' '+page]={'req':a.page_bodies[page].winfo_reqwidth(),'width':a.canvases[page].winfo_width(),'title_fit':a.header_title_widget.winfo_width()>=a.header_title_widget.winfo_reqwidth(),'tabs_fit':all(w.winfo_width()>=w.winfo_reqwidth() for w in a.subnav.winfo_children())}
+  r['draft_owner']=a.owner_var.get();r['errors']=errors
+ a.runtime.close();a.integration.stop_all();indicator_controller.stop();logging.getLogger().removeHandler(a._log_handler);a.destroy()
+Path('/tmp/krest_ui_recheck.json').write_text(json.dumps(r,ensure_ascii=False,indent=2));print(json.dumps(r,ensure_ascii=False,indent=2))

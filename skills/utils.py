@@ -548,12 +548,72 @@ def russian_words_to_number_str(text: str) -> str:
     return " ".join(result_tokens)
 
 
+def _spoken_integer(words):
+    """Parse descending Russian number groups, without arithmetic tokenization."""
+    if not words:
+        raise ValueError("После десятичного разделителя нужно число")
+    total, group, previous_scale, ceiling = 0, 0, float("inf"), 1000
+    group_words = 0
+    for word in words:
+        if word in MULTIPLIER_WORDS:
+            scale = MULTIPLIER_WORDS[word]
+            if scale >= previous_scale or (group_words and group == 0):
+                raise ValueError("Разряды числительного должны идти по убыванию")
+            total += (group if group_words else 1) * scale
+            previous_scale, group, group_words, ceiling = scale, 0, 0, 1000
+            continue
+        value = ALL_NUMBER_WORDS.get(word)
+        if value is None or value >= ceiling or (value == 0 and group_words):
+            raise ValueError("Не удалось однозначно разобрать русское числительное")
+        group += value
+        group_words += 1
+        ceiling = 100 if value >= 100 else 10 if value >= 20 else 0
+    return total + group
+
+
+def _spoken_decimal(words):
+    separators = [index for index, word in enumerate(words) if word in DECIMAL_WORDS]
+    if not separators:
+        return str(_spoken_integer(words))
+    if len(separators) != 1:
+        raise ValueError("У числа должен быть один десятичный разделитель")
+    index = separators[0]
+    whole, fraction = words[:index], words[index + 1:]
+    integer = _spoken_integer(whole)
+    if not fraction or any(word in MULTIPLIER_WORDS for word in fraction):
+        raise ValueError("После десятичного разделителя назовите цифры или число до 999")
+    if all(word in ALL_NUMBER_WORDS and ALL_NUMBER_WORDS[word] < 10 for word in fraction):
+        digits = "".join(str(ALL_NUMBER_WORDS[word]) for word in fraction)
+    else:
+        # Preserve spoken leading zeros, then parse a conventional group such
+        # as 'двадцать пять' as 25, never as the concatenation 205.
+        leading_zeros = 0
+        while fraction and ALL_NUMBER_WORDS.get(fraction[0]) == 0:
+            leading_zeros += 1
+            fraction = fraction[1:]
+        digits = "0" * leading_zeros + str(_spoken_integer(fraction))
+    return f"{integer}.{digits}"
+
+
 def parse_number_from_text(text_val: str) -> float:
-    """Преобразует текстовое или словесное числовое значение в float."""
+    """Read a complete number; the math tokenizer must never discard its input."""
     clean = text_val.strip().lower()
     if not clean or len(clean) > 128:
         raise ValueError("Введите число цифрами или русскими словами")
-    converted = russian_words_to_number_str(clean)
+    # Handle digit notation directly: a single decimal separator, or correctly
+    # grouped thousands separated by spaces (also nonbreaking spaces).
+    clean = re.sub(r"^(минус|плюс)\s+", lambda m: "-" if m[1] == "минус" else "+", clean)
+    digit_pattern = r"[+-]?\s*(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f][0-9]{3})+)(?:[.,][0-9]+)?"
+    if re.fullmatch(digit_pattern, clean):
+        converted = re.sub(r"\s", "", clean).replace(",", ".")
+    else:
+        # Validate BEFORE the permissive mathematical tokenizer. Otherwise it
+        # would turn '1:2' into 3 and '12$' into 12.
+        spoken = re.fullmatch(r"(?P<sign>[+-]?)\s*(?P<words>[а-яё]+(?:\s+[а-яё]+)*)", clean)
+        allowed = set(ALL_NUMBER_WORDS) | set(MULTIPLIER_WORDS) | DECIMAL_WORDS
+        if not spoken or any(word not in allowed for word in spoken["words"].split()):
+            raise ValueError("Некорректное число: используйте 1234,5, 1 234,5 или русские числительные")
+        converted = spoken["sign"] + _spoken_decimal(spoken["words"].split())
     if not re.fullmatch(r"[+-]?\s*\d+(?:\.\d+)?", converted):
         raise ValueError("Не удалось распознать число для перевода единиц")
     value = float(converted.replace(" ", ""))

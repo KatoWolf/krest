@@ -57,6 +57,19 @@ def test_bill_rounding_preserves_total():
     assert "По 0,00" in practical.split_bill("0", "2")
 
 
+def test_money_rounding_uses_exact_arithmetic_before_quantizing():
+    below_half_cent = "0.499999999999999999999999999999"
+    assert "Экономия: 0,00" in practical.discount(below_half_cent, "1")
+    assert "Всего с чаевыми: 1,00" in practical.split_bill("1", "1", below_half_cent)
+    assert "Экономия: 0,01" in practical.discount("0.5", "1")
+    assert "Всего с чаевыми: 1,01" in practical.split_bill("1", "1", "0.5")
+
+
+def test_number_limit_is_checked_without_context_rounding():
+    with pytest.raises(ValueError):
+        practical.number("1000000000000.000000000000000001")
+
+
 def test_large_percentage_stays_finite_and_exact():
     assert "10000000000000000000000" in practical.percentage("1000000000000", "1000000000000")
     assert practical.formatted(Decimal("-0.00000001")) == "-0,00000001"
@@ -100,8 +113,14 @@ def test_compiled_manifest_includes_practical():
     ("переведи -10 цельсия в фаренгейт", "14 по Фаренгейту"),
     ("переведи 1,5 километра в метры", "1500"),
     ("переведи 1,5км в м", "1500"),
+    ("переведи 1 000 метров в км", "1 км"),
+    ("переведи -1 234,5 метров в км", "-1.2345 км"),
+    ("переведи 1\u00a0000 метров в км", "1 км"),
+    ("переведи 1\u202f000 метров в км", "1 км"),
     ("переведи двадцать пять километров в метры", "25000"),
     ("переведи минус пять цельсия в фаренгейт", "23 по Фаренгейту"),
+    ("переведи один запятая двадцать пять километра в метры", "1250"),
+    ("переведи ноль точка ноль пять километра в метры", "50"),
     ("посчитай 1,5 плюс 2,5", "4"),
 ])
 def test_signed_fractional_and_spoken_unit_conversion(manager, tmp_path, command, fragment):
@@ -115,3 +134,32 @@ def test_conversion_never_silently_defaults_to_one(value):
     from skills.utils import parse_number_from_text
     with pytest.raises(ValueError):
         parse_number_from_text(value)
+
+
+@pytest.mark.parametrize("amount", [
+    "1:2", "1_000", "12$", "1 00", "12 34", "1000 000", "1 0000",
+    "1,000,000", "1.2.3", "1/2", "2#", "2+3", "два:три", "один$",
+    "ноль точка", "один запятая", "точка пять", "тысяча тысяч",
+    "два три", "двадцать тридцать", "один запятая два точка три",
+    "ноль тысяч", "один запятая тысяча", "тысяча миллион",
+])
+def test_invalid_conversion_is_rejected_end_to_end(manager, tmp_path, amount):
+    result = manager.execute(f"переведи {amount} метров в км", state=AssistantState(tmp_path / "state.json"))
+    assert result.handled
+    assert result.skill_id == "skills.utils.convert_currency_or_units"
+    assert not result.success
+    assert "— это" not in result.text
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("1 000", 1000), ("12 345 678,9", 12345678.9), ("- 1 000,25", -1000.25),
+    ("минус 12,5", -12.5), ("двадцать пять", 25), ("минус двадцать пять", -25),
+    ("два запятая пять", 2.5), ("+1.25", 1.25),
+    ("один запятая двадцать пять", 1.25), ("ноль точка ноль пять", 0.05),
+    ("минус два запятая ноль двадцать пять", -2.025),
+    ("два миллиона триста сорок пять тысяч шестьсот семьдесят восемь", 2345678),
+    ("тысяча пять", 1005), ("ноль точка один два пять", 0.125),
+])
+def test_full_number_parser(text, expected):
+    from skills.utils import parse_number_from_text
+    assert parse_number_from_text(text) == expected

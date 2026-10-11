@@ -287,6 +287,32 @@ class ControlCenterApp(
     def advanced(self, parent, title="Дополнительные настройки"):
         return Disclosure(parent, title, self.theme).body
 
+    @staticmethod
+    def _flow_grid(frame, maximum=4):
+        buttons = frame.winfo_children()
+        if not buttons:
+            return
+        width = max(button.winfo_reqwidth() + 8 for button in buttons)
+        columns = max(1, min(maximum, len(buttons), frame.winfo_width() // max(1, width)))
+        for column in range(maximum):
+            frame.columnconfigure(
+                column,
+                weight=1 if column < columns else 0,
+                uniform="flow" if column < columns else "",
+            )
+        for index, button in enumerate(buttons):
+            button.grid_configure(
+                row=index // columns, column=index % columns, sticky="ew", padx=(0, 6), pady=(0, 6)
+            )
+
+    def flow_buttons(self, parent, commands):
+        row = tk.Frame(parent, bg=parent.cget("bg"))
+        row.pack(fill="x", pady=8)
+        for index, (title, callback) in enumerate(commands):
+            ttk.Button(row, text=title, command=callback).grid(row=0, column=index)
+        row.bind("<Configure>", lambda e: self._flow_grid(row))
+        return row
+
     def field(self, parent, title, variable, secret=False):
         row = tk.Frame(parent, bg=parent.cget("bg"))
         row.pack(fill="x", pady=5)
@@ -371,12 +397,14 @@ class ControlCenterApp(
         header.pack(fill="x", pady=(0, 10))
         title_row = tk.Frame(header, bg=self.theme["bg"])
         title_row.pack(fill="x")
+        toolbar = tk.Frame(title_row, bg=self.theme["bg"])
+        toolbar.pack(side="right")
         ttk.Button(
-            title_row,
+            toolbar,
             text="Поиск  Ctrl+K",
             command=lambda: __import__("quick_panel").show_panel(self),
         ).pack(side="right", anchor="n")
-        ttk.Button(title_row, text="Разбор команды", command=self._open_command_parser).pack(
+        ttk.Button(toolbar, text="Разбор команды", command=self._open_command_parser).pack(
             side="right", anchor="n", padx=6
         )
         self.page_title = tk.StringVar()
@@ -384,11 +412,28 @@ class ControlCenterApp(
         title = self.label(title_row, textvariable=self.page_title)
         title.configure(font=(UI_FONT, 24, "bold"))
         title.pack(anchor="w")
+        self.header_title_widget, self.header_toolbar = title, toolbar
+
+        def layout_header(event=None):
+            narrow = (
+                title.winfo_reqwidth() + toolbar.winfo_reqwidth() + 24 > title_row.winfo_width()
+            )
+            if getattr(title_row, "_narrow", None) != narrow:
+                title_row._narrow = narrow
+                toolbar.pack_forget()
+                toolbar.pack(
+                    side="bottom" if narrow else "right", anchor="e", pady=(8, 0) if narrow else 0
+                )
+
+        title_row.bind("<Configure>", layout_header)
+        title.bind("<Configure>", layout_header)
+        self._layout_header = layout_header
         self.label(header, textvariable=self.page_subtitle, muted=True, wraplength=900).pack(
             anchor="w", pady=(6, 0)
         )
         self.subnav = tk.Frame(body, bg=self.theme["bg"])
         self.subnav.pack(fill="x", pady=(0, 10))
+        self.subnav.bind("<Configure>", lambda e: self._flow_grid(self.subnav, maximum=4))
         footer = tk.Frame(body, bg=self.theme["bg"])
         footer.pack(side="bottom", fill="x", pady=(12, 0))
         self.save_button = ttk.Button(
@@ -573,8 +618,8 @@ class ControlCenterApp(
                     style="Selected.Tab.TButton" if key == code else "Tab.TButton",
                     command=lambda k=key: self.switch_page(k),
                 ).grid(row=i // 4, column=i % 4, sticky="ew", padx=(0, 5), pady=(0, 4))
-            for i in range(4):
-                self.subnav.columnconfigure(i, weight=1, uniform="tabs")
+            self._flow_grid(self.subnav, maximum=4)
+        self._layout_header()
         self.current_page = code
         self._animate_transition()
         if code in self.BOT_PAGES and not self.config_mgr.is_premium():
@@ -1489,18 +1534,21 @@ class ControlCenterApp(
 
     def build_settings_tab(self):
         page = self.page_bodies["settings"]
-        search = tk.Frame(page, bg=self.theme["bg"])
-        search.pack(fill="x", pady=(0, 16))
+        host = self.pages["settings"]
+        search = tk.Frame(host, bg=self.theme["bg"])
+        search.pack(fill="x", pady=(0, 12), before=host.winfo_children()[0])
         self.label(search, "Найти настройку · Ctrl+F", muted=True).pack(anchor="w", pady=(0, 6))
+        row = tk.Frame(search, bg=self.theme["bg"])
+        row.pack(fill="x")
         self.settings_search = tk.StringVar()
-        self.settings_search_entry = ttk.Entry(search, textvariable=self.settings_search)
+        self.settings_search_entry = ttk.Entry(row, textvariable=self.settings_search)
         self.settings_search_entry.pack(side="left", fill="x", expand=True)
-        ttk.Button(search, text="Сбросить", command=lambda: self.settings_search.set("")).pack(
+        ttk.Button(row, text="Сбросить", command=lambda: self.settings_search.set("")).pack(
             side="right", padx=(8, 0)
         )
         self.settings_search_entry.bind("<Escape>", lambda e: self.settings_search.set(""))
-        self.settings_results = self.label(page, "", muted=True)
-        self.settings_results.pack(anchor="w", pady=(0, 8))
+        self.settings_results = self.label(search, "", muted=True)
+        self.settings_results.pack(side="bottom", anchor="w", pady=(8, 0))
         card = self.card(self.page_bodies["settings"], "Профиль и оформление")
         self.entry_owner_name = self.field(card, "Ваше имя", self.owner_var)
         self.label(card, "Стиль общения", muted=True).pack(anchor="w")
@@ -1648,7 +1696,7 @@ class ControlCenterApp(
             ("voice", "Голос · распознавание, паузы, порог и произношение"),
             ("appearance", "Оформление · палитра и темы"),
             ("security", "Доступность · масштаб и уменьшение движения"),
-            ("bot_status", "Подключения · состояние ботов"),
+            ("bot_status", "Telegram, Discord, Steam · состояние ботов"),
         ):
             ttk.Button(card, text=title, command=lambda k=code: self.switch_page(k)).pack(
                 fill="x", pady=3
@@ -1671,6 +1719,15 @@ class ControlCenterApp(
         return " ".join(parts).casefold().replace("ё", "е")
 
     def _filter_settings(self, *_):
+        pending = getattr(self, "_settings_scroll_job", None)
+        if pending:
+            self.after_cancel(pending)
+        self._settings_scroll_job = None
+        for label, colour in getattr(self, "_settings_highlights", []):
+            if label.winfo_exists():
+                label.configure(fg=colour)
+        self._settings_highlights = []
+        matches = []
         terms = self.settings_search.get().casefold().replace("ё", "е").split()
         found = 0
         for card, text in self._settings_search_index:
@@ -1680,6 +1737,7 @@ class ControlCenterApp(
                 found += 1
                 if terms:
                     self._reveal_setting_details(card, terms)
+                    matches.extend(self._matching_settings(card, terms))
         self.settings_results.configure(
             text=(
                 f"Разделов найдено: {found}"
@@ -1689,7 +1747,49 @@ class ControlCenterApp(
                 else ""
             )
         )
-        self.canvases["settings"].yview_moveto(0)
+        if matches:
+            matches.sort(key=lambda item: item[0])
+            target = matches[0][1]
+            if isinstance(target, tk.Label):
+                self._settings_highlights.append((target, target.cget("fg")))
+                target.configure(fg=self.theme["accent"])
+            # One cancellable callback after geometry settles; never move keyboard focus.
+            self._settings_scroll_job = self.after(30, lambda: self._scroll_to_setting(target))
+        else:
+            self.canvases["settings"].yview_moveto(0)
+
+    def _matching_settings(self, widget, terms):
+        if isinstance(widget, (tk.Label, ttk.Label, ttk.Button, ttk.Checkbutton)):
+            text = str(widget.cget("text")).casefold().replace("ё", "е")
+            if all(term in text for term in terms):
+                field = any(
+                    isinstance(child, (ttk.Entry, ttk.Combobox))
+                    for child in widget.master.winfo_children()
+                )
+                yield (
+                    0
+                    if field and isinstance(widget, tk.Label)
+                    else 1
+                    if isinstance(widget, tk.Label)
+                    else 2,
+                    widget,
+                )
+        for child in widget.winfo_children():
+            yield from self._matching_settings(child, terms)
+
+    def _scroll_to_setting(self, target):
+        self._settings_scroll_job = None
+        if not target.winfo_exists():
+            return
+        canvas = self.canvases["settings"]
+        body = self.page_bodies["settings"]
+        self.update_idletasks()
+        if any(
+            isinstance(child, (ttk.Entry, ttk.Combobox)) for child in target.master.winfo_children()
+        ):
+            target = target.master
+        y = target.winfo_rooty() - body.winfo_rooty()
+        canvas.yview_moveto(max(0, y - 18) / max(1, body.winfo_height()))
 
     def _reveal_setting_details(self, widget, terms):
         if isinstance(widget, Disclosure) and all(
@@ -1830,6 +1930,10 @@ class ControlCenterApp(
         built_pages = set(self._built_pages)
         core_pending = self.core_draft_values() if self.CORE_PAGES & built_pages else None
         self.wf_preserve()
+        pending = getattr(self, "_settings_scroll_job", None)
+        if pending:
+            self.after_cancel(pending)
+            self._settings_scroll_job = None
         if self._transition_job:
             self.after_cancel(self._transition_job)
             self._transition_job = None
@@ -2233,9 +2337,11 @@ class ControlCenterApp(
 
         def close():
             try:
-                if not hasattr(self.runtime, "client"):
-                    self.integration.stop_all()
-                self.runtime.close()
+                try:
+                    if not hasattr(self.runtime, "client"):
+                        self.integration.stop_all()
+                finally:
+                    self.runtime.close()
             except (OSError, ValueError, RuntimeError):
                 logger.warning("Ядро уже завершилось или связь недоступна")
             finally:

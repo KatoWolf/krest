@@ -84,17 +84,14 @@ QUOTES = [
 
 
 def load_app_config() -> dict:
-    """Безопасное чтение конфигурации с защитой от мгновенной обнуляющей перезаписи."""
-    if os.path.exists(CONFIG_FILE) and os.path.getsize(CONFIG_FILE) > 0:
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
-                value = json.load(f)
-                return value if isinstance(value, dict) else {}
-        except (json.JSONDecodeError, OSError):
-            pass
-        except Exception as e:
-            logger.error(f"Ошибка чтения config.json: {type(e).__name__}")
-    return {}
+    """Use the same vault hydration and validation as the desktop application."""
+    from configuration import ConfigManager
+
+    try:
+        return ConfigManager(CONFIG_FILE).snapshot()
+    except (OSError, ValueError) as exc:
+        logger.error("Ошибка чтения настроек Telegram: %s", type(exc).__name__)
+        return {}
 
 
 def get_owner_name() -> str:

@@ -2,83 +2,83 @@
   "environment": "Linux / Xvfb; Python 3.13.5; offline profile; actual Tk widgets",
   "pages": {
     "actions": {
-      "first_ms": 7.81,
+      "first_ms": 6.36,
       "repeat_ms": [
-        7.46,
-        3.34,
-        3.51,
-        3.34,
-        3.58
+        5.13,
+        2.75,
+        2.67,
+        2.73,
+        3.22
       ]
     },
     "settings": {
-      "first_ms": 33.94,
+      "first_ms": 25.95,
       "repeat_ms": [
-        3.23,
-        3.17,
-        3.06,
-        3.53,
-        3.63
+        2.64,
+        2.89,
+        3.55,
+        4.28,
+        3.37
       ]
     },
     "appearance": {
-      "first_ms": 23.53,
+      "first_ms": 21.24,
       "repeat_ms": [
-        3.23,
-        3.91,
-        3.71,
-        3.43,
-        3.55
+        2.92,
+        2.89,
+        2.62,
+        2.57,
+        3.28
       ]
     },
     "bot_status": {
-      "first_ms": 24.8,
+      "first_ms": 26.71,
       "repeat_ms": [
-        6.94,
-        8.23,
-        8.17,
-        8.4,
-        9.07
+        6.43,
+        11.49,
+        8.98,
+        9.32,
+        8.66
       ]
     },
     "voice": {
-      "first_ms": 86.22,
+      "first_ms": 26.96,
       "repeat_ms": [
-        5.09,
-        3.46,
-        3.55,
-        3.22,
-        3.51
+        4.75,
+        3.59,
+        2.98,
+        2.87,
+        2.58
       ]
     },
     "skills": {
-      "first_ms": 116.48,
+      "first_ms": 57.56,
       "repeat_ms": [
-        4.33,
-        4.4,
-        3.88,
-        4.41,
-        4.01
+        3.37,
+        3.06,
+        3.28,
+        3.11,
+        3.89
       ]
     },
     "wf_home": {
-      "first_ms": 27.1,
+      "first_ms": 28.93,
       "repeat_ms": [
-        9.37,
-        8.22,
-        8.95,
-        9.22,
-        9.07
+        5.16,
+        6.45,
+        6.04,
+        6.22,
+        6.56
       ]
     }
   },
-  "startup_ms": 219.83,
+  "startup_ms": 194.25,
   "stress": {
     "transitions": 20,
     "theme_changes": 4,
     "remaining_transition_job": null,
     "remaining_canvas_items": 0,
-    "max_update_ms": 7.25
+    "max_update_ms": 0.33
   },
   "large_scale": {
     "scale_percent": 150,
@@ -98,8 +98,21 @@
         "requested_width": 644,
         "viewport_width": 687,
         "save_button_visible": true
+      },
+      "voice": {
+        "requested_width": 687,
+        "viewport_width": 687,
+        "save_button_visible": true
+      },
+      "security": {
+        "requested_width": 667,
+        "viewport_width": 687,
+        "save_button_visible": true
       }
     }
+  },
+  "settings_search": {
+    "pending_scroll_job": null
   },
   "callback_errors": []
 }

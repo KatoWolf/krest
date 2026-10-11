@@ -405,8 +405,10 @@ class Kernel:
         time.sleep(0.75)
         self.tray.stop()
         self.windows.stop()
-        self.integrations.stop_all()
-        self.runtime.close()
+        try:
+            self.integrations.stop_all()
+        finally:
+            self.runtime.close()
 
 
 def serve(config_path, safe=False):

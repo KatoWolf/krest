@@ -92,8 +92,24 @@ def main():
                 app.switch_page("bot_status")
                 original_details = app.integration.details
                 for state, detail in (
-                    ("error", {"running": False, "health": "error", "error": "Тестовый пример: авторизация отклонена. Проверьте настройки доступа."}),
-                    ("connecting", {"running": True, "health": "starting", "operation": "restart", "pid": 123, "uptime": 0}),
+                    (
+                        "error",
+                        {
+                            "running": False,
+                            "health": "error",
+                            "error": "Тестовый пример: авторизация отклонена. Проверьте настройки доступа.",
+                        },
+                    ),
+                    (
+                        "connecting",
+                        {
+                            "running": True,
+                            "health": "starting",
+                            "operation": "restart",
+                            "pid": 123,
+                            "uptime": 0,
+                        },
+                    ),
                 ):
                     with patch.object(
                         app.integration,
@@ -119,7 +135,7 @@ def main():
                 app.geometry("1020x700+0+0")
                 app.switch_page("actions")
                 capture("compact-home")
-                for code in ("settings", "bot_status", "appearance"):
+                for code in ("settings", "bot_status", "appearance", "voice", "security"):
                     app.switch_page(code)
                     capture("compact-" + code)
                 for index in range(20):
@@ -145,7 +161,7 @@ def main():
                 app.tk.call("tk", "scaling", app._base_scaling * 1.5)
                 app.apply_theme("Amethyst Modern")
                 metrics["large_scale"] = {"scale_percent": 150, "window": "1020x700", "pages": {}}
-                for code in ("settings", "bot_status", "appearance"):
+                for code in ("settings", "bot_status", "appearance", "voice", "security"):
                     app.switch_page(code)
                     app.update()
                     capture("large-text-" + code)
@@ -154,6 +170,15 @@ def main():
                         "viewport_width": app.canvases[code].winfo_width(),
                         "save_button_visible": bool(app.save_button.winfo_viewable()),
                     }
+                app.switch_page("settings")
+                for query, name in (
+                    ("микрофон", "microphone"),
+                    ("silero", "silero"),
+                    ("город", "city"),
+                ):
+                    app.settings_search.set(query)
+                    capture("large-text-search-" + name)
+                metrics["settings_search"] = {"pending_scroll_job": app._settings_scroll_job}
             metrics["callback_errors"] = errors
             (args.output / "performance.json").write_text(
                 json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

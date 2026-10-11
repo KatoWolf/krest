@@ -1,0 +1,116 @@
+{
+  "scope": "Linux/Xvfb; offline Tk; no microphone, models, games or accounts",
+  "python": "3.13.5",
+  "tk": "8.6.16",
+  "cycles": 120,
+  "page_transitions": 720,
+  "theme_rebuilds": 120,
+  "duration_seconds": 32.83,
+  "transition_ms_median": 9.85,
+  "transition_ms_p95": 23.89,
+  "transition_ms_max": 463.93,
+  "samples": [
+    {
+      "rss_mb": 52.43,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.5,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.64,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.78,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.92,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.07,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.24,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.38,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.51,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.64,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.77,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.95,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.07,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    }
+  ],
+  "final": {
+    "rss_mb": 55.07,
+    "pending_after": 1,
+    "owner_traces": 2,
+    "personality_traces": 3,
+    "motion_widgets": 0
+  },
+  "remaining_transition_items": 0,
+  "remaining_transition_job": null,
+  "remaining_motion_jobs": 0,
+  "callback_errors": []
+}

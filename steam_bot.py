@@ -37,6 +37,36 @@ def deliver_notification(text, cfg):
         )
 
 
+class SteamHealthReporter:
+    """Keep a failed remote check visible until a successful remote refresh."""
+
+    def __init__(self):
+        self.error = ""
+
+    def fail(self, message):
+        self.error = message
+        emit("error", message, capabilities=["refresh"])
+
+    def report(self, data, cfg, remote):
+        from integrations import redact
+
+        errors = data.get("errors", {})
+        if errors:
+            reasons = "; ".join(f"{key}: {value}" for key, value in errors.items())
+            self.fail("Steam: " + redact(reasons, cfg)[:1800])
+            return
+        if self.error and not remote:
+            # Local manifests do not demonstrate restored API connectivity.
+            emit("error", self.error, capabilities=["refresh"])
+            return
+        summary = f"Игр: {len(data.get('games', []))}"
+        if remote:
+            self.error = ""
+            emit("ready", summary, capabilities=["refresh"])
+        else:
+            emit("status", summary)
+
+
 def main():
     refresh = threading.Event()
 
@@ -50,7 +80,8 @@ def main():
         data_dir() / "steam_state.json",
         lambda text: deliver_notification(text, ConfigManager().snapshot()),
     )
-    emit("ready", "Монитор Steam готов", capabilities=["refresh"])
+    health = SteamHealthReporter()
+    emit("status", "Монитор Steam выполняет первую проверку")
     next_remote = 0
     last_manual = -60
     while True:
@@ -63,9 +94,9 @@ def main():
         refresh.clear()
         try:
             data = monitor.refresh(cfg, remote=remote)
-            emit("status", f"Игр: {len(data['games'])} · Ошибок: {len(data['errors'])}")
+            health.report(data, cfg, remote)
         except Exception as exc:
-            emit("error", f"Проверка Steam не завершена: {type(exc).__name__}")
+            health.fail(f"Проверка Steam не завершена: {type(exc).__name__}")
         if remote:
             next_remote = now + int(
                 cfg.get("steam", {}).get("poll_minutes", 15)

@@ -28,32 +28,39 @@ class VoicePages:
             "Голос Крест",
             "Распознавание и озвучка работают локально. F8 — слушать команду без обращения; Escape — прервать озвучку. Клавиши работают в окне Крест.",
         )
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x", pady=8)
-        for title, fn in (
-            ("Включить", self._start_voice),
-            ("Выключить", self.runtime.stop_voice),
-            ("Слушать команду · F8", self._arm_voice),
-            ("Прервать ответ", voice.stop_speaking),
-        ):
-            ttk.Button(row, text=title, command=fn).pack(side="left", padx=(0, 5))
+        self.flow_buttons(
+            card,
+            (
+                ("Включить", self._start_voice),
+                ("Выключить", self.runtime.stop_voice),
+                ("Слушать команду · F8", self._arm_voice),
+                ("Прервать ответ", voice.stop_speaking),
+            ),
+        )
         ttk.Checkbutton(
             card,
             text="Включать голос при запуске Крест",
             variable=self.settings_vars["voice_auto_start"],
         ).pack(anchor="w", pady=4)
         ttk.Checkbutton(
-            card, text="Автоматически скачивать отсутствующие модели с официальных серверов",
+            card,
+            text="Загружать отсутствующие голосовые модели",
             variable=self.settings_vars["voice_auto_models"],
         ).pack(anchor="w", pady=4)
-        self.label(card, textvariable=self.voice_var, muted=True).pack(anchor="w")
+        self.label(
+            card,
+            "Модели загружаются с официальных серверов; нужен интернет.",
+            muted=True,
+            wraplength=680,
+        ).pack(anchor="w", pady=(0, 8))
+        self.label(card, textvariable=self.voice_var, muted=True, wraplength=680).pack(anchor="w")
         self.mic_meter = ttk.Progressbar(card, maximum=100)
         self.mic_meter.pack(fill="x", pady=8)
         self.mic_level_label = self.label(card, "Микрофон выключен", muted=True, wraplength=680)
         self.mic_level_label.pack(anchor="w")
         ttk.Checkbutton(
             card,
-            text="Автоматически подстраивать чувствительность к фону",
+            text="Автонастройка чувствительности к фону",
             variable=self.settings_vars["speech_auto_threshold"],
         ).pack(anchor="w", pady=4)
         tuning = self.advanced(card, "Точная настройка распознавания")
@@ -116,18 +123,18 @@ class VoicePages:
         ).pack(anchor="w", pady=4)
         ttk.Button(
             card,
-            text="Настроить порог автоматически · 5 секунд тишины",
+            text="Автонастройка порога · 5 секунд тишины",
             style="Accent.TButton",
             command=lambda: self._microphone_action("auto"),
         ).pack(anchor="w", pady=8)
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x", pady=8)
-        for title, fn in (
-            ("Записать 5 секунд", lambda: self._microphone_action("record")),
-            ("Измерить фон", lambda: self._microphone_action("calibrate")),
-            ("Прослушать запись", lambda: self._microphone_action("play")),
-        ):
-            ttk.Button(row, text=title, command=fn).pack(side="left", padx=(0, 5))
+        self.flow_buttons(
+            card,
+            (
+                ("Записать 5 секунд", lambda: self._microphone_action("record")),
+                ("Измерить фон", lambda: self._microphone_action("calibrate")),
+                ("Прослушать запись", lambda: self._microphone_action("play")),
+            ),
+        )
         ttk.Button(card, text="Применить измеренный порог", command=self._apply_mic_threshold).pack(
             anchor="w", pady=6
         )
@@ -143,16 +150,13 @@ class VoicePages:
         self.pron_tree.heading("word", text="Слово")
         self.pron_tree.heading("reading", text="Произношение")
         self.pron_tree.pack(fill="x", pady=8)
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x")
-        ttk.Button(row, text="Добавить / обновить", command=self._add_pronunciation).pack(
-            side="left"
-        )
-        ttk.Button(row, text="Удалить", command=self._remove_pronunciation).pack(
-            side="left", padx=5
-        )
-        ttk.Button(row, text="Произнести слово", command=self._preview_pronunciation).pack(
-            side="left"
+        self.flow_buttons(
+            card,
+            (
+                ("Добавить / обновить", self._add_pronunciation),
+                ("Удалить", self._remove_pronunciation),
+                ("Произнести слово", self._preview_pronunciation),
+            ),
         )
         self._refresh_pronunciations()
 

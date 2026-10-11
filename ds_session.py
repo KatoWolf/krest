@@ -128,6 +128,12 @@ class KrestDS(discord.Client):
 
         emit("error", "Связь с Discord потеряна; клиент пытается переподключиться")
 
+    async def on_resumed(self):
+        from bridge_sdk import emit
+
+        # RESUME restores an existing session and must not duplicate background jobs.
+        emit("ready", "Соединение Discord восстановлено")
+
     async def memory_cleaner(self):
         """Очистка ОЗУ от мусора Discord-клиента раз в 15 минут"""
         while not self.is_closed():

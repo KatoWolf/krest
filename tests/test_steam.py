@@ -289,6 +289,15 @@ def test_steam_service_process_builds_local_catalog_without_credentials(
         assert any(
             g["appid"] == "730" and g["installed"] for g in json.loads(path.read_text())["games"]
         )
+        # Writing the cache precedes the protocol event; wait for the reader thread
+        # to receive the handshake before trying to issue a bridge command.
+        while time.monotonic() < deadline:
+            if "refresh" in manager.details("steam_bot.py")["bridge"].get("capabilities", []):
+                break
+            time.sleep(0.02)
+        assert "refresh" in manager.details("steam_bot.py")["bridge"].get("capabilities", []), (
+            manager.log_tail("steam_bot.py")
+        )
         manager.send("steam_bot.py", "refresh")
     finally:
         manager.stop_all()

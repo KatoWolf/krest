@@ -110,12 +110,13 @@ class IntegrationManager:
         """Read-only UI snapshot; never wait for a process being stopped."""
         proc = self.processes.get(filename)
         running = proc is not None and proc.poll() is None
+        restart_due = self.restart_due.get(filename)
         return {
             "running": running,
             "installed": self.exists(filename),
             "operation": self._operations.get(filename),
-            "restart_in": max(0, int(self.restart_due[filename] - time.monotonic()) + 1)
-            if filename in self.restart_due
+            "restart_in": max(0, int(restart_due - time.monotonic()) + 1)
+            if restart_due is not None
             else None,
             "pid": proc.pid if running else None,
             "uptime": max(0, int(time.time() - self.started_at.get(filename, time.time())))
@@ -201,10 +202,15 @@ class IntegrationManager:
                 else [],
             }
         elif kind == "status":
-            self.errors.pop(filename, None)
             self.bridge.setdefault(filename, {})["text"] = message
         elif kind == "error":
             self.errors[filename] = message
+            self.bridge[filename]["ready"] = False
+            caps = value.get("capabilities")
+            if isinstance(caps, list):
+                self.bridge[filename]["capabilities"] = [
+                    c for c in caps if c == "refresh" and c in permissions
+                ]
         elif (
             kind == "notification"
             and "notifications" in permissions
@@ -400,21 +406,30 @@ class IntegrationManager:
         with self._lock:
             self._generation[filename] = self._generation.get(filename, 0) + 1
             self.restart_due.pop(filename, None)
-            proc = self.processes.pop(filename, None)
+            proc = self.processes.get(filename)
             if proc is None:
                 return "Не запущен"
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=3)
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                if proc.poll() is None:
+                    self.errors[filename] = "Не удалось остановить процесс; повторный запуск заблокирован"
+                    raise RuntimeError(self.errors[filename]) from exc
+            self.processes.pop(filename, None)
             reader = self._readers.pop(filename, None)
             if reader:
                 reader.join(timeout=1)
             if proc.stdin:
-                proc.stdin.close()
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
             return "Остановлен"
 
     def restart(self, filename):
@@ -426,14 +441,22 @@ class IntegrationManager:
         from licensing import status
 
         if not status(self.app.config_mgr.snapshot())["premium"]:
-            for filename in list(self.processes):
+            self._stop_owned()
+
+    def _stop_owned(self):
+        failures = []
+        for filename in list(self.processes):
+            try:
                 self.stop(filename)
+            except RuntimeError:
+                failures.append(filename)
+        if failures:
+            raise RuntimeError("Не удалось остановить сервисы: " + ", ".join(failures))
 
     def stop_all(self):
         with self._lock:
             self._closed = True
-            for filename in list(self.processes):
-                self.stop(filename)
+            self._stop_owned()
 
     def log_tail(self, filename, limit=6000):
         path = self.log_dir / (filename + ".log")

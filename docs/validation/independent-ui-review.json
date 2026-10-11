@@ -1,0 +1,285 @@
+{
+  "microphone": {
+    "target_y": 358,
+    "canvas_bottom": 622,
+    "yview": [
+      0.4072992700729927,
+      0.6094890510948905
+    ],
+    "focused": false
+  },
+  "discord_search_results": "Разделов найдено: 1",
+  "preview_saved": false,
+  "Amethyst Modern settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Amethyst Modern appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Amethyst Modern bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Amethyst Modern voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Amethyst Modern security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Emerald Cyber settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Emerald Cyber appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Emerald Cyber bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Emerald Cyber voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Emerald Cyber security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Midnight OLED settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Midnight OLED appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Midnight OLED bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Midnight OLED voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Midnight OLED security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Arctic Light settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Arctic Light appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Arctic Light bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Arctic Light voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Arctic Light security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Ocean Blue settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Ocean Blue appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Ocean Blue bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Ocean Blue voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Ocean Blue security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Copper Night settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Copper Night appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Copper Night bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Copper Night voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Copper Night security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Rose Quartz settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Rose Quartz appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Rose Quartz bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Rose Quartz voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Rose Quartz security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Obsidian Crimson settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Obsidian Crimson appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Obsidian Crimson bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Obsidian Crimson voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Obsidian Crimson security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Void Pearl settings": {
+    "req": 653,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Void Pearl appearance": {
+    "req": 644,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Void Pearl bot_status": {
+    "req": 676,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Void Pearl voice": {
+    "req": 687,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "Void Pearl security": {
+    "req": 667,
+    "width": 687,
+    "title_fit": true,
+    "tabs_fit": true
+  },
+  "draft_owner": "DO NOT SAVE",
+  "errors": []
+}

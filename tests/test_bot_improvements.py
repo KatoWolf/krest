@@ -306,3 +306,71 @@ def test_telegram_reservation_race_length_and_safe_errors(monkeypatch, caplog):
 
     asyncio.run(exercise())
     assert "token-super-secret" not in caplog.text
+
+
+def test_telegram_config_hydrates_vault_reference(tmp_path, monkeypatch):
+    import secret_store
+    import tg_bridge
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"api_keys": {"telegram_api_hash": secret_store.PREFIX + "test-entry"}})
+    )
+    monkeypatch.setattr(tg_bridge, "CONFIG_FILE", str(path))
+    calls = []
+
+    def read_secret(target):
+        calls.append(target)
+        return "real-hash"
+
+    monkeypatch.setattr(secret_store, "read_secret", read_secret)
+    assert tg_bridge.load_app_config()["api_keys"]["telegram_api_hash"] == "real-hash"
+    assert calls == ["test-entry"]
+
+
+def test_discord_resume_restores_ready_without_spawning_tasks(monkeypatch):
+    import bridge_sdk
+    import discord
+    import ds_session
+
+    events = []
+    monkeypatch.setattr(bridge_sdk, "emit", lambda *args, **kwargs: events.append((args, kwargs)))
+
+    async def exercise():
+        client = ds_session.KrestDS(intents=discord.Intents.none())
+        marker = object()
+        client._background_tasks.add(marker)
+        client._background_started = True
+        await client.on_disconnect()
+        await client.on_resumed()
+        await client.on_resumed()
+        assert client._background_tasks == {marker}
+        assert client._background_started
+
+    asyncio.run(exercise())
+    assert [event[0][0] for event in events] == ["error", "ready", "ready"]
+
+
+def test_steam_health_remote_failure_local_refresh_and_recovery(monkeypatch):
+    import steam_bot
+
+    events = []
+    monkeypatch.setattr(
+        steam_bot, "emit", lambda kind, text, **kwargs: events.append((kind, text, kwargs))
+    )
+    health = steam_bot.SteamHealthReporter()
+    cfg = {"api_keys": {"steam_api_key": "secret-value"}}
+    good = {"games": [{"appid": "730"}], "errors": {}}
+    health.report({"games": [], "errors": {"offers": "403 secret-value"}}, cfg, remote=True)
+    assert events[-1][0] == "error" and "403" in events[-1][1]
+    assert events[-1][2]["capabilities"] == ["refresh"]
+    assert "secret-value" not in events[-1][1]
+    health.report(good, cfg, remote=False)
+    assert events[-1][0] == "error"
+    health.report(good, cfg, remote=True)
+    assert events[-1][0] == "ready" and events[-1][2]["capabilities"] == ["refresh"]
+    health.report(good, cfg, remote=False)
+    assert events[-1][0] == "status"
+    health.fail("Проверка Steam не завершена: OSError")
+    health.report(good, cfg, remote=False)
+    assert events[-1][0] == "error"
