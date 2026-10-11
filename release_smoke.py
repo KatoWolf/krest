@@ -30,6 +30,14 @@ def check_kernel(config_path):
         result = client.call("command.parse", text="Крест, сделай скриншот")
         if result["skill"] != "skills.windows.take_screenshot":
             raise RuntimeError("Команды не загрузились в отдельном ядре")
+        for phrase, expected in (
+            ("Крест, можешь пожалуйста сделать скриншот", "skills.windows.take_screenshot"),
+            ("креси с ключи трек", "skills.media.next_track"),
+            ("Крест, выключи микрофон в Дискорде", "skills.discord_voice.mute_microphone"),
+        ):
+            parsed = client.call("command.parse", text=phrase)
+            if parsed["skill"] != expected:
+                raise RuntimeError("Разбор команды в отдельном ядре: " + phrase)
         key = uuid.uuid4().hex
         client.call("submit", text="который час", request_key=key)
         deadline = time.monotonic() + 15

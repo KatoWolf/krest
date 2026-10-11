@@ -50,6 +50,9 @@ class AssistantRuntime:
         self.automation = EventAutomation(self)
         self._execute_lock = threading.RLock()
         self.manager = SkillManager(settings, plugin_dir=Path(data_dir) / "imported_skills")
+        from command_understanding import VoiceUnderstanding
+
+        self.understanding = VoiceUnderstanding(self.manager, self.memory)
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
@@ -292,6 +295,18 @@ class AssistantRuntime:
             result = CommandResult(True, False, "Ассистент спит. Скажите «крест проснись».")
             self.events.put(("result", result))
             return result
+        learning = None
+        if source == "voice":
+            interpreted = self.understanding.resolve(command, wake)
+            if interpreted.prompt:
+                result = CommandResult(True, False, interpreted.prompt)
+                observed("Уточнение: " + interpreted.prompt)
+                self._active_until = time.monotonic() + 25
+                voice.speak(interpreted.prompt)
+                self.last_result = result
+                self.events.put(("result", result))
+                return result
+            command, learning = interpreted.command, interpreted.learning
         from skills import gid
 
         if gid.dota_state.waiting_for_user_answer:
@@ -308,6 +323,8 @@ class AssistantRuntime:
             else self.manager.execute(command, self.state)
         )
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
+        if result.success and learning:
+            self.understanding.remember(learning)
         self.last_result = result
         if result.text and not result.responded:
             if source == "voice" and not result.handled:

@@ -2,6 +2,7 @@
 
 from speech_tools import normalize_command
 from speech_recognition import decode_voice_command
+from command_understanding import exact_command, suggestions
 
 
 def parse_command(manager, text, settings):
@@ -9,7 +10,9 @@ def parse_command(manager, text, settings):
     if len(text) > 2000:
         raise ValueError("Максимум 2000 символов")
     wake, command = decode_voice_command(manager, text, settings)
-    normalized = normalize_command(command, settings.get("command_aliases", {}))
+    normalized = exact_command(manager, command) or normalize_command(
+        command, settings.get("command_aliases", {})
+    )
     match = manager.match(normalized)
     entry, params = match if match else (None, {})
     return {
@@ -20,7 +23,9 @@ def parse_command(manager, text, settings):
         "description": entry.description if entry else "",
         "availability": manager.availability(entry) if entry else "Команда не найдена",
         "parameters": params,
-        "suggestions": manager.suggest(normalized) if not entry else [],
+        "suggestions": [row["command"] for row in suggestions(manager, normalized)]
+        if not entry
+        else [],
     }
 
 

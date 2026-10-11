@@ -240,8 +240,11 @@ class SkillManager:
 
     def execute(self, text, state=None):
         from speech_tools import normalize_command
+        from command_understanding import exact_command
 
-        text = normalize_command(text, self.settings().get("command_aliases", {}))
+        text = exact_command(self, text) or normalize_command(
+            text, self.settings().get("command_aliases", {})
+        )
         match = self.match(text)
         if match is None:
             suggestions = self.suggest(text)

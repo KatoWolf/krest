@@ -93,40 +93,49 @@ def uia_apartment():
     if os.name != "nt":
         yield
         return
-    # Only called on the main thread of a short-lived desktop helper. Its COM
-    # objects never cross threads and cannot block the voice/GUI process.
-    try:
-        import comtypes
-        import comtypes.client
-        import comtypes.gen
+    # This context only runs in the isolated helper's main thread.
+    import sys
+    import types
+    from importlib.machinery import ModuleSpec
+    from tempfile import TemporaryDirectory
 
-        # Concurrent helpers must not write/import a half-generated shared
-        # UIAutomationClient.py. comtypes supports generating wrappers in memory.
-        # Its memory loader still indexes gen.__path__[0]; a freshly created
-        # namespace package can have an empty path (including in a frozen app).
-        if not list(comtypes.gen.__path__):
-            comtypes.gen.__path__ = [comtypes.client.gen_dir]
-        comtypes.client.gen_dir = None
-        import pywinauto  # noqa: F401
-    except ImportError as exc:
-        raise MediaError(
-            "Откройте Музыка → Подключить управление музыкой: нужны компоненты кнопок плеера."
-        ) from exc
-    owned = False
-    try:
-        comtypes.CoInitializeEx()
-        owned = True
-    except OSError as exc:
-        if (getattr(exc, "winerror", 0) or 0) & 0xFFFFFFFF != 0x80010106:
-            raise
-        raise MediaError(
-            "Доступ к кнопкам плеера занят другим режимом Windows. Полностью перезапустите Крест, включая ядро в трее."
-        ) from exc
-    try:
-        yield
-    finally:
-        if owned:
-            comtypes.CoUninitialize()
+    with TemporaryDirectory(prefix="krest-uia-", ignore_cleanup_errors=True) as cache:
+        try:
+            import comtypes
+
+            # Register a writable, process-private namespace BEFORE importing
+            # client: its own cache creation uses a racy exists()/makedirs() pair.
+            if "comtypes.client" not in sys.modules:
+                generated = types.ModuleType("comtypes.gen")
+                generated.__path__ = [cache]
+                generated.__package__ = "comtypes.gen"
+                generated.__spec__ = ModuleSpec("comtypes.gen", loader=None, is_package=True)
+                sys.modules["comtypes.gen"] = generated
+                comtypes.gen = generated
+            import comtypes.client
+
+            comtypes.gen.__path__ = [cache]
+            comtypes.client.gen_dir = None
+            import pywinauto  # noqa: F401
+        except ImportError as exc:
+            raise MediaError(
+                "Откройте Музыка → Подключить управление музыкой: нужны компоненты доступа к кнопкам."
+            ) from exc
+        owned = False
+        try:
+            comtypes.CoInitializeEx()
+            owned = True
+        except OSError as exc:
+            if (getattr(exc, "winerror", 0) or 0) & 0xFFFFFFFF != 0x80010106:
+                raise
+            raise MediaError(
+                "Доступ к кнопкам занят другим режимом Windows. Полностью перезапустите Крест, включая ядро в трее."
+            ) from exc
+        try:
+            yield
+        finally:
+            if owned:
+                comtypes.CoUninitialize()
 
 
 def _label(button):

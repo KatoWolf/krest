@@ -42,6 +42,7 @@ class Endpoint:
 
 
 def split_wake(text, wake_word):
+    text = re.sub(r"^\s*(?:эй|слушай)[, ]+", "", text, flags=re.I)
     match = re.match(r"\s*([\w]+)[\s,.:!?-]*(.*)", text, re.S)
     if match and match[1].casefold().replace("ё", "е") == wake_word.casefold().replace("ё", "е"):
         return True, match[2].strip()

@@ -269,7 +269,7 @@ class CorePages:
                 iid=str(i),
                 values=(
                     row["key"],
-                    row["value"],
+                    self._memory_value(row),
                     {
                         "note": "Заметка",
                         "preference": "Предпочтение",
@@ -282,16 +282,39 @@ class CorePages:
 
         self.briefing_text.set(briefing(self.runtime.state))
 
+    @staticmethod
+    def _memory_value(row):
+        if row["category"] == "correction":
+            try:
+                return json.loads(row["value"])["command"]
+            except (ValueError, TypeError, KeyError):
+                pass
+        return row["value"]
+
     def _select_memory(self):
         selected = self.memory_tree.selection()
         if selected:
             row = self._memory_rows[int(selected[0])]
             self.memory_key.set(row["key"])
-            self.memory_value.set(row["value"])
+            self.memory_value.set(self._memory_value(row))
 
     def _save_memory(self):
         try:
-            self.runtime.memory.remember(self.memory_key.get(), self.memory_value.get(), "note")
+            key, value, category = self.memory_key.get(), self.memory_value.get(), "note"
+            selected = self.memory_tree.selection()
+            row = self._memory_rows[int(selected[0])] if selected else None
+            if (
+                row
+                and row["category"] == "correction"
+                and row["key"] == key
+                and key.startswith("команда: ")
+            ):
+                match = self.runtime.manager.match(value)
+                if not match:
+                    raise ValueError("Для исправления нужна существующая команда из каталога")
+                value = json.dumps({"command": value, "skill": match[0].id}, ensure_ascii=False)
+                category = "correction"
+            self.runtime.memory.remember(key, value, category)
             self._refresh_memory()
         except (ValueError, OSError) as exc:
             self._report_error(str(exc))
