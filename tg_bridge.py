@@ -194,7 +194,8 @@ async def auto_reply(client, message):
         from configuration import ConfigManager
         from pyrogram.enums import ParseMode
 
-        reply_cfg = ConfigManager().snapshot()["auto_replies"]
+        current_cfg = ConfigManager().snapshot()
+        reply_cfg = current_cfg["auto_replies"]
         if not reply_cfg["enabled"]:
             return
         final_text = render_reply(
@@ -204,6 +205,7 @@ async def auto_reply(client, message):
             bool(message.voice or message.video_note),
             is_urgent,
             is_night,
+            personality=current_cfg["profile"]["personality"],
         )
         sent_msg = await message.reply(final_text, parse_mode=ParseMode.DISABLED)
         if reply_cfg["delete_seconds"]:

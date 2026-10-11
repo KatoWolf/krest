@@ -25,6 +25,7 @@ from integrations import IntegrationManager
 from themes import THEMES, PREMIUM_THEMES
 from guikrest import indicator_controller
 from command_book import CommandBook
+from command_catalog import CommandCatalogPages
 from service_pages import ServicePages
 from voice_page import VoicePages
 from product_pages import ProductPages, PERSONALITIES
@@ -41,6 +42,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 class ControlCenterApp(
     WarframePages,
+    CommandCatalogPages,
     AppearancePages,
     SkillImportPages,
     CorePages,
@@ -56,7 +58,7 @@ class ControlCenterApp(
         ("actions", "Обзор"),
         ("voice", "Голос"),
         ("music", "Музыка"),
-        ("skills", "Навыки"),
+        ("skills", "Список команд"),
         ("favorites", "Мои команды"),
         ("timers", "Таймеры"),
         ("scenarios", "Сценарии"),
@@ -79,7 +81,8 @@ class ControlCenterApp(
     ]
 
     NAV_GROUPS = [
-        ("actions", "Главная", ("actions", "voice", "favorites", "skills")),
+        ("actions", "Главная", ("actions", "voice")),
+        ("skills", "Команды", ("skills", "favorites")),
         ("music", "Музыка", ("music",)),
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
         ("inbox", "Уведомления", ("inbox", "logs")),
@@ -536,6 +539,7 @@ class ControlCenterApp(
         self.page_title.set(names[code])
         subtitles = {
             "actions": "Всё нужное для вашего дня — в одном месте.",
+            "skills": "Что Крест умеет сейчас: фразы, примеры и ваши команды.",
             "music": "Ваш плеер, текущий трек и управление воспроизведением.",
             "timers": "Освободите голову. Крест напомнит и выполнит привычные действия.",
             "inbox": "События, которые важно не пропустить.",
@@ -596,12 +600,18 @@ class ControlCenterApp(
     def _preview_personality(self):
         from types import SimpleNamespace
         from personality import reply
+        from action_replies import action_reply
 
         cfg = self._draft()
         state = SimpleNamespace(owner_name=cfg["owner_name"], config_getter=lambda: cfg)
         messagebox.showinfo(
             "Характер Крест",
-            reply("greeting", state) + "\n\n" + reply("support", state),
+            reply("greeting", state)
+            + "\n\n"
+            + reply("support", state)
+            + "\n\nНа «переключи трек»: «"
+            + action_reply("skills.media.next_track", "Включила следующий трек.", state)
+            + "»",
             parent=self,
         )
 
@@ -678,6 +688,9 @@ class ControlCenterApp(
         )
         ttk.Button(controls, text="Проверить звук", command=lambda: self.switch_page("voice")).pack(
             side="left"
+        )
+        ttk.Button(controls, text="Все команды", command=lambda: self.switch_page("skills")).pack(
+            side="left", padx=8
         )
         self.label(card, textvariable=self.heard_var, muted=True, wraplength=640).pack(
             anchor="w", pady=(4, 6)
@@ -796,7 +809,7 @@ class ControlCenterApp(
         card = self.card(
             self.page_bodies["favorites"],
             "Свои фразы",
-            "Крест подставит заданную команду при точном совпадении вашей фразы — голосом или текстом, без ИИ. Изменения применятся после сохранения.",
+            "Пишите фразу с обращением «Крест» или без него. Например: «Крест дальше» → «Крест переключи трек». Кнопка «Добавить / обновить» сразу сохраняет фразу.",
         )
         self.alias_name = tk.StringVar()
         self.alias_target = tk.StringVar()
@@ -820,22 +833,41 @@ class ControlCenterApp(
             self.alias_tree.insert("", "end", iid=key, values=(key, value))
 
     def _add_alias(self):
-        key, value = self.alias_name.get().casefold().strip(), self.alias_target.get().strip()
+        from speech_tools import alias_body, normalize_command
+
+        wake = self.config_mgr.snapshot()["app_settings"]["wake_word"]
+        key = alias_body(self.alias_name.get(), wake).casefold().strip(" .!?,")
+        value = alias_body(self.alias_target.get(), wake)
         if not key or len(key) > 100 or not value or len(value) > 2000:
             self._report_error("Введите фразу до 100 и команду до 2000 символов")
             return
         if key not in self.aliases and len(self.aliases) >= 100:
             self._report_error("Можно сохранить до 100 своих фраз")
             return
-        self.aliases[key] = value
-        self._mark_dirty()
-        self._refresh_aliases()
+        value = normalize_command(value)
+        if not self.runtime.manager.match(value):
+            self._report_error("Команда Крест не найдена. Выберите пример в «Списке команд».")
+            return
+        self._save_aliases({**self.aliases, key: value})
 
     def _remove_alias(self):
+        aliases = dict(self.aliases)
         for key in self.alias_tree.selection():
-            self.aliases.pop(key, None)
-        self._mark_dirty()
+            aliases.pop(key, None)
+        self._save_aliases(aliases)
+
+    def _save_aliases(self, aliases):
+        cfg = self.config_mgr.snapshot()
+        cfg["command_aliases"] = aliases
+        try:
+            self.config_mgr.save_config(cfg)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+            return
+        self.aliases = self.config_mgr.snapshot()["command_aliases"]
         self._refresh_aliases()
+        self.refresh_skills()
+        self.status_var.set("Свои фразы сохранены и уже работают.")
 
     def build_favorites_tab(self):
         self.command_lists = {}
@@ -902,124 +934,6 @@ class ControlCenterApp(
         except OSError as exc:
             self._report_error(str(exc))
         self._refresh_command_lists()
-
-    def build_skills_tab(self):
-        self.build_skill_imports()
-        card = self.card(
-            self.page_bodies["skills"],
-            "Каталог навыков",
-            "Выберите команду, чтобы увидеть примеры. Двойной щелчок перенесёт её в поле ввода.",
-        )
-        self.skill_search = tk.StringVar()
-        search = ttk.Entry(card, textvariable=self.skill_search)
-        search.pack(fill="x", pady=(0, 10))
-        self.skill_search.trace_add("write", lambda *args: self.refresh_skills())
-        self.skill_tree = ttk.Treeview(
-            card,
-            columns=("category", "description", "status"),
-            show="headings",
-            height=13,
-        )
-        for name, title, width in [
-            ("category", "Раздел", 110),
-            ("description", "Навык", 380),
-            ("status", "Состояние", 150),
-        ]:
-            self.skill_tree.heading(name, text=title)
-            self.skill_tree.column(name, width=width, minwidth=80)
-        self.skill_tree.pack(fill="x")
-        self.skill_tree.bind("<<TreeviewSelect>>", self._skill_selected)
-        self.skill_tree.bind("<Double-1>", lambda e: self._use_skill())
-        self.skill_details = self.label(card, "", wraplength=700, muted=True)
-        self.skill_details.pack(anchor="w", pady=10)
-        ttk.Button(card, text="Подставить команду", command=self._use_skill).pack(anchor="w")
-        card = self.card(
-            self.page_bodies["skills"],
-            "Модули",
-            "Переключатели применяются после сохранения настроек.",
-        )
-        for name, var in self.skill_vars.items():
-            names = {
-                "basic": "Время и дата",
-                "discord_voice": "Микрофон Discord",
-                "interactive": "Интерактивные команды",
-                "meta": "Управление ассистентом",
-                "media": "Медиа и громкость",
-                "utils": "Вычисления и конвертер",
-                "timers_alarms": "Таймеры и будильники",
-                "system_mon": "Состояние компьютера",
-                "webo": "Интернет и Steam",
-                "windows": "Управление Windows",
-                "gid": "Гид Dota 2",
-                "steam": "Steam: библиотека и инвентарь",
-            }
-            ttk.Checkbutton(card, text=names.get(name, name), variable=var).pack(anchor="w", pady=3)
-        ttk.Button(
-            card,
-            text="Перезагрузить навыки",
-            command=lambda: self.runtime.submit("перезагрузи навыки"),
-        ).pack(anchor="w", pady=10)
-
-    def refresh_skills(self):
-        if "skills" not in self._built_pages:
-            return
-        selected = self.skill_tree.selection()
-        self.skill_tree.delete(*self.skill_tree.get_children())
-        query = self.skill_search.get().casefold()
-        self.catalog = {item.id: item for item in self.runtime.manager.catalog()}
-        categories = {
-            "Clipboard": "Вычисления",
-            "Media": "Медиа",
-            "Meta": "Ассистент",
-            "Timers": "Таймеры",
-            "System": "Система",
-            "Steam & Gaming": "Steam",
-            "Web & Info": "Интернет",
-            "Interactive": "Интерактив",
-        }
-        for item in sorted(self.catalog.values(), key=lambda e: (e.category, e.description)):
-            if (
-                query
-                and query
-                not in (
-                    item.description + " " + item.category + " " + " ".join(item.keywords)
-                ).casefold()
-            ):
-                continue
-            self.skill_tree.insert(
-                "",
-                "end",
-                iid=item.id,
-                values=(
-                    categories.get(item.category, item.category),
-                    item.description,
-                    self.runtime.manager.availability(item),
-                ),
-            )
-        if selected and self.skill_tree.exists(selected[0]):
-            self.skill_tree.selection_set(selected[0])
-
-    def _skill_selected(self, event=None):
-        selected = self.skill_tree.selection()
-        if selected:
-            entry = self.catalog[selected[0]]
-            examples = ", ".join(entry.examples or entry.keywords[:5]) or "; ".join(
-                p.pattern for p in entry.patterns[:2]
-            )
-            self.skill_details.configure(text=entry.description + "\nКоманды: " + examples)
-
-    def _use_skill(self):
-        selected = self.skill_tree.selection()
-        if not selected:
-            return
-        item = self.catalog[selected[0]]
-        examples = item.examples or item.keywords
-        if not examples:
-            self.status_var.set("Введите команду по шаблону из описания навыка.")
-            return
-        self._focus_command()
-        self.command_entry.delete(0, "end")
-        self.command_entry.insert(0, examples[0])
 
     def build_timers_tab(self):
         card = self.card(

@@ -15,7 +15,6 @@ from performance import PerformancePolicy
 from scenarios import ScenarioRunner
 from notification_center import NotificationCenter, should_speak
 from command_context import CommandContext
-from speech_recognition import TRANSPORT_SKILLS
 from platform_store import JobStore, MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -329,13 +328,6 @@ class AssistantRuntime:
         if result.text and not result.responded:
             if source == "voice" and not result.handled:
                 self._voice_retry(wake)
-            elif (
-                source == "voice"
-                and result.success
-                and self.performance.active == "game"
-                and result.skill_id in TRANSPORT_SKILLS
-            ):
-                voice.speak("Готово.")
             else:
                 voice.speak(result.text)
         if result.skill_id.startswith("skills.media."):

@@ -49,12 +49,32 @@ def split_wake(text, wake_word):
     return False, text
 
 
-def normalize_command(text, aliases=None):
+def alias_body(text, wake_word="крест"):
+    value = re.sub(r"\s+", " ", str(text)).strip()
+    addressed, command = split_wake(value, wake_word)
+    return command if addressed and command else value
+
+
+def canonical_aliases(aliases, wake_word="крест"):
+    # Prefer the explicitly unprefixed entry if a legacy file contains both.
+    result = {}
+    for phrase, target in sorted(
+        aliases.items(), key=lambda row: not split_wake(row[0], wake_word)[0]
+    ):
+        key = alias_body(phrase, wake_word).casefold().strip(" .!?,")
+        result[key] = alias_body(target, wake_word)
+    return result
+
+
+def normalize_command(text, aliases=None, wake_word="крест"):
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^пожалуйста[, ]+|[, ]+пожалуйста[.!?]*$", "", text, flags=re.I)
     key = text.casefold().strip(" .!?,")
-    if key in (aliases or {}):
-        return normalize_command(aliases[key])
+    if aliases:
+        configured = canonical_aliases(aliases, wake_word)
+        alias = alias_body(text, wake_word).casefold().strip(" .!?,")
+        if alias in configured:
+            return normalize_command(configured[alias])
     fixed = {
         "сделай музыку потише": "тише",
         "сделай потише": "тише",

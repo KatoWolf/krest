@@ -280,6 +280,10 @@ class SkillManager:
                 detail = format_result(value)
                 if detail not in output:
                     output = (output + "\n" + detail).strip()
+            if success and not messages and output:
+                from action_replies import action_reply
+
+                output = action_reply(entry.id, output, state)
             return CommandResult(
                 True, success, output or "Команда выполнена.", entry.id, bool(messages)
             )

@@ -99,7 +99,12 @@ class AccountSession:
             return
         status = self.local_status()
         text = render_reply(
-            cfg["owner_name"], status, cfg["auto_replies"], bool(data.get("attachments")), important
+            cfg["owner_name"],
+            status,
+            cfg["auto_replies"],
+            bool(data.get("attachments")),
+            important,
+            personality=cfg["profile"]["personality"],
         )
         try:
             sent = await self.request(

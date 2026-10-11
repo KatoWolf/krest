@@ -29,7 +29,7 @@ def parse_command(manager, text, settings):
     }
 
 
-def open_parser(app):
+def open_parser(app, initial_phrase=None):
     import tkinter as tk
     from tkinter import ttk
     from ui_design import style_titlebar
@@ -38,6 +38,8 @@ def open_parser(app):
 
     existing = getattr(app, "_parser_window", None)
     if existing is not None and existing.winfo_exists():
+        if initial_phrase is not None:
+            existing.phrase.set(initial_phrase)
         existing.lift()
         return
     win = tk.Toplevel(app)
@@ -56,9 +58,13 @@ def open_parser(app):
         muted=True,
         wraplength=600,
     ).pack(anchor="w", pady=12)
-    phrase = tk.StringVar(value="Крест, сделай скриншот")
+    phrase = tk.StringVar(value=initial_phrase or "Крест, сделай скриншот")
+    win.phrase = phrase
     entry = ttk.Entry(box, textvariable=phrase)
     entry.pack(fill="x")
+    from entry_clipboard import attach
+
+    attach(entry, app.theme)
     result = tk.StringVar(value="Введите фразу и нажмите «Разобрать».")
 
     def done(data):

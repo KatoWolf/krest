@@ -215,6 +215,7 @@ class KrestDS(discord.Client):
             cfg["auto_replies"],
             bool(message.attachments),
             important,
+            personality=cfg["profile"]["personality"],
         )
         try:
             sent = await message.channel.send(text, allowed_mentions=discord.AllowedMentions.none())

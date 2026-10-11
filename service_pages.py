@@ -313,50 +313,119 @@ class ServicePages(DiscordBotPages):
 
     def build_reply_controls(self, page):
         from auto_replies import STYLES, render_reply
+        from personality import PERSONALITIES
+        from reply_bank import VARIANT_NAMES
 
         card = self.card(
             page,
-            "Голос Крест в переписке",
-            "Общий стиль Telegram User, Discord Bot и личной Discord-сессии. Изменения применяются после сохранения.",
+            "Автоответы · характер Крест",
+            "7 личностей, по 6 вариантов. Общие настройки Telegram User, Discord Bot и личной Discord-сессии. Предпросмотр никому ничего не отправляет.",
         )
         ttk.Checkbutton(
             card, text="Отвечать на входящие личные сообщения", variable=self.reply_vars["enabled"]
         ).pack(anchor="w", pady=4)
-        choice = tk.StringVar(self, value=STYLES[self.reply_vars["style"].get()])
-        combo = ttk.Combobox(
-            card, textvariable=choice, values=list(STYLES.values()), state="readonly"
-        )
-        combo.pack(fill="x", pady=5)
-        combo.bind(
-            "<<ComboboxSelected>>",
-            lambda _: self.reply_vars["style"].set(
-                next(key for key, label in STYLES.items() if label == choice.get())
-            ),
-        )
+        ttk.Checkbutton(
+            card,
+            text="Отвечать только на срочные сообщения",
+            variable=self.reply_vars["urgent_only"],
+        ).pack(anchor="w", pady=4)
+        traces = []
 
-        def sync_style(*_):
-            choice.set(STYLES[self.reply_vars["style"].get()])
+        def selection(key, labels, caption):
+            self.label(card, caption, muted=True).pack(anchor="w", pady=(8, 2))
+            choice = tk.StringVar(self, value=labels[self.reply_vars[key].get()])
+            combo = ttk.Combobox(
+                card, textvariable=choice, values=list(labels.values()), state="readonly"
+            )
+            combo.pack(fill="x", pady=4)
+            combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _: self.reply_vars[key].set(
+                    next(k for k, v in labels.items() if v == choice.get())
+                ),
+            )
 
-        trace = self.reply_vars["style"].trace_add("write", sync_style)
-        combo.bind("<Destroy>", lambda _: self.reply_vars["style"].trace_remove("write", trace))
+            def sync(*_):
+                choice.set(labels[self.reply_vars[key].get()])
+
+            traces.append((self.reply_vars[key], self.reply_vars[key].trace_add("write", sync)))
+
+        selection("personality", {"profile": "Как в профиле Крест", **PERSONALITIES}, "Личность")
+        selection("style", STYLES, "Оформление сообщения")
+        options = tk.Frame(card, bg=self.theme["card"])
+        options.pack(fill="x", pady=8)
+        for index, caption in enumerate(VARIANT_NAMES):
+            ttk.Radiobutton(
+                options,
+                text=f"{index + 1}. {caption}",
+                value=str(index),
+                variable=self.reply_vars["variant"],
+            ).grid(row=index // 2, column=index % 2, sticky="w", padx=(0, 20), pady=4)
+        case = tk.StringVar(self, value="Обычное сообщение")
+        ttk.Combobox(
+            card,
+            textvariable=case,
+            state="readonly",
+            values=[
+                "Обычное сообщение",
+                "Срочное сообщение",
+                "Голосовое / вложение",
+                "Ночью",
+                "Во время игры",
+            ],
+        ).pack(fill="x", pady=6)
         preview = self.label(card, "", wraplength=650)
         preview.pack(anchor="w", pady=12)
+        pause_label = self.label(card, "", muted=True, wraplength=650)
+        pause_label.pack(anchor="w")
 
         def show(*_):
-            if preview.winfo_exists():
-                preview.configure(
-                    text=render_reply(
-                        self.owner_var.get(),
-                        {"is_playing": True},
-                        {
-                            "style": self.reply_vars["style"].get(),
-                            "share_activity": self.reply_vars["share_activity"].get(),
-                        },
-                    )
+            if not preview.winfo_exists():
+                return
+            personality = next(
+                (k for k, v in PERSONALITIES.items() if v == self.personality_var.get()), "friendly"
+            )
+            preview.configure(
+                text=render_reply(
+                    self.owner_var.get(),
+                    {"is_playing": case.get() == "Во время игры"},
+                    {key: var.get() for key, var in self.reply_vars.items()},
+                    attachment=case.get() == "Голосовое / вложение",
+                    important=case.get() == "Срочное сообщение",
+                    night=case.get() == "Ночью",
+                    personality=personality,
                 )
+            )
+            import time
 
+            until = int(self.reply_vars["paused_until"].get() or 0)
+            pause_label.configure(
+                text=("Автоответы на паузе до " + self._date(until))
+                if until > time.time()
+                else "Временная пауза не действует."
+            )
+
+        for variable in [*self.reply_vars.values(), self.owner_var, self.personality_var, case]:
+            traces.append((variable, variable.trace_add("write", show)))
+
+        def cleanup(event):
+            if event.widget is preview:
+                for variable, trace in traces:
+                    variable.trace_remove("write", trace)
+
+        preview.bind("<Destroy>", cleanup)
         show()
-        ttk.Button(card, text="Предпросмотр ответа", command=show).pack(anchor="w")
+        row = tk.Frame(card, bg=self.theme["card"])
+        row.pack(fill="x", pady=8)
+        ttk.Button(row, text="Сохранить автоответы", command=self.save_all_settings).pack(
+            side="left"
+        )
+        ttk.Button(row, text="Пауза на час", command=lambda: self._pause_bot_replies(3600)).pack(
+            side="left", padx=6
+        )
+        ttk.Button(row, text="Снять паузу", command=lambda: self._pause_bot_replies(0)).pack(
+            side="left"
+        )
         advanced = self.advanced(card, "Частота, приватность и удаление")
         self.field(
             advanced, "Пауза между ответами контакту, сек.", self.reply_vars["cooldown_seconds"]
@@ -369,6 +438,29 @@ class ServicePages(DiscordBotPages):
             text="Сообщать собеседнику, что я играю или работаю",
             variable=self.reply_vars["share_activity"],
         ).pack(anchor="w", pady=4)
+        self.label(
+            advanced,
+            "Временная пауза сохраняется при закрытии меню. Режим «только срочное» ищет слова «срочно», «важно», «горит», «ответь»; это правило, а не оценка важности человеком.",
+            muted=True,
+            wraplength=650,
+        ).pack(anchor="w", pady=6)
+
+    def _pause_bot_replies(self, seconds):
+        import time
+
+        cfg = self.config_mgr.snapshot()
+        until = int(time.time()) + seconds if seconds else 0
+        cfg["auto_replies"]["paused_until"] = until
+        try:
+            self.config_mgr.save_config(cfg)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+            return
+        dirty = self.dirty
+        self.reply_vars["paused_until"].set(str(until))
+        self.dirty = dirty
+        self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
+        self.status_var.set("Автоответы на паузе на час" if seconds else "Временная пауза снята")
 
     def build_discord_account_tab(self):
         account = self.card(

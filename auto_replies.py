@@ -2,6 +2,7 @@
 
 import re
 import time
+from reply_bank import REPLY_BANK
 
 STYLES = {
     "minimal": "Минимализм",
@@ -15,6 +16,10 @@ DEFAULT_REPLIES = {
     "cooldown_seconds": 300,
     "delete_seconds": 300,
     "share_activity": False,
+    "personality": "profile",
+    "variant": 0,
+    "urgent_only": False,
+    "paused_until": 0,
 }
 
 
@@ -22,7 +27,16 @@ def urgent(text):
     return bool(re.search(r"\b(срочно|важно|горит|ответь)\b", str(text).casefold()))
 
 
-def render_reply(owner, status=None, settings=None, attachment=False, important=False, night=False):
+def render_reply(
+    owner,
+    status=None,
+    settings=None,
+    attachment=False,
+    important=False,
+    night=False,
+    *,
+    personality="friendly",
+):
     cfg = {**DEFAULT_REPLIES, **(settings or {})}
     status = status or {}
     owner = str(owner or "Владелец")[:60].replace("\n", " ")
@@ -33,7 +47,13 @@ def render_reply(owner, status=None, settings=None, attachment=False, important=
         reason = "сейчас в игре"
     elif cfg["share_activity"] and status.get("activity_type") == "WORK":
         reason = "сосредоточен на работе"
-    body = f"{owner} {reason}."
+    selected = cfg["personality"] if cfg["personality"] != "profile" else personality
+    bank = REPLY_BANK.get(selected, REPLY_BANK["friendly"])
+    try:
+        variant = max(0, min(5, int(cfg["variant"])))
+    except (ValueError, TypeError):
+        variant = 0
+    body = bank[variant].format(owner=owner, reason=reason)
     if attachment:
         body += " Если вопрос важный, напишите его текстом."
     elif important:
@@ -67,6 +87,8 @@ class ReplyGate:
     def allow(self, contact, settings=None, important=False):
         cfg = {**DEFAULT_REPLIES, **(settings or {})}
         if not cfg["enabled"]:
+            return False
+        if time.time() < cfg["paused_until"] or cfg["urgent_only"] and not important:
             return False
         now = self.clock()
         key = str(contact)

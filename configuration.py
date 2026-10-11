@@ -98,6 +98,10 @@ DEFAULT_CONFIG = {
         "cooldown_seconds": 300,
         "delete_seconds": 300,
         "share_activity": False,
+        "personality": "profile",
+        "variant": 0,
+        "urgent_only": False,
+        "paused_until": 0,
     },
     "discord_account": {
         "enabled": False,
@@ -248,8 +252,17 @@ def validate(data):
     replies = data["auto_replies"]
     if replies["style"] not in STYLES:
         raise ValueError("Неизвестный стиль автоответов")
+    from reply_bank import REPLY_BANK
+
+    if replies["personality"] not in (*REPLY_BANK, "profile"):
+        raise ValueError("Неизвестная личность автоответов")
+    for key, low, high in (("variant", 0, 5), ("paused_until", 0, 4102444800)):
+        value = replies[key]
+        if isinstance(value, bool) or not str(value).isdigit() or not low <= int(value) <= high:
+            raise ValueError("Некорректная настройка автоответов: " + key)
+        replies[key] = int(value)
     for section, keys in (
-        ("auto_replies", ("enabled", "share_activity")),
+        ("auto_replies", ("enabled", "share_activity", "urgent_only")),
         ("discord_account", ("enabled", "auto_reply", "update_status", "follow_activity")),
         ("discord_bot", ("auto_reply", "follow_activity")),
         ("telegram_user", ("auto_reply", "update_bio", "follow_activity")),
@@ -313,7 +326,9 @@ def validate(data):
         for key, value in aliases.items()
     ):
         raise ValueError("Допускается до 100 своих фраз: фраза до 100, команда до 2000 символов")
-    data["command_aliases"] = {k.casefold().strip(): v.strip() for k, v in aliases.items()}
+    from speech_tools import canonical_aliases
+
+    data["command_aliases"] = canonical_aliases(aliases, data["app_settings"]["wake_word"])
     path = data["app_settings"]["downloads_path"]
     if not isinstance(path, str) or not path.strip():
         raise ValueError("Укажите папку загрузок")
