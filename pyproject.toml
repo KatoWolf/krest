@@ -1,10 +1,7 @@
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-exclude = [".venv"]
+exclude = [".venv", ".build-venv", "build", "dist", ".pyarmor", "tests", "docs", "examples"]
 
 [tool.ruff.lint]
 select = ["E9", "F63", "F7", "F82"]

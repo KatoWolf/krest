@@ -26,7 +26,9 @@ def downloads_folder(home=None):
 
 
 def discover_settings(config, base_dir=None, home=None):
-    root = Path(base_dir or Path(__file__).resolve().parent)
+    from app_paths import program_dir
+
+    root = Path(base_dir) if base_dir is not None else program_dir()
     folder = downloads_folder(home)
     home = Path(home or Path.home())
     result = copy.deepcopy(config)
@@ -61,7 +63,9 @@ def discover_settings(config, base_dir=None, home=None):
 
 
 def readiness(config, base_dir=None):
-    root = Path(base_dir or Path(__file__).resolve().parent)
+    from app_paths import program_dir
+
+    root = Path(base_dir) if base_dir is not None else program_dir()
     cfg = config["app_settings"]
     vosk = root / cfg["vosk_path"]
     silero = root / cfg["silero_path"]

@@ -1,26 +1,28 @@
-"""Compile application sources, smoke-test the distribution, then make an installer."""
+"""One-click PyInstaller release with an optional, explicit PyArmor protection step."""
 
 from pathlib import Path
 import argparse
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 
 
 def run_checked(command, **kwargs):
-    """Keep live build output and a bounded error tail in public CI annotations."""
+    """Stream progress and retain a bounded failure summary for CI."""
     from collections import deque
     import threading
 
     timeout = kwargs.pop("timeout", None)
     kwargs.pop("check", None)
-    tail = deque(maxlen=35)
+    tail = deque(maxlen=25)
     with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -42,13 +44,12 @@ def run_checked(command, **kwargs):
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait()
             raise
         finally:
             reader.join(timeout=3)
         if code:
-            detail = "".join(line for line in tail if not line.startswith("Nuitka-Options:"))[
-                -3000:
-            ]
+            detail = "".join(tail)[-2500:]
             print(
                 "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
                 flush=True,
@@ -56,170 +57,208 @@ def run_checked(command, **kwargs):
             raise subprocess.CalledProcessError(code, command)
 
 
-def compiler_command(output):
-    # Only explicit public resources enter the release; no configs, sessions or signing keys.
-    modules = [
-        p.stem for p in ROOT.glob("*.py") if p.stem not in {"main", "setup_app", "dependency_setup"}
-    ]
+def application_sources():
+    return sorted(ROOT.glob("*.py")) + sorted((ROOT / "skills").glob("*.py"))
+
+
+def package_command(output, *, protect=False, spec=None):
+    spec = Path(spec or ROOT / "packaging" / "krest.spec")
+    if protect:
+        # SpecRepacker analyzes original imports, then replaces only our modules with
+        # PyArmor output. Third-party Torch stays prebuilt; no C++ toolchain is involved.
+        return [
+            sys.executable,
+            "-m",
+            "pyarmor.cli",
+            "gen",
+            "--pack",
+            str(spec),
+            "-O",
+            str(output),
+            "-r",
+            str(ROOT / "main.py"),
+            *[str(p) for p in sorted(ROOT.glob("*.py")) if p != ROOT / "main.py"],
+            str(ROOT / "skills"),
+        ]
     return [
         sys.executable,
         "-m",
-        "nuitka",
-        "--mode=standalone",
-        "--assume-yes-for-downloads",
-        "--msvc=latest",
-        "--jobs=2",
-        "--windows-console-mode=attach",
-        "--enable-plugin=tk-inter",
-        "--module-parameter=torch-disable-jit=no",
-        "--include-package=skills",
-        "--include-package=vosk",
-        "--include-package=winsdk",
-        "--include-package=pywinauto",
-        "--include-package=pycaw",
-        "--include-package=comtypes",
-        "--include-package=telebot",
-        "--include-package=discord",
-        "--include-package=pyrogram",
-        "--include-module=pystray._win32",
-        "--include-module=pyautogui._pyautogui_win",
-        *["--include-module=" + name for name in sorted(modules)],
-        "--include-data-dir=" + str(ROOT / "assets") + "=assets",
-        "--include-data-files=" + str(ROOT / "license_public_key.pem") + "=license_public_key.pem",
-        "--include-data-files=" + str(ROOT / "packaging" / "NOTICE.txt") + "=NOTICE.txt",
-        "--windows-icon-from-ico=" + str(ROOT / "assets" / "krest.ico"),
-        "--company-name=Krest",
-        "--product-name=Крест",
-        "--file-version=" + VERSION,
-        "--product-version=" + VERSION,
-        "--output-filename=Krest.exe",
-        "--output-dir=" + str(output),
-        "--report=" + str(output / "compilation-report.xml"),
-        str(ROOT / "main.py"),
+        "PyInstaller",
+        "--noconfirm",
+        "--distpath",
+        str(output),
+        "--workpath",
+        str(ROOT / "build" / "pyinstaller"),
+        str(spec),
     ]
 
 
 def audit_distribution(dist):
-    forbidden_names = {
+    forbidden = {
         "config.json",
         "kernel_endpoint.json",
         "assistant_state.json",
         "favorites.json",
         "tg_auth_temp.json",
+        "warframe_state.json",
+        "warframe_route.json",
     }
-    own_sources = {p.name for p in ROOT.glob("*.py")} | {
-        p.name for p in (ROOT / "skills").glob("*.py")
-    }
-    for path in dist.rglob("*"):
+    own_sources = {p.name for p in ROOT.glob("*.py")}
+    for path in Path(dist).rglob("*"):
         if not path.is_file():
             continue
-        if path.name in forbidden_names or path.name.endswith(
-            (".private.pem", ".session", ".sqlite3")
+        relative = path.relative_to(dist)
+        if path.name in forbidden or path.name.endswith((".private.pem", ".session", ".sqlite3")):
+            raise RuntimeError("Личные данные в сборке: " + str(relative))
+        if any(
+            part in {".git", ".github", "tests", "docs", ".venv", ".build-venv", "__pycache__"}
+            for part in relative.parts
         ):
-            raise RuntimeError("Личные данные в сборке: " + str(path))
-        # Third-party libraries may need their own source/data at runtime; our modules must be compiled.
-        if (
-            path.suffix == ".py"
-            and (path.parent == dist or path.parent == dist / "skills")
-            and path.name in own_sources
+            raise RuntimeError("Служебный файл в сборке: " + str(relative))
+        # PyTorch can legitimately need its own .py data for TorchScript introspection.
+        if path.suffix == ".py" and (
+            relative.parts[0] == "skills"
+            or relative.parts[:2] == ("_internal", "skills")
+            or path.name in own_sources
+            and path.parent in (Path(dist), Path(dist) / "_internal")
         ):
-            raise RuntimeError("Исходник Крест в сборке: " + str(path))
+            raise RuntimeError("Открытый исходник Крест в сборке: " + str(relative))
 
 
 def smoke_test(dist):
-    executable = dist / "Krest.exe"
-    with tempfile.TemporaryDirectory(prefix="krest-release-test-") as temp:
+    executable = Path(dist) / "Krest.exe"
+    with tempfile.TemporaryDirectory(prefix="krest-release-check-") as temp:
         root = Path(temp)
         cfg = root / "config.json"
         report = root / "skills.json"
         run_checked(
             [str(executable), "--check", "--check-output", str(report), "--config", str(cfg)],
-            check=True,
-            timeout=180,
             cwd=root,
+            timeout=180,
         )
         data = json.loads(report.read_text(encoding="utf-8"))
-        if data["errors"] or data["skills"] < 150:
-            raise RuntimeError("Встроенные навыки не загрузились: " + str(data))
-        # Exercise the real child-process launcher with the installed executable, not python main.py.
+        if data["errors"] or data["skills"] < 168:
+            raise RuntimeError("Навыки не загрузились: " + str(data))
         run_checked(
-            [str(executable), "--release-smoke", "--config", str(cfg)],
-            check=True,
-            timeout=90,
-            cwd=root,
+            [str(executable), "--release-smoke", "--config", str(cfg)], cwd=root, timeout=120
         )
         run_checked(
-            [str(executable), "--release-model-check", "--config", str(cfg)],
-            check=True,
-            timeout=900,
-            cwd=root,
+            [str(executable), "--release-import-check", "--config", str(cfg)], cwd=root, timeout=180
         )
+
+
+def copy_models(dist):
+    # Copy discovered models only, never the whole user's model/project directory.
+    sys.path.insert(0, str(ROOT))
+    from voice_models import discover_models
+    from configuration import ConfigManager
+
+    found = discover_models(ConfigManager().snapshot(), ROOT)
+    folder = Path(dist) / "model"
+    for key, filename in (("vosk_path", "vosk"), ("silero_path", "model_silero.pt")):
+        if not found[key]:
+            continue
+        folder.mkdir(exist_ok=True)
+        source = Path(found[key])
+        if source.is_dir():
+            if any(p.is_symlink() for p in source.rglob("*")):
+                raise ValueError("Модель содержит ссылки; проверьте папку перед упаковкой")
+            shutil.copytree(source, folder / filename)
+        else:
+            shutil.copy2(source, folder / filename)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true")
-    parser.add_argument("--skip-installer", action="store_true")
-    parser.add_argument("--stage", choices=("all", "compile", "verify", "installer"), default="all")
+    parser.add_argument(
+        "--protect",
+        action="store_true",
+        help="Обфускация PyArmor; ошибка не вызывает незащищённую пересборку",
+    )
+    parser.add_argument("--license", help="Лицензия PyArmor для регистрации в авторской среде")
+    parser.add_argument(
+        "--with-models", action="store_true", help="Положить найденные модели в model рядом с EXE"
+    )
     args = parser.parse_args()
-    output = ROOT / "build" / "windows"
-    command = compiler_command(output)
+    output = ROOT / "dist"
+    stage = ROOT / "build" / "exe-stage"
+    command = package_command(stage, protect=args.protect)
     if args.plan:
         print(subprocess.list2cmdline(command))
         return
-    if os.name != "nt" or sys.version_info[:2] not in ((3, 11), (3, 12)):
-        raise SystemExit("Сборка требует 64-битную Windows и Python 3.11 или 3.12")
-    import struct
-
-    if struct.calcsize("P") != 8:
-        raise SystemExit("Требуется 64-битный Python")
-    output.mkdir(parents=True, exist_ok=True)
-    dist = output / "main.dist"
-    if args.stage in ("all", "compile"):
-        run_checked(command, cwd=ROOT, check=True)
-        print("::notice::Compilation finished.", flush=True)
-    if args.stage in ("all", "verify"):
-        native = {p.name.lower() for p in dist.rglob("*.dll")}
-        required = {"libvosk.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"}
-        if required - native:
-            raise RuntimeError(
-                "В сборку не попали библиотеки Vosk: " + ", ".join(sorted(required - native))
+    if os.name != "nt" or sys.version_info[:2] not in ((3, 11), (3, 12)) or sys.maxsize <= 2**32:
+        raise SystemExit("Сборка требует Windows и Python 3.11/3.12 x64")
+    if args.license and not args.protect:
+        raise SystemExit("Лицензия используется только с --protect")
+    env = dict(os.environ, KREST_BUILD_ROOT=str(ROOT), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    if args.protect:
+        if importlib.util.find_spec("pyarmor") is None:
+            run_checked(
+                [sys.executable, "-m", "pip", "install", "pyarmor==9.2.7"], cwd=ROOT, env=env
             )
-        audit_distribution(dist)
-        smoke_test(dist)
-        print(
-            "::notice::Packaged kernel and speech models passed their runtime checks.", flush=True
+        if args.license:
+            run_checked(
+                [
+                    sys.executable,
+                    "-m",
+                    "pyarmor.cli",
+                    "reg",
+                    str(Path(args.license).resolve(strict=True)),
+                ],
+                cwd=ROOT,
+                env=env,
+            )
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.parent.mkdir(parents=True, exist_ok=True)
+    # Work on a disposable spec: PyArmor creates a .patched.spec next to it.
+    spec = stage.parent / "krest.spec"
+    shutil.copy2(ROOT / "packaging/krest.spec", spec)
+    command = package_command(stage, protect=args.protect, spec=spec)
+    run_checked(command, cwd=ROOT, env=env)
+    dist = stage / "Krest"
+    if args.with_models:
+        copy_models(dist)
+    audit_distribution(dist)
+    smoke_test(dist)
+    output.mkdir(exist_ok=True)
+    target = output / "Krest"
+    if target.exists():
+        import time
+
+        previous = output / (
+            "Krest-previous-" + time.strftime("%Y%m%d-%H%M%S") + "-" + str(time.time_ns() % 1000000)
         )
-    if args.stage in ("all", "installer") and not args.skip_installer:
-        iscc = shutil.which("ISCC.exe") or str(
-            Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
-            / "Inno Setup 6"
-            / "ISCC.exe"
-        )
-        run_checked(
-            [
-                iscc,
-                "/DAppVersion=" + VERSION,
-                "/DSourceDir=" + str(dist),
-                "/O" + str(ROOT / "dist"),
-                str(ROOT / "packaging" / "krest.iss"),
-            ],
-            check=True,
-        )
-    print("Этап " + args.stage + " завершён: " + str(output))
+        target.rename(previous)
+        print("Предыдущая сборка сохранена: " + str(previous))
+    shutil.move(str(dist), str(target))
+    archive = output / (
+        "Krest-Windows-" + VERSION + ("-protected" if args.protect else "") + ".zip"
+    )
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as result:
+        for path in target.rglob("*"):
+            if path.is_file():
+                result.write(path, path.relative_to(output))
+    print("::notice::EXE, skills, child kernel and native runtime imports passed.")
+    print("Готово: " + str(target / "Krest.exe"))
+    print("Архив для передачи: " + str(archive))
+    if args.protect:
+        print("Код обработан PyArmor; абсолютная защита от анализа не гарантируется.")
+    else:
+        print("Обычная упаковка: исходники не лежат открыто, но байткод можно извлечь.")
 
 
 if __name__ == "__main__":
     for stream in (sys.stdout, sys.stderr):
-        if stream is not None and hasattr(stream, "reconfigure"):
+        if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         main()
     except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
+        message = str(exc)[-2000:]
         print(
-            "::error::"
-            + message[-2500:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
+            "::error::" + message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
             flush=True,
         )
         raise

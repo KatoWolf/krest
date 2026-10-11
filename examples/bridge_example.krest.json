@@ -1,5 +1,0 @@
-{
-  "api_version": 1,
-  "name": "Пример моста Крест",
-  "permissions": ["notifications", "refresh"]
-}

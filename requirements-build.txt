@@ -1,3 +1,1 @@
-Nuitka==4.3
-ordered-set==4.1.0
-zstandard==0.25.0
+PyInstaller==6.22.3

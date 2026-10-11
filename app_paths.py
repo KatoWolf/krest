@@ -24,3 +24,8 @@ def app_command(*args):
     if compiled():
         return [sys.executable, *map(str, args)]
     return [sys.executable, str(RESOURCE_DIR / "main.py"), *map(str, args)]
+
+
+def program_dir():
+    """Writable sidecar models are placed beside the executable, outside its bundle."""
+    return Path(sys.executable).resolve().parent if compiled() else RESOURCE_DIR

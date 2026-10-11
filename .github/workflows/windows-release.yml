@@ -1,4 +1,4 @@
-name: Windows installer
+name: Windows EXE
 on:
   workflow_dispatch:
   push:
@@ -6,17 +6,21 @@ on:
     paths:
       - 'packaging/**'
       - '**/*.py'
-      - 'requirements-build.txt'
+      - 'requirements*.txt'
+      - 'build-exe.bat'
       - '.github/workflows/windows-release.yml'
 permissions:
   contents: read
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
 env:
   PYTHONUTF8: "1"
   PYTHONIOENCODING: utf-8
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,34 +29,23 @@ jobs:
           cache: pip
       - name: Install CPU speech runtime
         run: python -m pip install "torch>=2.2,<3" --index-url https://download.pytorch.org/whl/cpu
-      - name: Install application and build dependencies
+      - name: Install application and packaging dependencies
         run: python -m pip install -r requirements-windows.txt -r requirements-voice.txt -r requirements-build.txt -r requirements-dev.txt
-      - name: Check source style
+      - name: Check sources
         run: python -m ruff check .
-      - name: Test sources
-        run: python -m pytest -q --junitxml=test-results.xml
-      - name: Check skill registry
+      - name: Check command catalog
         run: python main.py --check
-      - name: Report failing test details
-        if: always()
-        run: python tools/ci_test_report.py test-results.xml
-      - name: Ensure installer compiler
-        shell: pwsh
-        run: |
-          if (!(Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress }
-      - name: Compile Windows executable
-        run: python packaging/build_windows.py --stage compile
-      - name: Verify packaged kernel and speech models
-        run: python packaging/build_windows.py --stage verify
-      - name: Create installer from verified distribution
-        run: python packaging/build_windows.py --stage installer
+      - name: Package EXE and check the packaged runtime
+        run: python packaging/build_windows.py
       - uses: actions/upload-artifact@v4
         with:
-          name: Krest-Windows-installer
-          path: dist/Krest-Setup-*.exe
+          name: Krest-Windows-EXE
+          path: dist/Krest-Windows-*.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Krest-compilation-report
-          path: build/windows/compilation-report.xml
+          name: Krest-packaging-diagnostics
+          path: |
+            build/pyinstaller/krest/warn-*.txt
+            build/pyinstaller/krest/xref-*.html

@@ -82,3 +82,35 @@ def check_models(settings):
     if samples.size < 240 or not np.isfinite(samples).all() or not np.any(samples):
         raise RuntimeError("Синтез в сборке не вернул корректный звук")
     print("Vosk и синтез Silero проверены без микрофона и динамиков.")
+
+
+def check_dependencies():
+    """Verify native speech/media libraries without downloads or hardware access."""
+    import importlib
+    import os
+
+    modules = [
+        "torch",
+        "vosk",
+        "sounddevice",
+        "numpy",
+        "num2words",
+        "aiohttp",
+        "discord",
+        "telebot",
+        "pyrogram",
+    ]
+    if os.name == "nt":
+        modules += [
+            "winsdk.windows.media.control",
+            "winsdk.windows.media.ocr",
+            "pywinauto",
+            "pycaw.pycaw",
+        ]
+    for module in modules:
+        importlib.import_module(module)
+    import torch
+
+    if torch.tensor([1.0, 2.0]).sum().item() != 3:
+        raise RuntimeError("PyTorch не выполнил операцию на CPU")
+    print("Голосовые и сервисные библиотеки загружены; CPU PyTorch проверен.")

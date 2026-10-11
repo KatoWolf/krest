@@ -65,3 +65,13 @@ test-results.xml
 nuitka-crash-report.xml
 
 warframe_route.json
+.pyarmor/
+*.patched.spec
+
+# Local development evidence is intentionally not published.
+tests/
+docs/
+examples/
+DEVELOPMENT_PLAN.md
+tools/soak_kernel.py
+tools/ci_test_report.py

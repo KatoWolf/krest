@@ -15,6 +15,7 @@ def main(argv=None):
     )
     parser.add_argument("--check-output", help=argparse.SUPPRESS)
     parser.add_argument("--release-model-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--release-import-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--service", help=argparse.SUPPRESS)
     parser.add_argument("--external-script", help=argparse.SUPPRESS)
@@ -56,6 +57,11 @@ def main(argv=None):
     from app_runtime import AssistantRuntime
 
     settings = ConfigManager(args.config or CONFIG_PATH)
+    if args.release_import_check:
+        from release_smoke import check_dependencies
+
+        check_dependencies()
+        return 0
     if args.release_model_check:
         from release_smoke import check_models
 
@@ -203,4 +209,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     raise SystemExit(main())
