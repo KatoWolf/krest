@@ -257,20 +257,35 @@ def check_active_trades():
         return _steam_failure("active_trades", exc)
 
 
+def is_current_owner(message, cfg):
+    """Validate each request against the currently saved owner, never import-time IDs."""
+    owner = str(cfg.get("api_keys", {}).get("telegram_owner_id", "")).strip()
+    sender = getattr(getattr(message, "from_user", None), "id", None)
+    chat = getattr(message, "chat", None)
+    return (
+        1 <= len(owner) <= 20
+        and owner.isascii()
+        and owner.isdecimal()
+        and int(owner) > 0
+        and isinstance(sender, int)
+        and not isinstance(sender, bool)
+        and sender == int(owner)
+        and getattr(chat, "type", None) == "private"
+        and getattr(chat, "id", None) == sender
+    )
+
+
 # --- ЗАГРУЗКА ФАЙЛОВ С ТЕЛЕФОНА НА ПК ---
 @bot.message_handler(
     content_types=["document", "photo", "video", "audio"],
-    func=lambda m: getattr(m.from_user, "id", None) == MY_ID,
 )
 def handle_remote_upload(message):
     from configuration import ConfigManager
 
-    if (
-        getattr(message.from_user, "id", None) != MY_ID
-        or getattr(message.chat, "type", "private") != "private"
-    ):
+    cfg = ConfigManager().snapshot()
+    if not is_current_owner(message, cfg):
         return
-    if not ConfigManager().snapshot().get("remote_control", {}).get("allow_uploads", False):
+    if not cfg.get("remote_control", {}).get("allow_uploads", False):
         bot.reply_to(message, "Приём файлов выключен в меню Крест.")
         return
 
@@ -317,22 +332,21 @@ def handle_remote_upload(message):
 
 
 # --- ОБРАБОТКА КОМАНД И ТЕКСТА ---
-@bot.message_handler(
-    content_types=["text"], func=lambda m: getattr(m.from_user, "id", None) == MY_ID
-)
+@bot.message_handler(content_types=["text"])
 def terminal_handler(message):
     from configuration import ConfigManager
     from integrations import redact
     from remote_policy import authorize
 
-    if (
-        getattr(message.from_user, "id", None) != MY_ID
-        or getattr(message.chat, "type", "private") != "private"
-    ):
-        return
     settings = ConfigManager()
     cfg = settings.snapshot()
-    text = (message.text or "").strip().casefold()
+    if not is_current_owner(message, cfg):
+        return
+    original = message.text or ""
+    if not isinstance(original, str) or len(original) > 2000:
+        bot.reply_to(message, "Команда слишком длинная. Максимум — 2000 символов.")
+        return
+    text = original.strip().casefold()
     if text in ("/start", "help", "команды", "меню", "🧠 меню команд"):
         remote = cfg["remote_control"]
         body = "Крест · доступ владельца\n"
@@ -413,6 +427,7 @@ def run_krest_service(shared_queue=None):
     while True:
         try:
             bot.infinity_polling(timeout=20, logger_level=None)
+            return  # The SDK returns after an intentional stop (including Ctrl+C).
         except requests.exceptions.ReadTimeout:
             print("--- [TG TERMINAL]: Потеряна связь. Переподключение... ---")
             time.sleep(3)

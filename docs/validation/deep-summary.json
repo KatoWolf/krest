@@ -1,0 +1,341 @@
+{
+  "base_commit": "0c5897cd9720fa23221bba171836eab292cba041",
+  "scope": "Linux offline; no external bot accounts, no Windows installer build",
+  "tests": {
+    "312": {
+      "tests": 712,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 3,
+      "passed": 709,
+      "seconds": 38.617,
+      "skips": [
+        {
+          "test": "test_installed_windows_media_module_loads",
+          "reason": "Native Windows media bridge"
+        },
+        {
+          "test": "test_powershell_bootstrap_has_valid_syntax",
+          "reason": "Windows PowerShell parser"
+        },
+        {
+          "test": "test_windows_ocr_static_dimension_exists",
+          "reason": "Windows OCR API"
+        }
+      ]
+    },
+    "313": {
+      "tests": 712,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 3,
+      "passed": 709,
+      "seconds": 38.15,
+      "skips": [
+        {
+          "test": "test_installed_windows_media_module_loads",
+          "reason": "Native Windows media bridge"
+        },
+        {
+          "test": "test_powershell_bootstrap_has_valid_syntax",
+          "reason": "Windows PowerShell parser"
+        },
+        {
+          "test": "test_windows_ocr_static_dimension_exists",
+          "reason": "Windows OCR API"
+        }
+      ]
+    }
+  },
+  "ui": {
+    "environment": "Linux / Xvfb; Python 3.13.5; offline profile; actual Tk widgets",
+    "pages": {
+      "actions": {
+        "first_ms": 8.17,
+        "repeat_ms": [
+          5.79,
+          2.74,
+          4.88,
+          3.1,
+          2.88
+        ]
+      },
+      "settings": {
+        "first_ms": 22.91,
+        "repeat_ms": [
+          3.25,
+          2.97,
+          3.0,
+          3.14,
+          2.65
+        ]
+      },
+      "appearance": {
+        "first_ms": 19.96,
+        "repeat_ms": [
+          2.65,
+          2.5,
+          2.39,
+          2.7,
+          2.7
+        ]
+      },
+      "bot_status": {
+        "first_ms": 23.32,
+        "repeat_ms": [
+          8.04,
+          6.32,
+          6.65,
+          6.3,
+          6.45
+        ]
+      },
+      "voice": {
+        "first_ms": 28.19,
+        "repeat_ms": [
+          3.63,
+          2.52,
+          2.57,
+          2.58,
+          2.7
+        ]
+      },
+      "skills": {
+        "first_ms": 54.13,
+        "repeat_ms": [
+          3.14,
+          2.69,
+          3.02,
+          2.77,
+          2.83
+        ]
+      },
+      "wf_home": {
+        "first_ms": 19.47,
+        "repeat_ms": [
+          4.98,
+          6.4,
+          5.73,
+          6.01,
+          6.05
+        ]
+      }
+    },
+    "startup_ms": 224.81,
+    "stress": {
+      "transitions": 20,
+      "theme_changes": 4,
+      "remaining_transition_job": null,
+      "remaining_canvas_items": 0,
+      "max_update_ms": 2.11
+    },
+    "large_scale": {
+      "scale_percent": 150,
+      "window": "1020x700",
+      "pages": {
+        "settings": {
+          "requested_width": 653,
+          "viewport_width": 687,
+          "save_button_visible": true
+        },
+        "bot_status": {
+          "requested_width": 676,
+          "viewport_width": 687,
+          "save_button_visible": true
+        },
+        "appearance": {
+          "requested_width": 644,
+          "viewport_width": 687,
+          "save_button_visible": true
+        },
+        "voice": {
+          "requested_width": 687,
+          "viewport_width": 687,
+          "save_button_visible": true
+        },
+        "security": {
+          "requested_width": 667,
+          "viewport_width": 687,
+          "save_button_visible": true
+        }
+      }
+    },
+    "settings_search": {
+      "pending_scroll_job": null
+    },
+    "callback_errors": []
+  },
+  "registry": {
+    "skills": 167,
+    "errors": {},
+    "builtin_skill_ids": [
+      "skills.basic.basic",
+      "skills.gid.accept_dota_guide",
+      "skills.gid.check_dota_status",
+      "skills.gid.decline_dota_guide",
+      "skills.gid.query_runes_info",
+      "skills.gid.query_tormentor_info",
+      "skills.gid.query_wisdom_info",
+      "skills.gid.roshan_down",
+      "skills.gid.start_match_timer",
+      "skills.gid.stop_dota_guide",
+      "skills.interactive.bored",
+      "skills.interactive.conversation",
+      "skills.interactive.daily_briefing",
+      "skills.interactive.evening",
+      "skills.interactive.fact",
+      "skills.interactive.get_system_uptime",
+      "skills.interactive.good_morning_ritual",
+      "skills.interactive.greet",
+      "skills.interactive.introduce",
+      "skills.interactive.joke",
+      "skills.interactive.make_decision",
+      "skills.interactive.mood",
+      "skills.interactive.owner_identity",
+      "skills.interactive.quiz",
+      "skills.interactive.quiz_answer",
+      "skills.interactive.quiz_hint",
+      "skills.interactive.quiz_repeat",
+      "skills.interactive.quiz_stop",
+      "skills.interactive.random_number",
+      "skills.interactive.roll_dice",
+      "skills.interactive.support",
+      "skills.interactive.thanks",
+      "skills.media.dislike_track",
+      "skills.media.like_track",
+      "skills.media.mute_system",
+      "skills.media.next_track",
+      "skills.media.open_spotify",
+      "skills.media.open_vk_music",
+      "skills.media.open_yandex_music",
+      "skills.media.open_youtube_music",
+      "skills.media.pause_music",
+      "skills.media.play_music",
+      "skills.media.prev_track",
+      "skills.media.seek_backward",
+      "skills.media.seek_forward",
+      "skills.media.set_exact_volume",
+      "skills.media.set_volume_max",
+      "skills.media.tell_current_playing_track",
+      "skills.media.tell_track_duration",
+      "skills.media.toggle_play_pause",
+      "skills.media.unlike_track",
+      "skills.media.unmute_system",
+      "skills.media.volume_down",
+      "skills.media.volume_up",
+      "skills.meta.export_commands",
+      "skills.meta.get_assistant_status",
+      "skills.meta.go_to_sleep",
+      "skills.meta.list_categories",
+      "skills.meta.reload_skills",
+      "skills.meta.search_command",
+      "skills.meta.show_category_help",
+      "skills.meta.show_help",
+      "skills.meta.shutdown",
+      "skills.meta.toggle_mute_mode",
+      "skills.meta.unmute_assistant",
+      "skills.meta.wake_up",
+      "skills.practical.days_between",
+      "skills.practical.discount",
+      "skills.practical.percentage",
+      "skills.practical.shift_date",
+      "skills.practical.split_bill",
+      "skills.practical.weekday",
+      "skills.steam.inventory",
+      "skills.steam.library",
+      "skills.steam.offers",
+      "skills.system_mon.clean_temp_files",
+      "skills.system_mon.get_battery_status",
+      "skills.system_mon.get_system_status",
+      "skills.system_mon.get_system_uptime",
+      "skills.system_mon.get_top_processes",
+      "skills.system_mon.organize_downloads",
+      "skills.timers_alarms.cancel_alarms",
+      "skills.timers_alarms.cancel_timers",
+      "skills.timers_alarms.check_active_alarms",
+      "skills.timers_alarms.check_active_timers",
+      "skills.timers_alarms.check_stopwatch",
+      "skills.timers_alarms.daily_reminder",
+      "skills.timers_alarms.named_reminder",
+      "skills.timers_alarms.set_alarm",
+      "skills.timers_alarms.set_timer",
+      "skills.timers_alarms.start_stopwatch",
+      "skills.timers_alarms.stop_stopwatch",
+      "skills.utils.calc_expression_skill",
+      "skills.utils.convert_currency_or_units",
+      "skills.warframe.add_goal",
+      "skills.warframe.baro",
+      "skills.warframe.bookmark",
+      "skills.warframe.briefing",
+      "skills.warframe.build",
+      "skills.warframe.cycles",
+      "skills.warframe.daily",
+      "skills.warframe.events",
+      "skills.warframe.farm",
+      "skills.warframe.foundry",
+      "skills.warframe.foundry_start",
+      "skills.warframe.goals",
+      "skills.warframe.journal",
+      "skills.warframe.launch",
+      "skills.warframe.market",
+      "skills.warframe.nightwave",
+      "skills.warframe.plan",
+      "skills.warframe.recipe",
+      "skills.warframe.refresh",
+      "skills.warframe.relics",
+      "skills.warframe.traces",
+      "skills.warframe.vision",
+      "skills.warframe.weekly",
+      "skills.webo.get_weather_forecast",
+      "skills.webo.launch_steam_game",
+      "skills.webo.list_installed_games",
+      "skills.webo.navigate_to_popular_site",
+      "skills.webo.read_latest_news",
+      "skills.webo.search_web_query",
+      "skills.webo.search_wikipedia",
+      "skills.windows.cancel_shutdown_windows",
+      "skills.windows.close_active_window",
+      "skills.windows.close_virtual_desktop",
+      "skills.windows.create_virtual_desktop",
+      "skills.windows.empty_recycle_bin",
+      "skills.windows.focus_specific_app",
+      "skills.windows.kill_frozen_processes",
+      "skills.windows.kill_process_by_name",
+      "skills.windows.lock_workstation",
+      "skills.windows.maximize_current_window",
+      "skills.windows.minimize_all_windows",
+      "skills.windows.minimize_current_window",
+      "skills.windows.next_virtual_desktop",
+      "skills.windows.open_action_center",
+      "skills.windows.open_clipboard_history",
+      "skills.windows.open_file_explorer",
+      "skills.windows.open_run_dialog",
+      "skills.windows.open_settings",
+      "skills.windows.open_task_manager",
+      "skills.windows.prev_virtual_desktop",
+      "skills.windows.report_frozen_processes",
+      "skills.windows.restart_windows",
+      "skills.windows.show_screenshots",
+      "skills.windows.shutdown_windows",
+      "skills.windows.snap_window_left",
+      "skills.windows.snap_window_right",
+      "skills.windows.snip_region",
+      "skills.windows.suspend_windows",
+      "skills.windows.switch_application",
+      "skills.windows.take_screenshot",
+      "skills.workflows.app_volume",
+      "skills.workflows.daily_briefing",
+      "skills.workflows.diagnose_player",
+      "skills.workflows.forget",
+      "skills.workflows.launch_catalog_app",
+      "skills.workflows.preview_sort",
+      "skills.workflows.recall",
+      "skills.workflows.remember",
+      "skills.workflows.run_scenario",
+      "skills.workflows.scheduled_reminder",
+      "skills.workflows.stop_scenario",
+      "skills.workflows.suggest_routines",
+      "skills.workflows.undo_sort"
+    ]
+  }
+}

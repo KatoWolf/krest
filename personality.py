@@ -1,6 +1,8 @@
 """Small offline response bank; no conversational model or network calls."""
 
 import random
+import time
+from collections.abc import Mapping
 from threading import RLock
 
 _REPLY_LOCK = RLock()
@@ -38,14 +40,16 @@ def choose_response(state, key, pool):
     No history is persisted: keys and remaining phrases stay on the caller's state.
     Shared facts use a shared key so changing character cannot repeat the same fact.
     """
+    signature = tuple(pool)
+    if not signature:
+        raise ValueError("Response pool must not be empty")
     with _REPLY_LOCK:
         cycles = getattr(state, "_reply_cycles", None)
         if cycles is None:
             cycles = state._reply_cycles = {}
-        signature = tuple(pool)
         remaining, previous, old_signature = cycles.get(key, ([], None, None))
         if not remaining or signature != old_signature:
-            remaining = list(dict.fromkeys(pool))
+            remaining = list(dict.fromkeys(signature))
             random.shuffle(remaining)
             if len(remaining) > 1 and remaining[-1] == previous:
                 remaining[0], remaining[-1] = remaining[-1], remaining[0]
@@ -54,19 +58,96 @@ def choose_response(state, key, pool):
         return phrase
 
 
+_CONTINUABLE_TOPICS = frozenset(
+    {
+        "joke",
+        "fact",
+        "conversation",
+        "bored",
+        "evening",
+        "support",
+        "support_tired",
+        "support_setback",
+        "support_worried",
+    }
+)
+_CONTINUATION_PHRASES = frozenset({"ещё", "еще", "а ещё", "а еще", "расскажи ещё", "расскажи еще"})
+DIALOGUE_TIMEOUT = 120
+
+
+def _selected_style(state):
+    getter = getattr(state, "config_getter", None)
+    config = getter() if callable(getter) else {}
+    profile = config.get("profile", {}) if isinstance(config, Mapping) else {}
+    style = profile.get("personality") if isinstance(profile, Mapping) else None
+    return style if isinstance(style, str) and style in PERSONALITIES else "friendly"
+
+
+def _pending_quiz_question(state):
+    question = getattr(state, "_quiz_question", None)
+    if getattr(state, "_quiz_answer", None) and isinstance(question, str):
+        return question.strip()
+    return ""
+
+
 def reply(kind, state):
-    config = state.config_getter() if hasattr(state, "config_getter") else {}
-    style = config.get("profile", {}).get("personality", "friendly")
-    if style not in PERSONALITIES:
-        style = "friendly"
+    style = _selected_style(state)
     pool = STYLE_REPLIES.get(style, {}).get(kind, REPLIES[kind])
-    phrase = choose_response(state, ("shared" if kind == "fact" else style, kind), pool)
+    question = _pending_quiz_question(state) if kind in {"conversation", "bored"} else ""
+    key = ("shared" if kind == "fact" else style, kind)
+    if question:
+        pool = _QUIZ_CONTINUATIONS[style]
+        key = (style, "pending_quiz")
+    phrase = choose_response(state, key, pool)
     # Keep this legacy session field available for callers inspecting the last reply.
     if not hasattr(state, "_last_reply"):
         state._last_reply = {}
     state._last_reply[kind] = phrase
+    state._dialogue_topic = kind if kind in _CONTINUABLE_TOPICS else None
+    state._dialogue_updated_at = time.monotonic()
     name = str(getattr(state, "owner_name", "") or "").strip()
-    return phrase.format(name=", " + name if name else "")
+    return phrase.format(name=", " + name if name else "", question=question)
+
+
+def continuation(state, text):
+    """Continue only an explicit recent offline topic; never dispatch a command.
+
+    Call only after ordinary skill matching. A quiz keeps its own explicit
+    answer protocol and cannot turn an ambiguous 'ещё' into a different topic.
+    """
+    clean = " ".join(str(text).casefold().strip(" .!?…").split())
+    if clean not in _CONTINUATION_PHRASES or getattr(state, "_quiz_answer", None):
+        return None
+    topic = getattr(state, "_dialogue_topic", None)
+    updated = getattr(state, "_dialogue_updated_at", None)
+    if not isinstance(topic, str) or topic not in _CONTINUABLE_TOPICS:
+        return None
+    if not isinstance(updated, (int, float)):
+        return None
+    age = time.monotonic() - updated
+    if not 0 <= age < DIALOGUE_TIMEOUT:
+        return None
+    return reply(topic, state)
+
+
+def clarification(state, repeated=False, suggestions=()):
+    """Explain an unmatched command without changing permissions or executing it.
+
+    Suggestions must come from the caller's available-skill matcher. They are
+    displayed as alternatives only; a suggestion is never treated as consent.
+    """
+    style = _selected_style(state)
+    prompt = _CLARIFICATIONS[style][bool(repeated)]
+    if isinstance(suggestions, str):
+        suggestions = (suggestions,)
+    options = list(
+        dict.fromkeys(
+            value.strip() for value in suggestions if isinstance(value, str) and value.strip()
+        )
+    )[:3]
+    if options:
+        prompt += " Доступные похожие команды: " + "; ".join(options) + "."
+    return prompt
 
 
 # Each style changes the wording, not the voice model or command permissions.
@@ -458,7 +539,75 @@ def preview(personality_key, owner_name="", intent="greeting"):
     """A stable, side-effect-free sample for an unsaved profile selection."""
     if intent not in REPLIES:
         raise ValueError("Unknown response intent: " + str(intent))
-    style = personality_key if personality_key in PERSONALITIES else "friendly"
+    style = (
+        personality_key
+        if isinstance(personality_key, str) and personality_key in PERSONALITIES
+        else "friendly"
+    )
     phrase = STYLE_REPLIES.get(style, {}).get(intent, REPLIES[intent])[0]
     name = str(owner_name or "").strip()
     return phrase.format(name=", " + name if name else "")
+
+
+# These prompts refer only to existing explicit quiz commands. Asking to talk
+# during a quiz must not silently discard the pending answer or create a quiz.
+_QUIZ_CONTINUATIONS = {
+    "friendly": [
+        "У нас остался вопрос: {question} Скажите «мой ответ» и вариант, или «дай подсказку».",
+        "Можем продолжить текущую викторину: {question} Для ответа скажите «мой ответ» и вариант; для завершения — «закончи викторину».",
+    ],
+    "concise": [
+        "Текущий вопрос: {question} Скажите «мой ответ» и вариант.",
+        "{question} Нужна помощь — «дай подсказку». Закончить — «закончи викторину».",
+    ],
+    "lively": [
+        "Есть вопрос, который мы ещё не разгадали! {question} Скажите «мой ответ» и ваш вариант.",
+        "Продолжим нашу разминку? {question} Можно сказать «дай подсказку» или «закончи викторину».",
+    ],
+    "calm": [
+        "Можно спокойно закончить текущий вопрос: {question} Ответьте фразой «мой ответ» и вашим вариантом.",
+        "Вопрос всё ещё открыт: {question} Если нужно, скажите «дай подсказку»; остановиться можно командой «закончи викторину».",
+    ],
+    "tactical": [
+        "Сначала текущий вопрос: {question} Следующий шаг — «мой ответ» и ваш вариант.",
+        "Незавершённый вопрос: {question} Варианты действий: «дай подсказку» или «закончи викторину».",
+    ],
+    "ironic": [
+        "У вопроса хорошая память: он ещё ждёт ответа. {question} Скажите «мой ответ» и вариант.",
+        "Викторина ещё открыта, но экзаменатора здесь нет. {question} Доступны «дай подсказку» и «закончи викторину».",
+    ],
+    "gothic": [
+        "Одна страница осталась открытой: {question} Скажите «мой ответ» и ваш вариант.",
+        "Вернёмся к оставленному вопросу: {question} Можно попросить «дай подсказку» или закрыть его командой «закончи викторину».",
+    ],
+}
+_CLARIFICATIONS = {
+    "friendly": (
+        "Не нашла подходящую команду. Назовите действие целиком или посмотрите примеры в каталоге навыков.",
+        "Пока не получается сопоставить фразу с навыком. Попробуйте точный пример из каталога, например «который час».",
+    ),
+    "concise": (
+        "Команда не найдена. Уточните действие или откройте каталог навыков.",
+        "Снова нет совпадения. Используйте пример из каталога: «который час».",
+    ),
+    "lively": (
+        "С этой фразой пока не разобралась. Попробуйте назвать действие прямо; примеры есть в каталоге навыков.",
+        "Давайте начнём с знакомого примера: «который час». Для другой задачи выберите точную фразу в каталоге навыков.",
+    ),
+    "calm": (
+        "Не удалось определить команду. Можно назвать её целиком или выбрать пример в каталоге навыков.",
+        "Попробуем один понятный пример: «который час». Остальные поддерживаемые фразы есть в каталоге навыков.",
+    ),
+    "tactical": (
+        "Действие не определено. Укажите команду целиком; доступные формулировки — в каталоге навыков.",
+        "Повторная фраза не сопоставлена с навыком. Следующий шаг: точная команда из каталога, например «который час».",
+    ),
+    "ironic": (
+        "У этой фразы пока нет знакомого действия. Лучше уточнить команду; подсказки есть в каталоге навыков.",
+        "Угадывать действие не буду. Попробуйте точный пример «который час» или выберите нужную фразу из каталога навыков.",
+    ),
+    "gothic": (
+        "Не нашла пути от этой фразы к действию. Назовите команду целиком; примеры собраны в каталоге навыков.",
+        "Эта дверь пока не открылась. Возьмём точную фразу из каталога навыков, например «который час».",
+    ),
+}

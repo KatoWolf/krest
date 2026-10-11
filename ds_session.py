@@ -324,6 +324,7 @@ def start_ds_bridge(notifications_queue=None):
 
             client = KrestDS(notifications_queue=notifications_queue, intents=intents)
             client.run(config.DS_USER_TOKEN)
+            return  # The SDK handles reconnects; normal return means explicit shutdown.
 
         except discord.PrivilegedIntentsRequired as e:
             raise RuntimeError("Включите Message Content Intent в Discord Developer Portal") from e

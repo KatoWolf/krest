@@ -235,10 +235,11 @@ class SkillManager:
                     scores[keyword] = max(score, scores.get(keyword, 0))
         return sorted(scores, key=lambda k: (-scores[k], k))[:limit]
 
-    def execute(self, text, state=None):
+    def execute(self, text, state=None, *, normalize=True):
         from speech_tools import normalize_command
 
-        text = normalize_command(text, self.settings().get("command_aliases", {}))
+        if normalize:
+            text = normalize_command(text, self.settings().get("command_aliases", {}))
         match = self.match(text)
         if match is None:
             suggestions = self.suggest(text)

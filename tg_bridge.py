@@ -4,10 +4,12 @@ import datetime
 import time
 import os
 import sys
-import json
 import logging
 import sqlite3
 import threading
+import uuid
+
+from storage import atomic_write_json, read_json
 
 try:
     from pyrogram import Client, filters, enums
@@ -246,6 +248,32 @@ async def auto_reply(client, message):
         logger.error(f"Ошибка отправки автоответа: {type(e).__name__}")
 
 
+AUTH_STATE_TTL = 600
+
+
+def auth_state_active(path):
+    """The bridge only needs a short-lived lease, never authentication secrets."""
+    import psutil
+
+    try:
+        if os.path.getsize(path) > 4096:
+            return False
+        data = read_json(path)
+
+        return (
+            isinstance(data, dict)
+            and data.get("status") in ("sending_code", "code_sent", "signing_in")
+            and isinstance(data.get("attempt"), str)
+            and 0 <= time.time() - float(data.get("created_at", 0)) < AUTH_STATE_TTL
+            and abs(psutil.Process(int(data["pid"])).create_time() - float(data["process_started"]))
+            < 1
+        )
+    except psutil.AccessDenied:
+        return True
+    except (OSError, ValueError, TypeError, KeyError, psutil.NoSuchProcess):
+        return False
+
+
 class AuthManager:
     def __init__(self):
         self.loop = None
@@ -255,6 +283,12 @@ class AuthManager:
         self.phone = None
         self._lock = threading.RLock()
         self._auth_operation_lock = threading.Lock()
+        self._async_operation_lock = asyncio.Lock()
+        self._pending_auth = None
+        self._state_id = None
+        self._expiry_task = None
+        self._operation_done = None
+        self._session_lock = None
 
     @property
     def state_file(self):
@@ -309,15 +343,27 @@ class AuthManager:
         return api_id_int, api_hash_clean
 
     def _write_state(self, data: dict):
-        tmp = self.state_file + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.state_file)
+        import psutil
+
+        atomic_write_json(
+            self.state_file,
+            {
+                "status": data["status"],
+                "attempt": self._state_id,
+                "pid": os.getpid(),
+                "process_started": psutil.Process().create_time(),
+                "created_at": time.time(),
+            },
+        )
 
     def _remove_state(self):
         try:
-            os.remove(self.state_file)
+            data = read_json(self.state_file)
+            if isinstance(data, dict) and data.get("attempt") == self._state_id:
+                os.remove(self.state_file)
         except FileNotFoundError:
+            pass
+        except (ValueError, TypeError):
             pass
         except OSError as e:
             logger.warning(
@@ -326,38 +372,110 @@ class AuthManager:
 
     async def _disconnect_client(self):
         if self.client is not None:
+            client = self.client
             try:
-                if getattr(self.client, "is_connected", False):
-                    await self.client.disconnect()
-            except Exception as e:
-                logger.debug(f"Ошибка отключения auth-клиента: {type(e).__name__}")
+                if getattr(client, "is_connected", False):
+                    try:
+                        await client.disconnect()
+                        return
+                    except Exception as exc:
+                        logger.debug("Ошибка отключения auth-клиента: %s", type(exc).__name__)
+                # Pyrogram sets is_connected only after session.start(). A cancelled
+                # connect() can already own a socket and open SQLite storage.
+                try:
+                    session = getattr(client, "session", None)
+                    if session is not None:
+                        await session.stop()
+                except Exception as exc:
+                    logger.debug("Ошибка остановки auth-сессии: %s", type(exc).__name__)
+                finally:
+                    storage = getattr(client, "storage", None)
+                    if storage is not None:
+                        try:
+                            await storage.close()
+                        except Exception as exc:
+                            logger.debug("Ошибка закрытия auth-хранилища: %s", type(exc).__name__)
             finally:
                 self.client = None
+
+    async def _clear_auth(self):
+        if self._expiry_task is not None and self._expiry_task is not asyncio.current_task():
+            self._expiry_task.cancel()
+        self._expiry_task = None
+        try:
+            await self._disconnect_client()
+        finally:
+            self._remove_state()
+            self._pending_auth = None
+            self.phone_code_hash = None
+            self.phone = None
+            self._state_id = None
+            if self._session_lock is not None:
+                self._session_lock.close()
+                self._session_lock = None
+
+    async def _expire_auth(self):
+        await asyncio.sleep(AUTH_STATE_TTL)
+        async with self._async_operation_lock:
+            await self._clear_auth()
+
+    def _run_operation(self, factory, timeout, timeout_message):
+        with self._auth_operation_lock:
+            if self._operation_done is not None and not self._operation_done.is_set():
+                raise RuntimeError(
+                    "Предыдущая авторизация ещё освобождает соединение. Повторите позже."
+                )
+            self._ensure_loop()
+            done = threading.Event()
+            self._operation_done = done
+
+            async def run():
+                try:
+                    return await factory()
+                finally:
+                    done.set()
+
+            future = asyncio.run_coroutine_threadsafe(run(), self.loop)
+            try:
+                return future.result(timeout=timeout)
+            except TimeoutError:
+                future.cancel()
+                # A cancelled concurrent Future completes before coroutine cleanup does.
+                done.wait(5)
+                raise TimeoutError(timeout_message)
 
     def send_code(self, api_id: str, api_hash: str, phone: str) -> str:
         if not PYROGRAM_AVAILABLE:
             raise RuntimeError("Pyrogram не установлен. Установите pyrogram и tgcrypto.")
 
-        with self._auth_operation_lock:
-            self._ensure_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_send_code(api_id, api_hash, phone), self.loop
-            )
-            try:
-                return future.result(timeout=90)
-            except TimeoutError:
-                future.cancel()
-                raise TimeoutError("Telegram слишком долго отвечает на запрос кода (90 сек).")
+        return self._run_operation(
+            lambda: self._async_send_code(api_id, api_hash, phone),
+            90,
+            "Telegram слишком долго отвечает на запрос кода (90 сек).",
+        )
 
     async def _async_send_code(self, api_id: str, api_hash: str, phone: str) -> str:
+        async with self._async_operation_lock:
+            return await self._send_code(api_id, api_hash, phone)
+
+    async def _send_code(self, api_id, api_hash, phone):
         api_id_int, api_hash_clean = self._validate_api(api_id, api_hash)
         phone_clean = self._normalize_phone(phone)
 
+        if self._state_id is None and auth_state_active(self.state_file):
+            raise RuntimeError("Авторизация Telegram уже открыта в другом окне КРЕСТ.")
+        await self._clear_auth()
+        from process_lock import ProcessLock
+
+        session_lock = ProcessLock(os.path.join(BASE_DIR, ".tg_auth.lock"))
+        if not session_lock.acquire():
+            raise RuntimeError("Авторизация Telegram уже открыта в другом окне КРЕСТ.")
+        self._session_lock = session_lock
+        self._state_id = uuid.uuid4().hex
         logger.info("Запрашиваем код Telegram")
-        self._write_state({"status": "sending_code", "phone": phone_clean})
 
         try:
-            await self._disconnect_client()
+            self._write_state({"status": "sending_code"})
 
             probe = Client(
                 SESSION_NAME,
@@ -396,16 +514,9 @@ class AuthManager:
             self.phone_code_hash = sent_code_info.phone_code_hash
             self.phone = phone_clean
 
-            self._write_state(
-                {
-                    "status": "code_sent",
-                    "api_id": api_id_int,
-                    "api_hash": api_hash_clean,
-                    "phone": phone_clean,
-                    "phone_code_hash": self.phone_code_hash,
-                    "created_at": time.time(),
-                }
-            )
+            self._pending_auth = {"api_id": api_id_int, "api_hash": api_hash_clean}
+            self._write_state({"status": "code_sent"})
+            self._expiry_task = asyncio.create_task(self._expire_auth())
 
             logger.info(
                 "Запрос кода Telegram принят. Код обычно приходит в Telegram-приложение, "
@@ -413,50 +524,42 @@ class AuthManager:
             )
             return "Запрос кода авторизации успешно отправлен Telegram."
 
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             logger.error("Ошибка запроса кода Telegram: %s", type(exc).__name__)
-            await self._disconnect_client()
-            self._remove_state()
-            self.phone_code_hash = None
+            await self._clear_auth()
             raise
 
     def login(self, code: str, password_callback=None) -> str:
         if not PYROGRAM_AVAILABLE:
             raise RuntimeError("Pyrogram не установлен. Установите pyrogram и tgcrypto.")
 
-        with self._auth_operation_lock:
-            self._ensure_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_login(code, password_callback), self.loop
-            )
-            try:
-                return future.result(timeout=180)
-            except TimeoutError:
-                future.cancel()
-                raise TimeoutError("Авторизация Telegram слишком долго выполняется (180 сек).")
+        return self._run_operation(
+            lambda: self._async_login(code, password_callback),
+            180,
+            "Авторизация Telegram слишком долго выполняется (180 сек).",
+        )
 
     async def _async_login(self, code: str, password_callback=None) -> str:
+        async with self._async_operation_lock:
+            return await self._login(code, password_callback)
+
+    async def _login(self, code, password_callback):
         code_clean = str(code or "").strip().replace(" ", "")
         if not code_clean:
             raise ValueError("Код Telegram не введён!")
 
-        data = None
         try:
-            if not os.path.exists(self.state_file):
+            if not self._pending_auth or not self.phone_code_hash:
                 raise ValueError(
-                    "Сначала нажмите «Отправить код» и дождитесь подтверждения запроса."
+                    "Нажмите «Получить код» и дождитесь подтверждения запроса. "
+                    "После перезапуска КРЕСТ незавершённую авторизацию нужно начать заново."
                 )
-
-            with open(self.state_file, "r", encoding="utf-8-sig") as f:
-                data = json.load(f)
-
-            if data.get("status") != "code_sent":
-                raise ValueError("Код ещё не был запрошен. Сначала нажмите «Отправить код».")
-
-            api_id = int(data["api_id"])
-            api_hash = str(data["api_hash"]).strip()
-            self.phone = data["phone"]
-            self.phone_code_hash = data["phone_code_hash"]
+            if self._expiry_task is not None:
+                self._expiry_task.cancel()
+                self._expiry_task = None
+            self._write_state({"status": "signing_in"})
+            api_id = self._pending_auth["api_id"]
+            api_hash = self._pending_auth["api_hash"]
 
             # Переиспользуем то же самое подключение, чтобы Telegram не сбрасывал хэш кода
             if self.client is None or not getattr(self.client, "is_connected", False):
@@ -518,9 +621,7 @@ class AuthManager:
             logger.error("Ошибка авторизации Telegram: %s", type(exc).__name__)
             raise
         finally:
-            await self._disconnect_client()
-            self._remove_state()
-            self.phone_code_hash = None
+            await self._clear_auth()
 
 
 _auth_mgr = AuthManager()
@@ -552,7 +653,7 @@ def start_tg_bridge(notifications_queue=None):
             time.sleep(3)
             continue
 
-        if os.path.exists(state_file):
+        if auth_state_active(state_file):
             time.sleep(1)
             continue
 
@@ -597,7 +698,7 @@ def start_tg_bridge(notifications_queue=None):
             async def watch_auth_state():
                 while True:
                     await asyncio.sleep(0.5)
-                    if os.path.exists(state_file):
+                    if auth_state_active(state_file):
                         logger.info("GUI начала авторизацию Telegram — освобождаем session.")
                         stop_reason["value"] = "AUTH_REQUIRED"
                         stop_event.set()

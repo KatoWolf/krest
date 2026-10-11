@@ -197,6 +197,29 @@ class AssistantRuntime:
         return "Задание уже завершено или не поддерживает остановку"
 
     def _execute(self, text, source="text", confidence=None):
+        if source == "remote":
+            from remote_policy import authorize
+
+            allowed, reason = authorize(text, self.settings())
+            if not allowed:
+                result = CommandResult(True, False, reason)
+                self.events.put(("result", result))
+                return result
+            # Keep the original allowlisted command in the queue. Translate
+            # transport aliases only after checking the current policy again.
+            text = {"плей": "включи музыку", "🎵 плей / пауза": "пауза"}.get(
+                text.strip().casefold(), text
+            )
+            from speech_tools import normalize_command
+
+            resolved = normalize_command(text, self.settings().get("command_aliases", {}))
+            if resolved != text:
+                allowed, reason = authorize(resolved, self.settings())
+                if not allowed:
+                    result = CommandResult(True, False, reason)
+                    self.events.put(("result", result))
+                    return result
+            text = resolved
         cfg = self.settings().get("app_settings", {})
         wake, command = check_wake_word(text, cfg.get("wake_word", "крест"))
         from speech_tools import normalize_command
@@ -252,19 +275,32 @@ class AssistantRuntime:
             return result
         from skills import gid
 
-        if gid.dota_state.waiting_for_user_answer:
+        if source in ("text", "voice") and gid.dota_state.waiting_for_user_answer:
             if command.strip().casefold() in ("да", "давай", "конечно"):
                 command = "включи гид"
             elif command.strip().casefold() in ("нет", "не надо", "отмена"):
                 command = "отмена гида"
         observed("Передано на выполнение")
-        normalized = normalize_command(command, self.settings().get("command_aliases", {}))
-        followup = self.context.handle(normalized) if source != "scenario" else None
+        normalized = (
+            command if source == "remote"
+            else normalize_command(command, self.settings().get("command_aliases", {}))
+        )
+        followup = self.context.handle(normalized) if source in ("text", "voice") else None
+        dialogue_before = (
+            getattr(self.state, "_dialogue_topic", None),
+            getattr(self.state, "_dialogue_updated_at", None),
+        )
         result = (
             CommandResult(True, followup.success, followup.text)
             if followup is not None
+            else self.manager.execute(command, self.state, normalize=False)
+            if source == "remote"
             else self.manager.execute(command, self.state)
         )
+        if source in ("text", "voice"):
+            result = self._local_dialogue(normalized, result)
+        else:
+            self.state._dialogue_topic, self.state._dialogue_updated_at = dialogue_before
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         self.last_result = result
         if result.text and not result.responded:
@@ -272,6 +308,51 @@ class AssistantRuntime:
         if result.skill_id.startswith("skills.media."):
             self.publish_notice(result.text, "Музыка", "low", speak=False)
         self.events.put(("result", result))
+        return result
+
+    def _local_dialogue(self, command, result):
+        """Local conversation fallback never dispatches or repeats a skill."""
+        from personality import clarification, continuation
+
+        now = time.monotonic()
+        clean = command.casefold().strip(" .!?")
+        if not result.handled:
+            if clean in ("повтори ответ", "повтори последний ответ", "что ты сказала"):
+                previous = getattr(self, "_last_local_reply", None)
+                text = (
+                    previous[1]
+                    if previous and 0 <= now - previous[0] < 120
+                    else "Нет недавнего ответа для повторения. Назовите команду целиком."
+                )
+                return CommandResult(True, bool(previous and 0 <= now - previous[0] < 120), text)
+            continued = (
+                continuation(self.state, clean)
+                if self.settings().get("skills", {}).get("interactive", True)
+                else None
+            )
+            if continued is not None:
+                result = CommandResult(True, True, continued)
+            else:
+                previous = getattr(self, "_unknown_local", None)
+                repeated = bool(previous and previous[1] == clean and now - previous[0] < 120)
+                self._unknown_local = (now, clean)
+                result = CommandResult(
+                    False, False,
+                    clarification(self.state, repeated, self.manager.suggest(command)),
+                )
+        if result.handled:
+            self._unknown_local = None
+            # Successful commands unrelated to chat end the conversational topic.
+            if result.skill_id and result.skill_id not in {
+                "skills.interactive.greet", "skills.interactive.thanks",
+                "skills.interactive.identity", "skills.interactive.mood",
+                "skills.interactive.support", "skills.interactive.joke",
+                "skills.interactive.conversation", "skills.interactive.bored",
+                "skills.interactive.evening", "skills.interactive.fact",
+            }:
+                self.state._dialogue_topic = None
+        if result.text:
+            self._last_local_reply = (now, result.text)
         return result
 
     def _commands(self):

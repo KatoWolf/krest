@@ -19,8 +19,9 @@ def deliver_notification(text, cfg):
     token = os.getenv("KREST_BOT_TOKEN") or keys.get("krest_bot_token", "")
     owner = str(keys.get("telegram_owner_id", ""))
     if not token or not owner.isdigit() or int(owner) <= 0:
-        emit("error", "Событие сохранено в Крест. Для Telegram заполните Bot Token и ID владельца.")
-        return
+        error = "Событие сохранено в Крест. Для Telegram заполните Bot Token и ID владельца."
+        emit("error", error, capabilities=["refresh"])
+        return error
     try:
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -31,10 +32,10 @@ def deliver_notification(text, cfg):
         if response.json().get("ok") is not True:
             raise ValueError("Telegram rejected notification")
     except (requests.RequestException, ValueError):
-        emit(
-            "error",
-            "Событие сохранено в Крест, но Telegram не подтвердил доставку. Откройте диалог с ботом и проверьте настройки.",
-        )
+        error = "Событие сохранено в Крест, но Telegram не подтвердил доставку. Откройте диалог с ботом и проверьте настройки."
+        emit("error", error, capabilities=["refresh"])
+        return error
+    return ""
 
 
 class SteamHealthReporter:
@@ -42,6 +43,10 @@ class SteamHealthReporter:
 
     def __init__(self):
         self.error = ""
+        self.delivery_error = ""
+
+    def notify(self, text, cfg):
+        self.delivery_error = deliver_notification(text, cfg) or ""
 
     def fail(self, message):
         self.error = message
@@ -59,12 +64,40 @@ class SteamHealthReporter:
             # Local manifests do not demonstrate restored API connectivity.
             emit("error", self.error, capabilities=["refresh"])
             return
-        summary = f"Игр: {len(data.get('games', []))}"
         if remote:
             self.error = ""
+        if not cfg.get("steam", {}).get("telegram_notifications", False):
+            self.delivery_error = ""
+        if self.delivery_error:
+            emit("error", self.delivery_error, capabilities=["refresh"])
+            return
+        summary = f"Игр: {len(data.get('games', []))}"
+        if remote:
             emit("ready", summary, capabilities=["refresh"])
         else:
             emit("status", summary)
+
+
+class RefreshSchedule:
+    """Coalesce refresh clicks while preserving one request during the cooldown."""
+
+    def __init__(self):
+        self.pending = False
+        self.last_manual = float("-inf")
+        self.next_remote = 0
+
+    def due(self, now, requested=False):
+        self.pending = self.pending or requested
+        manual = self.pending and now - self.last_manual >= 60
+        if manual:
+            self.pending = False
+            self.last_manual = now
+        return now >= self.next_remote or manual
+
+    def wait_seconds(self, now, interval):
+        if self.pending:
+            return min(interval, max(0, self.last_manual + 60 - now))
+        return interval
 
 
 def main():
@@ -76,33 +109,31 @@ def main():
                 refresh.set()
 
     threading.Thread(target=read_control, daemon=True).start()
+    health = SteamHealthReporter()
     monitor = SteamMonitor(
         data_dir() / "steam_state.json",
-        lambda text: deliver_notification(text, ConfigManager().snapshot()),
+        lambda text: health.notify(text, ConfigManager().snapshot()),
     )
-    health = SteamHealthReporter()
     emit("status", "Монитор Steam выполняет первую проверку")
-    next_remote = 0
-    last_manual = -60
+    schedule = RefreshSchedule()
     while True:
         cfg = ConfigManager().snapshot()
         now = time.monotonic()
-        manual = refresh.is_set() and now - last_manual >= 60
-        if manual:
-            last_manual = now
-        remote = now >= next_remote or manual
-        refresh.clear()
+        requested = refresh.is_set()
+        if requested:
+            refresh.clear()
+        remote = schedule.due(now, requested)
         try:
             data = monitor.refresh(cfg, remote=remote)
             health.report(data, cfg, remote)
         except Exception as exc:
             health.fail(f"Проверка Steam не завершена: {type(exc).__name__}")
         if remote:
-            next_remote = now + int(
+            schedule.next_remote = time.monotonic() + int(
                 cfg.get("steam", {}).get("poll_minutes", 15)
             ) * 60 * shared_multiplier(data_dir())
 
-        refresh.wait(30 * shared_multiplier(data_dir()))
+        refresh.wait(schedule.wait_seconds(time.monotonic(), 30 * shared_multiplier(data_dir())))
 
 
 if __name__ == "__main__":

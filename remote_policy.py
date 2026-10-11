@@ -42,6 +42,8 @@ def session_locked():
 
 
 def authorize(text, settings, locked=None):
+    if not isinstance(text, str) or len(text) > 2000:
+        return False, "Команда слишком длинная: максимум 2000 символов."
     cfg = settings.get("remote_control", {})
     if not cfg.get("enabled", False):
         return False, "Удалённые команды выключены в меню Крест."

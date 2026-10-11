@@ -222,10 +222,9 @@ class Kernel:
             allowed, reason = authorize(str(args["original"]), self.settings())
             if not allowed:
                 raise ValueError(reason)
-            aliases = {"плей": "включи музыку", "🎵 плей / пауза": "пауза"}
             original = str(args["original"]).strip().casefold()
             return rt.submit(
-                aliases.get(original, original),
+                original,
                 source="remote",
                 request_key=args.get("request_key"),
             )

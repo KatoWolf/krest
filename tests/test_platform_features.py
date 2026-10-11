@@ -439,6 +439,7 @@ def test_telegram_owner_allowlist_and_actual_kernel_result(tmp_path, monkeypatch
     config = ConfigManager(tmp_path / "config.json")
     cfg = config.snapshot()
     cfg["remote_control"].update(enabled=True, block_when_locked=False, allowed_commands=["время"])
+    cfg["api_keys"]["telegram_owner_id"] = "123"
     config.save_config(cfg)
     monkeypatch.setattr(configuration, "ConfigManager", lambda: config)
     monkeypatch.setattr(krest_bot, "MY_ID", 123)
