@@ -15,6 +15,7 @@ from performance import PerformancePolicy
 from scenarios import ScenarioRunner
 from notification_center import NotificationCenter, should_speak
 from command_context import CommandContext
+from speech_recognition import TRANSPORT_SKILLS
 from platform_store import JobStore, MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class AssistantRuntime:
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
             self.start_voice()
 
-    def submit(self, text, source="text", confidence=None, request_key=None, alternatives=None):
+    def submit(self, text, source="text", confidence=None, request_key=None):
         text = text.strip()
         if not text:
             return False
@@ -156,7 +157,7 @@ class AssistantRuntime:
             if not fresh:
                 return True
             try:
-                self.requests.put_nowait((text, source, confidence, job_id, alternatives))
+                self.requests.put_nowait((text, source, confidence, job_id))
                 return True
             except queue.Full:
                 self.jobs.transition(job_id, "cancelled", "Очередь заполнена")
@@ -180,7 +181,7 @@ class AssistantRuntime:
         with self._request_lock:
             return self.current_command, self.requests.qsize()
 
-    def execute(self, text, source="text", confidence=None, alternatives=None):
+    def execute(self, text, source="text", confidence=None):
         with self._execute_lock:
             ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
             if not self.jobs.transition(ident, "running"):
@@ -192,7 +193,7 @@ class AssistantRuntime:
             with self._jobs_lock:
                 self._active_jobs[ident] = token
             try:
-                result = self._execute(text, source, confidence, alternatives)
+                result = self._execute(text, source, confidence)
                 status = (
                     "completed" if result.success else "cancelled" if token.is_set() else "failed"
                 )
@@ -232,7 +233,7 @@ class AssistantRuntime:
             self._last_voice_retry = now
             voice.speak("Не расслышала. Повтори, пожалуйста.")
 
-    def _execute(self, text, source="text", confidence=None, alternatives=None):
+    def _execute(self, text, source="text", confidence=None):
         cfg = self.settings().get("app_settings", {})
         if source == "voice":
             from speech_recognition import decode_voice_command
@@ -262,13 +263,6 @@ class AssistantRuntime:
             if not wake and time.monotonic() > self._active_until:
                 observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
-            from speech_recognition import resolve_media_alternative
-
-            recovered = resolve_media_alternative(
-                self.manager, command, alternatives, self.settings(), wake
-            )
-            if recovered:
-                command, confidence = recovered
             if confidence is not None and confidence * 100 < cfg.get("speech_confidence", 60):
                 observed("Низкая уверенность — повторите фразу")
                 result = CommandResult(
@@ -322,7 +316,7 @@ class AssistantRuntime:
                 source == "voice"
                 and result.success
                 and self.performance.active == "game"
-                and result.skill_id.startswith("skills.media.")
+                and result.skill_id in TRANSPORT_SKILLS
             ):
                 voice.speak("Готово.")
             else:
@@ -338,7 +332,7 @@ class AssistantRuntime:
                 if self.stop_event.is_set():
                     break
                 try:
-                    text, source, confidence, job_id, alternatives = self.requests.get_nowait()
+                    text, source, confidence, job_id = self.requests.get_nowait()
                 except queue.Empty:
                     text = None
                 if text is not None:
@@ -348,9 +342,7 @@ class AssistantRuntime:
                 continue
             try:
                 self._job_local.current = job_id
-                if alternatives:
-                    self.execute(text, source, confidence=confidence, alternatives=alternatives)
-                elif confidence is None:
+                if confidence is None:
                     self.execute(text, source)
                 else:
                     self.execute(text, source, confidence=confidence)
@@ -576,13 +568,7 @@ class AssistantRuntime:
                         )
                     )
                 if text:
-                    recognition = voice.recognition()
-                    self.submit(
-                        text,
-                        "voice",
-                        recognition.get("confidence"),
-                        alternatives=recognition.get("alternatives"),
-                    )
+                    self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
             failure = str(exc)
             self.events.put(("error", f"Голос: {exc}"))
