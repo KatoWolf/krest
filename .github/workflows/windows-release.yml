@@ -18,8 +18,12 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 120
+    # Compiler has its own 180-minute deadline; leave time for cleanup and evidence.
+    timeout-minutes: 300
     steps:
+      - name: Configure Nuitka cache
+        shell: pwsh
+        run: '"NUITKA_CACHE_DIR=$env:RUNNER_TEMP/nuitka-cache" >> $env:GITHUB_ENV'
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -42,11 +46,22 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress }
+      - name: Restore Nuitka cache
+        id: nuitka-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.NUITKA_CACHE_DIR }}
+          key: nuitka-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('requirements*.txt', 'packaging/build_windows.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('requirements*.txt', 'packaging/build_windows.py') }}-
       - name: Compile Windows executable
-        run: python packaging/build_windows.py --stage compile
+        timeout-minutes: 190
+        run: python packaging/build_windows.py --stage compile --compile-timeout-minutes 180
       - name: Verify packaged kernel and speech models
+        timeout-minutes: 25
         run: python packaging/build_windows.py --stage verify
       - name: Create installer from verified distribution
+        timeout-minutes: 15
         run: python packaging/build_windows.py --stage installer
       - uses: actions/upload-artifact@v4
         with:
@@ -55,17 +70,29 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
+        timeout-minutes: 5
         with:
           name: Krest-compilation-report
           path: build/windows/compilation-report.xml
       - uses: actions/upload-artifact@v4
         if: always()
+        timeout-minutes: 10
         with:
           name: Krest-release-diagnostics
           path: |
             test-results.xml
             build/windows/*.log
+            build/windows/*.json
+            build/windows/main.build/*.log
+            build/windows/main.build/scons-report.txt
             build/windows/release-checks/
             build/windows/verified-distribution.json
             nuitka-crash-report.xml
           if-no-files-found: warn
+      - name: Save Nuitka cache
+        if: ${{ always() && !cancelled() && steps.nuitka-cache.outputs.cache-primary-key != '' && steps.nuitka-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        timeout-minutes: 10
+        with:
+          path: ${{ env.NUITKA_CACHE_DIR }}
+          key: ${{ steps.nuitka-cache.outputs.cache-primary-key }}

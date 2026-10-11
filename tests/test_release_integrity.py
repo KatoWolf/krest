@@ -159,3 +159,69 @@ def test_kernel_shutdown_timeout_is_a_failed_release_check(tmp_path, monkeypatch
     monkeypatch.setattr(release_smoke.time, "sleep", lambda seconds: None)
     with pytest.raises(RuntimeError, match="не завершилось"):
         release_smoke.check_kernel(tmp_path / "config.json")
+
+
+@pytest.mark.parametrize("exitcode,status", [(0, "succeeded"), (7, "failed")])
+def test_build_log_records_completion(builder, tmp_path, exitcode, status):
+    log = tmp_path / "compiler.log"
+    command = [sys.executable, "-c", f"print('compiler evidence'); raise SystemExit({exitcode})"]
+    if exitcode:
+        with pytest.raises(subprocess.CalledProcessError):
+            builder.run_checked(command, log_path=log, timeout=5)
+    else:
+        builder.run_checked(command, log_path=log, timeout=5)
+    data = json.loads(Path(str(log) + ".status.json").read_text())
+    assert data["status"] == status
+    assert data["returncode"] == exitcode
+    assert data["timeout_seconds"] == 5
+    assert "compiler evidence" in log.read_text()
+
+
+def test_build_timeout_preserves_partial_log(builder, tmp_path):
+    log = tmp_path / "compiler.log"
+    with pytest.raises(subprocess.TimeoutExpired):
+        builder.run_checked(
+            [
+                sys.executable,
+                "-c",
+                "import time; print('before timeout', flush=True); time.sleep(60)",
+            ],
+            log_path=log,
+            timeout=1,
+        )
+    data = json.loads(Path(str(log) + ".status.json").read_text())
+    assert data["status"] == "timeout"
+    assert data["elapsed_seconds"] < 10
+    assert "before timeout" in log.read_text()
+
+
+def test_windows_timeout_kills_owned_process_tree(builder, monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr(builder, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(builder.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    process = SimpleNamespace(pid=123, poll=lambda: 0, wait=lambda **kw: 0)
+    builder.stop_process_tree(process)
+    assert calls == [["taskkill", "/PID", "123", "/T", "/F"]]
+
+
+@pytest.mark.parametrize("cuda", [None, "12.0"])
+def test_preflight_rejects_gpu_runtime_and_preserves_evidence(builder, tmp_path, monkeypatch, cuda):
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    (tmp_path / "torch.py").write_text(
+        "from types import SimpleNamespace\n"
+        "__version__ = 'test'\n"
+        f"version = SimpleNamespace(cuda={cuda!r}, hip=None)\n"
+        "package = SimpleNamespace(PackageImporter=object)\n"
+        "jit = SimpleNamespace(load=object)\n"
+    )
+    if cuda:
+        with pytest.raises(subprocess.CalledProcessError):
+            builder.build_preflight(tmp_path, ["compiler"])
+    else:
+        builder.build_preflight(tmp_path, ["compiler"])
+    data = json.loads((tmp_path / "build-environment.json").read_text())
+    assert data["command"] == ["compiler"]
+    assert data["packages"]
+    assert '"torch": "test"' in (tmp_path / "torch-preflight.log").read_text()

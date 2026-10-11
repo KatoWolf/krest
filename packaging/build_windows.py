@@ -9,9 +9,29 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.9.0"
+
+
+def stop_process_tree(process):
+    """A timed-out compiler must not leave SCons/MSVC children holding logs open."""
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # Still attempt to stop the owned parent below.
+    if process.poll() is None:
+        process.kill()
+    process.wait(timeout=30)
 
 
 def run_checked(command, **kwargs):
@@ -23,8 +43,27 @@ def run_checked(command, **kwargs):
     if log_path:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     timeout = kwargs.pop("timeout", None)
+    started = time.monotonic()
+    started_at = datetime.now(timezone.utc).isoformat()
     kwargs.pop("check", None)
     tail = deque(maxlen=35)
+
+    def record(status, **extra):
+        if log_path:
+            Path(str(log_path) + ".status.json").write_text(
+                json.dumps(
+                    {
+                        "status": status,
+                        "timeout_seconds": timeout,
+                        "started_at": started_at,
+                        "elapsed_seconds": round(time.monotonic() - started, 2),
+                        **extra,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    record("starting")
     with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -49,12 +88,15 @@ def run_checked(command, **kwargs):
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         try:
+            record("running", pid=process.pid)
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            process.kill()
+            record("timeout", pid=process.pid)
+            stop_process_tree(process)
             raise
         finally:
             reader.join(timeout=3)
+        record("succeeded" if code == 0 else "failed", returncode=code)
         if code:
             detail = "".join(line for line in tail if not line.startswith("Nuitka-Options:"))[
                 -3000:
@@ -64,6 +106,46 @@ def run_checked(command, **kwargs):
                 flush=True,
             )
             raise subprocess.CalledProcessError(code, command)
+
+
+def build_preflight(output, command):
+    """Persist evidence before a compiler can hang; do not collect environment secrets."""
+    import importlib.metadata
+    import platform
+
+    (output / "build-environment.json").write_text(
+        json.dumps(
+            {
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "python": sys.version,
+                "platform": platform.platform(),
+                "cpu_count": os.cpu_count(),
+                "runner_image": os.getenv("ImageVersion"),
+                "command": command,
+                "packages": sorted(
+                    (d.metadata.get("Name", ""), d.version)
+                    for d in importlib.metadata.distributions()
+                ),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    run_checked(
+        [
+            sys.executable,
+            "-c",
+            "import json,torch; print(json.dumps({'torch':torch.__version__,"
+            "'cuda':torch.version.cuda,'hip':getattr(torch.version,'hip',None)}),flush=True); "
+            "assert torch.version.cuda is None and getattr(torch.version,'hip',None) is None, "
+            "'Install the CPU PyTorch wheel before packaging'; "
+            "assert hasattr(torch.package,'PackageImporter'); assert hasattr(torch.jit,'load')",
+        ],
+        cwd=ROOT,
+        timeout=120,
+        log_path=output / "torch-preflight.log",
+    )
 
 
 def compiler_command(output):
@@ -79,6 +161,7 @@ def compiler_command(output):
         "--assume-yes-for-downloads",
         "--msvc=latest",
         "--jobs=2",
+        "--show-memory",
         "--windows-console-mode=attach",
         "--enable-plugin=tk-inter",
         "--module-parameter=torch-disable-jit=no",
@@ -258,8 +341,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--skip-installer", action="store_true")
+    parser.add_argument("--compile-timeout-minutes", type=int, default=180)
     parser.add_argument("--stage", choices=("all", "compile", "verify", "installer"), default="all")
     args = parser.parse_args()
+    if not 1 <= args.compile_timeout_minutes <= 300:
+        parser.error("--compile-timeout-minutes must be between 1 and 300")
     output = ROOT / "build" / "windows"
     command = compiler_command(output)
     if args.plan:
@@ -275,7 +361,13 @@ def main():
     dist = output / "main.dist"
     if args.stage in ("all", "compile"):
         (output / "verified-distribution.json").unlink(missing_ok=True)
-        run_checked(command, cwd=ROOT, log_path=output / "compile.log")
+        build_preflight(output, command)
+        run_checked(
+            command,
+            cwd=ROOT,
+            log_path=output / "compile.log",
+            timeout=args.compile_timeout_minutes * 60,
+        )
         print("::notice::Compilation finished.", flush=True)
     if args.stage in ("all", "verify"):
         verify_distribution(dist)

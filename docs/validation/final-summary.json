@@ -1,24 +1,24 @@
 {
   "base": "4c5be67",
-  "prior_revision": "6a934b7251944eb187b621a41e72f1dc36669832",
+  "prior_revision": "7befbbe652dc192a860c762315fa4cade5b0c86a",
   "scope": "Linux offline validation; Windows installer unbuilt; no live accounts",
   "skills": 167,
   "tests": {
     "312": {
-      "tests": 719,
+      "tests": 725,
       "errors": 0,
       "failures": 0,
       "skipped": 3,
-      "passed": 716,
-      "seconds": 35.312
+      "passed": 722,
+      "seconds": 39.282
     },
     "313": {
-      "tests": 719,
+      "tests": 725,
       "errors": 0,
       "failures": 0,
       "skipped": 3,
-      "passed": 716,
-      "seconds": 36.681
+      "passed": 722,
+      "seconds": 38.575
     }
   },
   "ui": {
@@ -139,5 +139,13 @@
     },
     "callback_errors": []
   },
-  "screenshots": 29
+  "screenshots": 29,
+  "build_recovery": {
+    "static_yaml": "passed",
+    "compiler_timeout_minutes": 180,
+    "step_timeout_minutes": 190,
+    "job_timeout_minutes": 300,
+    "windows_run": false,
+    "cache_speed_measured": false
+  }
 }
