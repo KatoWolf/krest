@@ -19,6 +19,8 @@ def request(operation, data=None, action=""):
         raise MediaError("Кнопки настольных плееров доступны в Windows.")
     from app_paths import app_command
 
+    # Frozen Windows can decode stdin using the legacy console codepage.
+    # Keep the wire protocol ASCII; JSON restores Cyrillic labels exactly.
     payload = json.dumps(
         {"operation": operation, "data": data or {}, "action": action}, ensure_ascii=False
     )
@@ -82,7 +84,10 @@ def run_worker():
             with uia_apartment():
                 from pywinauto import Desktop
 
-                result = {"windows": len(Desktop(backend="uia").windows())}
+                result = {
+                    "windows": len(Desktop(backend="uia").windows()),
+                    "echo": data.get("title", ""),
+                }
         else:
             raise MediaError("Неизвестное действие помощника плеера.")
         response = {"result": result}
@@ -90,5 +95,5 @@ def run_worker():
     except Exception as exc:
         response = {"error": str(exc)}
         code = 1
-    print(PREFIX + json.dumps(response, ensure_ascii=False), flush=True)
+    print(PREFIX + json.dumps(response, ensure_ascii=True), flush=True)
     return code

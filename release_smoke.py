@@ -115,8 +115,13 @@ def check_dependencies():
 
         print("Проверка изолированного UI Automation из фоновых потоков…", flush=True)
         with ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(lambda _: request("probe"), range(2)))
-        if any(not isinstance(r.get("windows"), int) for r in results):
+            results = list(
+                pool.map(lambda _: request("probe", {"title": "Музыка • проверка"}), range(2))
+            )
+        if any(
+            not isinstance(r.get("windows"), int) or r.get("echo") != "Музыка • проверка"
+            for r in results
+        ):
             raise RuntimeError("Помощник плеера не вернул результат UI Automation")
         print("UI Automation: оба помощника завершились без нажатий.", flush=True)
     import torch
