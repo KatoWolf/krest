@@ -64,7 +64,7 @@ SESSION_PATH = os.path.join(BASE_DIR, f"{SESSION_NAME}.session")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [TG-BRIDGE]: %(message)s")
 logger = logging.getLogger("TGBridge")
 
-from auto_replies import ReplyGate
+from auto_replies import ReplyGate, urgent
 
 reply_gate = ReplyGate()
 
@@ -166,7 +166,7 @@ async def auto_reply(client, message):
         del last_outgoing[k]
 
     text = message.text.lower() if message.text else ""
-    is_urgent = any(word in text for word in ["срочно", "важно", "горит", "ответь"])
+    is_urgent = urgent(text)
 
     from configuration import ConfigManager
 
