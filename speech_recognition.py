@@ -1,4 +1,4 @@
-"""Conservative repairs for short music commands from the existing Vosk model."""
+"""Conservative repairs for short audio commands from the existing Vosk model."""
 
 import re
 
@@ -6,6 +6,10 @@ from speech_tools import normalize_command, split_wake
 
 TRANSPORT_SKILLS = {
     "skills.media." + name for name in ("next_track", "prev_track", "pause_music", "play_music")
+}
+SHORT_AUDIO_SKILLS = TRANSPORT_SKILLS | {
+    "skills.discord_voice." + name
+    for name in ("mute_microphone", "unmute_microphone", "microphone_status")
 }
 
 
@@ -28,7 +32,7 @@ def decode_voice_command(manager, text, settings):
         command = "переключи трек"
     if near_wake:
         matched = manager.match(normalize_command(command, aliases))
-        if not matched or matched[0].id not in TRANSPORT_SKILLS:
+        if not matched or matched[0].id not in SHORT_AUDIO_SKILLS:
             return False, text
         return True, command
     return wake, command

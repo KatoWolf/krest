@@ -96,7 +96,7 @@ def apply_microphone(window, action):
             button.invoke()
     except Exception as exc:
         raise MediaError(
-            "Discord не подтвердил нажатие. Скажите «проверь микрофон в Дискорде» перед повтором."
+            "Discord не подтвердил нажатие. Скажите «Крест, я в муте» перед повтором."
         ) from exc
     for _ in range(10):
         time.sleep(0.15)
@@ -112,7 +112,7 @@ def apply_microphone(window, action):
             )
     raise MediaError(
         "Команда отправлена, но Discord не подтвердил состояние. "
-        "Скажите «проверь микрофон в Дискорде»."
+        "Скажите «Крест, я в муте»."
     )
 
 
