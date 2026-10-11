@@ -26,6 +26,10 @@ def service_presentation(detail, *, installed=True, premium=True, busy=False):
     elif error:
         title, tone = "Ошибка подключения", "danger"
         message = error + "\nПроверьте настройки доступа и журнал, затем переподключите сервис."
+    elif health in ("unknown", "reconnecting"):
+        title = "Переподключается" if health == "reconnecting" else "Связь не подтверждена"
+        tone = "sub_text"
+        message = detail.get("bridge", {}).get("text") or "Ожидается подтверждение связи от сервиса."
     elif health == "ready":
         title, tone = "Подключён", "accent"
         message = detail.get("bridge", {}).get("text") or "Сервис подтвердил готовность."

@@ -126,6 +126,8 @@ class IntegrationManager:
             "bridge": self.bridge.get(filename, {}),
             "health": "error"
             if self.errors.get(filename)
+            else self.bridge.get(filename, {}).get("health")
+            if running and self.bridge.get(filename, {}).get("health") in ("unknown", "reconnecting")
             else "ready"
             if self.bridge.get(filename, {}).get("ready") and running
             else "starting"
@@ -203,6 +205,9 @@ class IntegrationManager:
             }
         elif kind == "status":
             self.bridge.setdefault(filename, {})["text"] = message
+            if value.get("health") in ("unknown", "reconnecting"):
+                self.bridge[filename]["health"] = value["health"]
+                self.bridge[filename]["ready"] = False
         elif kind == "error":
             self.errors[filename] = message
             self.bridge[filename]["ready"] = False

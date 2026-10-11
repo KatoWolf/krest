@@ -93,6 +93,18 @@ def main():
                 original_details = app.integration.details
                 for state, detail in (
                     (
+                        "reconnecting",
+                        {"running": True, "health": "reconnecting", "bridge": {
+                            "text": "Тестовый пример: SDK Telegram восстанавливает соединение."
+                        }},
+                    ),
+                    (
+                        "unknown",
+                        {"running": True, "health": "unknown", "bridge": {
+                            "text": "Тестовый пример: ожидается подтверждение связи ответом API."
+                        }},
+                    ),
+                    (
                         "error",
                         {
                             "running": False,

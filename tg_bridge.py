@@ -111,7 +111,69 @@ async def get_local_status() -> dict:
         return {}
 
 
-async def status_updater(client):
+def session_transport_state(client):
+    """Read SDK events only; Client.is_connected is not a reconnect signal."""
+    session = getattr(client, "session", None)
+    # Pyrogram 2.0.106 uses is_started; some compatible SDKs expose is_connected.
+    for name in ("is_connected", "is_started"):
+        event = getattr(session, name, None)
+        probe = getattr(event, "is_set", None)
+        if callable(probe):
+            try:
+                value = probe()
+            except Exception:
+                return None
+            if isinstance(value, bool):
+                return value
+    return None
+
+
+class TelegramHealth:
+    def __init__(self, client):
+        self.client = client
+        self.state = "ready"  # The startup get_me call has just succeeded.
+
+    def _status(self, state):
+        if self.state == state:
+            return
+        from bridge_sdk import emit
+
+        self.state = state
+        text = (
+            "Telegram переподключается; SDK ещё не восстановил сессию"
+            if state == "reconnecting"
+            else "Связь Telegram пока не подтверждена; ожидается очередной ответ API"
+        )
+        emit("status", text, health=state)
+
+    def sample(self):
+        connected = session_transport_state(self.client)
+        if connected is False:
+            self._status("reconnecting")
+        elif connected is None or self.state == "reconnecting":
+            self._status("unknown")
+
+    def unconfirmed(self):
+        self._status("reconnecting" if session_transport_state(self.client) is False else "unknown")
+
+    def confirmed(self):
+        # An SDK Event.set alone is insufficient; called only after an existing API call.
+        if session_transport_state(self.client) is not True:
+            self.unconfirmed()
+            return
+        if self.state != "ready":
+            from bridge_sdk import emit
+
+            self.state = "ready"
+            emit("ready", "Telegram снова подтвердил связь ответом API")
+
+    async def watch(self):
+        while True:
+            self.sample()
+            await asyncio.sleep(1)
+
+
+async def status_updater(client, health=None):
     while True:
         try:
             status_data = await get_local_status()
@@ -127,11 +189,17 @@ async def status_updater(client):
                 new_bio = new_bio[:67] + "..."
 
             await client.update_profile(bio=new_bio)
+            if health is not None:
+                health.confirmed()
             logger.info(f"Обновлен Telegram Bio: {new_bio}")
         except FloodWait as e:
+            if health is not None:
+                health.unconfirmed()
             logger.warning(f"FloodWait от Telegram: ждем {e.value} секунд")
             await asyncio.sleep(e.value)
         except Exception as e:
+            if health is not None:
+                health.unconfirmed()
             logger.debug(f"Ошибка обновления статуса Bio: {type(e).__name__}")
 
         await asyncio.sleep(300)
@@ -692,6 +760,7 @@ def start_tg_bridge(notifications_queue=None):
         async def run_bot():
             updater_task = None
             auth_watch_task = None
+            health_task = None
             stop_event = asyncio.Event()
             stop_reason = {"value": "STOPPED"}
 
@@ -722,7 +791,9 @@ def start_tg_bridge(notifications_queue=None):
                     me.username or "нет username",
                 )
 
-                updater_task = asyncio.create_task(status_updater(app))
+                health = TelegramHealth(app)
+                health_task = asyncio.create_task(health.watch())
+                updater_task = asyncio.create_task(status_updater(app, health))
                 auth_watch_task = asyncio.create_task(watch_auth_state())
                 await stop_event.wait()
                 return stop_reason["value"]
@@ -742,9 +813,12 @@ def start_tg_bridge(notifications_queue=None):
                 logger.error("Ошибка Telegram юзербота: %s", type(exc).__name__)
                 return "ERROR"
             finally:
-                for task in (updater_task, auth_watch_task):
-                    if task and not task.done():
+                tasks = [task for task in (updater_task, auth_watch_task, health_task) if task]
+                for task in tasks:
+                    if not task.done():
                         task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
                 try:
                     await app.stop()
                 except Exception:

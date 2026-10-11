@@ -2,83 +2,83 @@
   "environment": "Linux / Xvfb; Python 3.13.5; offline profile; actual Tk widgets",
   "pages": {
     "actions": {
-      "first_ms": 6.36,
+      "first_ms": 6.2,
       "repeat_ms": [
-        5.13,
-        2.75,
-        2.67,
-        2.73,
-        3.22
+        5.06,
+        2.35,
+        4.07,
+        5.12,
+        2.79
       ]
     },
     "settings": {
-      "first_ms": 25.95,
+      "first_ms": 18.81,
       "repeat_ms": [
-        2.64,
-        2.89,
-        3.55,
-        4.28,
-        3.37
+        2.31,
+        3.01,
+        2.79,
+        2.57,
+        2.83
       ]
     },
     "appearance": {
-      "first_ms": 21.24,
+      "first_ms": 22.85,
       "repeat_ms": [
-        2.92,
-        2.89,
-        2.62,
-        2.57,
-        3.28
+        3.67,
+        3.77,
+        5.17,
+        3.16,
+        2.37
       ]
     },
     "bot_status": {
-      "first_ms": 26.71,
+      "first_ms": 31.18,
       "repeat_ms": [
-        6.43,
-        11.49,
+        9.35,
+        6.35,
+        8.18,
         8.98,
-        9.32,
-        8.66
+        6.06
       ]
     },
     "voice": {
-      "first_ms": 26.96,
+      "first_ms": 35.42,
       "repeat_ms": [
-        4.75,
-        3.59,
-        2.98,
-        2.87,
-        2.58
+        6.08,
+        10.69,
+        16.21,
+        9.04,
+        4.34
       ]
     },
     "skills": {
-      "first_ms": 57.56,
+      "first_ms": 119.55,
       "repeat_ms": [
-        3.37,
-        3.06,
-        3.28,
-        3.11,
-        3.89
+        4.69,
+        4.9,
+        4.53,
+        5.34,
+        5.34
       ]
     },
     "wf_home": {
-      "first_ms": 28.93,
+      "first_ms": 22.77,
       "repeat_ms": [
-        5.16,
-        6.45,
-        6.04,
-        6.22,
-        6.56
+        7.75,
+        8.08,
+        7.25,
+        9.57,
+        10.69
       ]
     }
   },
-  "startup_ms": 194.25,
+  "startup_ms": 212.62,
   "stress": {
     "transitions": 20,
     "theme_changes": 4,
     "remaining_transition_job": null,
     "remaining_canvas_items": 0,
-    "max_update_ms": 0.33
+    "max_update_ms": 5.44
   },
   "large_scale": {
     "scale_percent": 150,
