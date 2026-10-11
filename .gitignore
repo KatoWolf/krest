@@ -63,3 +63,5 @@ dist/
 test-results.xml
 
 nuitka-crash-report.xml
+
+warframe_route.json

@@ -36,6 +36,23 @@ def classify_screen(text):
     return {"screen": "unknown", "label": "Экран не распознан"}
 
 
+SCREEN_HINTS = {
+    "mission_complete": "Миссия завершена. Скажите «варфрейм сохрани момент» или «мои цели варфрейм».",
+    "mission_failed": "Проверьте выживаемость и моды. «Варфрейм проверь билд» и название сохранённой сборки.",
+    "relic_reward": "Сравните нужные вам компоненты. «Варфрейм рынок» и название предмета — поиск цены.",
+    "foundry": "Запомните таймер голосом: «варфрейм кузница форма на двадцать три часа».",
+    "arsenal": "Выберите сборку под миссию. «Варфрейм проверь билд» и имя вашей сохранённой сборки.",
+    "navigation": "«Варфрейм план на тридцать минут» — план по целям; «варфрейм где фармить нейроды» — справка.",
+}
+
+
+def screen_hint(screen):
+    return SCREEN_HINTS.get(
+        screen,
+        "«Открой сводку по миру» — события; «варфрейм план на тридцать минут» — план; «варфрейм где фармить нейроды» — ресурсы.",
+    )
+
+
 async def _read_image(image):
     from winsdk.windows.graphics.imaging import BitmapDecoder, BitmapPixelFormat, BitmapAlphaMode
     from winsdk.windows.media.ocr import OcrEngine
@@ -165,7 +182,7 @@ class GameVision:
                 self.state.update(
                     status="Ожидаю активное окно Warframe", screen="unknown", label=""
                 )
-            self.candidate = ""
+            self.candidate = self.confirmed = ""
         except Exception as exc:
             with self.lock:
                 self.state.update(

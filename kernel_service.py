@@ -362,7 +362,17 @@ class Kernel:
         if method == "dota":
             from skills import gid
 
-            cfg = self.config.snapshot()["dota_guide"]
+            settings = self.settings()
+            cfg = {**settings["dota_guide"], "steam_path": settings["steam"]["install_path"]}
+            if args["action"] == "reload":
+                gid.stop_service()
+                if (
+                    not settings.get("safe_mode")
+                    and cfg["enabled"]
+                    and settings["skills"].get("gid", True)
+                ):
+                    return gid.start_service(cfg)
+                return True
             if args["action"] == "start":
                 return gid.start_service(cfg)
             if args["action"] == "stop":
@@ -370,7 +380,7 @@ class Kernel:
                 return True
             if args["action"] == "setup":
                 gid.GSI_PORT = cfg["gsi_port"]
-                return gid.auto_setup_gsi_config()
+                return gid.auto_setup_gsi_config(cfg["steam_path"])
         raise ValueError("Неизвестная операция ядра")
 
     def pump(self):

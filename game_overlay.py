@@ -35,6 +35,8 @@ TRANSPARENT = "#010203"
 def indicator_state(data, now=None):
     now = time.time() if now is None else now
     game, voice = data.get("game", {}), data.get("voice", {})
+    if game.get("route", {}).get("mode") in ("recording", "playing"):
+        return "busy"
     if voice.get("speaking"):
         return "speaking"
     if game.get("vision", {}).get("busy") or game.get("busy") or data.get("command"):
@@ -70,6 +72,9 @@ def passthrough(window):
     put.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
     put.restype = ctypes.c_ssize_t
     put(hwnd, -20, get(hwnd, -20) | 0x20 | 0x80 | 0x80000 | 0x08000000)
+    # Keep our own hint text out of screen OCR (Windows 10 2004+).
+    user.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user.SetWindowDisplayAffinity(hwnd, 0x11)
     user.SetWindowPos.argtypes = [
         wintypes.HWND,
         wintypes.HWND,
@@ -139,6 +144,45 @@ def draw_cross(canvas, size, state="idle", level=0, phase=0, reduced=False, labe
     )
     if labels:
         canvas.create_text(cx, size + 12, text=LABELS[state], fill=color, font=(UI_FONT, 8, "bold"))
+
+
+def draw_panel(canvas, panel, width, top):
+    """A bounded, click-through card; no scrolling or interactive controls."""
+    canvas.create_rectangle(
+        1, top, width - 1, top + 258, fill="#191527", outline="#655482", width=1
+    )
+    canvas.create_text(
+        14,
+        top + 17,
+        anchor="w",
+        text=panel.get("title", "Сводка"),
+        fill="#e5d9ff",
+        font=(UI_FONT, 12, "bold"),
+    )
+    canvas.create_text(
+        14,
+        top + 38,
+        anchor="w",
+        text="Сохранённые данные · проверьте актуальность"
+        if panel.get("stale")
+        else "«Скрой сводку» — свернуть",
+        fill="#b7a9cc",
+        font=(UI_FONT, 8),
+    )
+    for i, line in enumerate(panel.get("lines", [])[:6]):
+        # Cap each row to two short lines; full details remain in the menu.
+        text = str(line)[:88]
+        if len(str(line)) > 88:
+            text += "…"
+        canvas.create_text(
+            14,
+            top + 57 + i * 32,
+            anchor="nw",
+            text=text,
+            width=width - 28,
+            fill="#f2edf8",
+            font=(UI_FONT, 9),
+        )
 
 
 class OverlayManager:
@@ -253,7 +297,24 @@ def run_overlay(config_path):
             size = cfg.get("overlay_size", 52)
             labels = cfg.get("overlay_labels", True)
             width = max(size + 14, 124 if labels else 0)
+            cross_width = width
             height = size + (26 if labels else 12)
+            cross_height = height
+            panel = game.get("panel", {})
+            route = game.get("route", {})
+            if route.get("mode") in ("recording", "playing"):
+                panel = {
+                    "title": "Запись маршрута"
+                    if route["mode"] == "recording"
+                    else "Повтор маршрута",
+                    "lines": [route["message"], "Esc / F8 / «верни управление» — остановить"],
+                    "until": time.time() + 2,
+                }
+            if panel and panel.get("until", 0) > time.time():
+                width = 390
+                height += 262
+            else:
+                panel = {}
             left, top, right, bottom = rect or (
                 0,
                 0,
@@ -261,8 +322,10 @@ def run_overlay(config_path):
                 root.winfo_screenheight(),
             )
             corner = cfg.get("overlay_corner", "top-right")
+            width = min(width, max(124, right - left - 36))
             x = left + 18 if corner.endswith("left") else right - width - 18
             y = top + 24 if corner.startswith("top") else bottom - height - 24
+            y = max(top, y)
             if not root.winfo_viewable():
                 root.update_idletasks()
                 passthrough(root)
@@ -277,6 +340,10 @@ def run_overlay(config_path):
                 data.get("reduced", False),
                 labels,
             )
+            if panel and corner.endswith("right"):
+                canvas.move("all", width - cross_width, 0)
+            if panel:
+                draw_panel(canvas, panel, width, cross_height)
         else:
             root.withdraw()
         root.after(125 if data.get("reduced") or not visible else 65, frame)

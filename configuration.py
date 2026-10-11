@@ -74,6 +74,7 @@ DEFAULT_CONFIG = {
             "steam_api_key",
             "steam_id",
             "discord_token",
+            "discord_user_token",
             "discord_channel_id",
             "telegram_api_id",
             "telegram_api_hash",
@@ -92,6 +93,20 @@ DEFAULT_CONFIG = {
         "inventories": "730:2",
         "telegram_notifications": False,
     },
+    "auto_replies": {
+        "enabled": True,
+        "style": "warm",
+        "cooldown_seconds": 300,
+        "delete_seconds": 300,
+        "share_activity": False,
+    },
+    "discord_account": {
+        "enabled": False,
+        "auto_reply": False,
+        "update_status": False,
+        "follow_activity": False,
+        "status_text": "Крест рядом",
+    },
     "discord_presence": {
         "application_id": "",
         "details": "Крест — личный ассистент",
@@ -103,8 +118,9 @@ DEFAULT_CONFIG = {
         "process_name": "dota2.exe",
         "warning_lead_time": 30,
         "gsi_port": 3000,
-        "enabled": False,
-        "auto_mode": False,
+        "enabled": True,
+        "auto_mode": True,
+        "auto_setup": True,
     },
     "skills": {
         name: True
@@ -213,6 +229,32 @@ def validate(data):
         raise ValueError("Инвентари Steam: AppID:ContextID через запятую, например 730:2,570:2")
     if not isinstance(steam["install_path"], str):
         raise ValueError("Путь Steam должен быть строкой")
+    from auto_replies import STYLES
+
+    replies = data["auto_replies"]
+    if replies["style"] not in STYLES:
+        raise ValueError("Неизвестный стиль автоответов")
+    for section, keys in (
+        ("auto_replies", ("enabled", "share_activity")),
+        ("discord_account", ("enabled", "auto_reply", "update_status", "follow_activity")),
+    ):
+        if any(type(data[section][key]) is not bool for key in keys):
+            raise ValueError("Настройки автоответов: нужны переключатели")
+    for key, low, high in (("cooldown_seconds", 60, 3600), ("delete_seconds", 0, 3600)):
+        value = replies[key]
+        if isinstance(value, bool) or not str(value).isdigit() or not low <= int(value) <= high:
+            raise ValueError(f"{key}: от {low} до {high} секунд")
+        replies[key] = int(value)
+    if (
+        not isinstance(data["discord_account"]["status_text"], str)
+        or not 1 <= len(data["discord_account"]["status_text"]) <= 128
+    ):
+        raise ValueError("Статус Discord: от 1 до 128 символов")
+    if (
+        not isinstance(data["api_keys"]["discord_user_token"], str)
+        or len(data["api_keys"]["discord_user_token"]) > 2048
+    ):
+        raise ValueError("Некорректный токен Discord-аккаунта")
     presence = data["discord_presence"]
     if presence["application_id"] and not str(presence["application_id"]).isdigit():
         raise ValueError("Discord Application ID должен быть числом")

@@ -304,7 +304,7 @@ class WarframePages:
             + " · "
             + local_time(status["updated"])
             if status["updated"]
-            else "Нажмите «Обновить мир» для первой сводки."
+            else "Скажите «открой сводку по миру» или запустите игру."
         )
         if status["error"]:
             source += "\n" + status["error"][:220]
@@ -414,8 +414,8 @@ class WarframePages:
         page = self.page_bodies["wf_home"]
         card = self.card(
             page,
-            "Ваш второй пилот",
-            "Мир игры, личные планы и важные события. Цели и таймеры остаются с вами после закрытия меню.",
+            "Крест рядом · просто скажите",
+            "Запустите Warframe — Крест найдёт игру. Голосовые подсказки и сводка доступны прямо под крестом.",
         )
         self.label(card, textvariable=self.wf_status, muted=True).pack(anchor="w", pady=(0, 12))
         self.label(card, textvariable=self.wf_vision, muted=True, wraplength=650).pack(
@@ -424,12 +424,40 @@ class WarframePages:
         self.wf_buttons(
             card,
             [
-                ("Обновить мир", lambda: self.wf_call("refresh")),
+                ("Сводка под крестом", lambda: self.wf_call("show_briefing")),
                 ("Запустить Warframe", lambda: self.wf_call("launch")),
                 ("Мои цели", lambda: self.switch_page("wf_goals")),
             ],
         )
         self.label(card, textvariable=self.wf_source, muted=True, wraplength=670).pack(anchor="w")
+        quick = self.card(page, "Три команды для начала")
+        self.label(
+            quick,
+            "«Открой сводку по миру» — циклы, событие и ваша цель\n«Что мне делать в игре» — подсказка по экрану\n«Варфрейм план на тридцать минут» — план сессии",
+            wraplength=660,
+        ).pack(anchor="w", pady=8)
+        self.wf_buttons(
+            quick,
+            [
+                ("Подсказка", lambda: self.wf_call("guide")),
+                ("План на 30 минут", lambda: self.wf_call("plan", minutes=30)),
+                ("Скрыть сводку", lambda: self.wf_call("hide_panel")),
+            ],
+        )
+        routes = self.card(
+            page,
+            "Ухожу от компьютера",
+            "Крест не обучается бою и не гарантирует фарм. Экспериментальный маршрут повторяет только до минуты клавиш движения один раз, без мыши и атак.",
+        )
+        routes = self.advanced(routes, "Как записать и остановить маршрут")
+        self.label(
+            routes,
+            "1. Включите маршруты в «Помощник».\n2. В игре скажите «запиши маршрут варфрейм», пройдите путь, затем «сохрани маршрут».\n3. Вернитесь в начало пути: «я отойду от игры», затем «подтверждаю маршрут».\nEsc, F8, движение мыши или «верни управление» остановят повтор.",
+            muted=True,
+            wraplength=650,
+        ).pack(anchor="w")
+        details = self.card(page, "Подробнее о мире")
+        page = self.advanced(details, "Показать циклы, события и награды")
         card = self.card(
             page,
             "Ритм открытых миров",
@@ -1168,6 +1196,8 @@ class WarframePages:
         for key, label in [
             ("enabled", "Помощник Warframe включён"),
             ("auto_summary", "Краткая сводка после запуска игры"),
+            ("context_hints", "Короткие подсказки по распознанному экрану"),
+            ("route_enabled", "Экспериментальная запись маршрута (не автономный бой)"),
             ("auto_profile", "Игровой профиль и только важные уведомления"),
             ("health_notify", "Следить за памятью, диском и доступными датчиками температуры"),
         ]:

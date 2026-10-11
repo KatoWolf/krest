@@ -7,7 +7,13 @@ import hashlib
 import os
 
 PREFIX = "@krest-vault:"
-SECRET_KEYS = {"krest_bot_token", "discord_token", "telegram_api_hash", "steam_api_key"}
+SECRET_KEYS = {
+    "krest_bot_token",
+    "discord_token",
+    "discord_user_token",
+    "telegram_api_hash",
+    "steam_api_key",
+}
 
 
 def _target(scope, key):

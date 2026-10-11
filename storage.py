@@ -47,3 +47,18 @@ def read_json(path, encoding="utf-8-sig"):
             if not _sharing_conflict(exc) or attempt == 39:
                 raise
             time.sleep(min(0.002 * 1.5**attempt, 0.05))
+
+
+def atomic_write_text(path, text):
+    """Publish a complete UTF-8 integration file without truncating the old one."""
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)

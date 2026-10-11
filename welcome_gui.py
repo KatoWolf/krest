@@ -165,6 +165,22 @@ class ControlCenterApp(
             key: tk.BooleanVar(value=value)
             for key, value in self.config_mgr.config["skills"].items()
         }
+        self.reply_vars = {
+            key: (
+                tk.BooleanVar(self, value=value)
+                if isinstance(value, bool)
+                else tk.StringVar(self, value=value)
+            )
+            for key, value in self.config_mgr.config["auto_replies"].items()
+        }
+        self.account_vars = {
+            key: (
+                tk.BooleanVar(self, value=value)
+                if isinstance(value, bool)
+                else tk.StringVar(self, value=value)
+            )
+            for key, value in self.config_mgr.config["discord_account"].items()
+        }
         self.dota_vars = {
             key: (
                 tk.BooleanVar(value=value) if isinstance(value, bool) else tk.StringVar(value=value)
@@ -191,6 +207,8 @@ class ControlCenterApp(
             *self.api_vars.values(),
             *self.skill_vars.values(),
             *self.dota_vars.values(),
+            *self.reply_vars.values(),
+            *self.account_vars.values(),
             *self.steam_vars.values(),
             *self.presence_vars.values(),
         ]:
@@ -1204,6 +1222,7 @@ class ControlCenterApp(
                 self.timer_tree.selection_add(key)
 
     def build_api_tab(self):
+        self.build_reply_controls(self.page_bodies["api"])
         groups = [
             (
                 "Telegram Terminal",
@@ -1300,8 +1319,21 @@ class ControlCenterApp(
         card = self.card(
             self.page_bodies["dota"],
             "Dota 2 — игровой гид",
-            "Локальный GSI-сервер получает состояние матча. Файл игры создаётся только кнопкой «Настроить GSI».",
+            "Крест сама находит Dota в библиотеках Steam и готовит связь. После первой настройки перезапустите игру; в матче время появится автоматически.",
         )
+        for key, caption in (
+            ("enabled", "Запускать связь с Dota вместе с Крест"),
+            ("auto_setup", "Автоматически готовить файл связи с игрой"),
+        ):
+            ttk.Checkbutton(card, text=caption, variable=self.dota_vars[key]).pack(
+                anchor="w", pady=4
+            )
+        self.label(
+            card,
+            "Скажите: «когда руны», «когда мудрость», «убили Рошана», «статус гида».",
+            muted=True,
+            wraplength=650,
+        ).pack(anchor="w", pady=8)
         tuning = self.advanced(card, "Параметры подключения и предупреждений")
         for key, label in [
             ("gsi_port", "Порт GSI"),
@@ -1321,7 +1353,7 @@ class ControlCenterApp(
         for title, action in [
             ("Запустить сервер", "start"),
             ("Остановить", "stop"),
-            ("Настроить GSI", "setup"),
+            ("Восстановить связь", "setup"),
         ]:
             ttk.Button(row, text=title, command=lambda a=action: self._dota_action(a)).pack(
                 side="left", padx=4
@@ -1329,6 +1361,8 @@ class ControlCenterApp(
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=10)
         for title, command in [
+            ("Играть с гидом", "запусти доту с гидом"),
+            ("Сводка матча", "сводка матча"),
             ("Ручной старт матча", "матч начался"),
             ("Рошан убит", "убили рошана"),
             ("Статус", "статус гида"),
@@ -1574,6 +1608,8 @@ class ControlCenterApp(
         data["app_settings"].update({key: var.get() for key, var in self.settings_vars.items()})
         data["api_keys"].update({key: var.get().strip() for key, var in self.api_vars.items()})
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
+        data["auto_replies"].update({key: var.get() for key, var in self.reply_vars.items()})
+        data["discord_account"].update({key: var.get() for key, var in self.account_vars.items()})
         data["dota_guide"].update({key: var.get() for key, var in self.dota_vars.items()})
         if self.CORE_PAGES & self._built_pages:
             data.update(self.core_settings_draft())
@@ -1611,6 +1647,27 @@ class ControlCenterApp(
             self._background(lambda: self.runtime.client.call("dota", action="stop")) if hasattr(
                 self.runtime, "client"
             ) else self._background(gid.stop_service)
+        if previous["dota_guide"] != self.config_mgr.config["dota_guide"] or previous["skills"].get(
+            "gid"
+        ) != self.config_mgr.config["skills"].get("gid"):
+
+            def reload_dota():
+                if hasattr(self.runtime, "client"):
+                    return self.runtime.client.call("dota", action="reload")
+                from skills import gid
+
+                gid.stop_service()
+                cfg = self.config_mgr.snapshot()
+                if (
+                    cfg["dota_guide"]["enabled"]
+                    and cfg["skills"].get("gid", True)
+                    and not self.runtime.settings().get("safe_mode")
+                ):
+                    return gid.start_service(
+                        {**cfg["dota_guide"], "steam_path": cfg["steam"]["install_path"]}
+                    )
+
+            self._background(reload_dota)
         indicator_controller.enabled = self.config_mgr.config["app_settings"]["indicator_enabled"]
         return True
 
@@ -1807,7 +1864,7 @@ class ControlCenterApp(
                 gid.stop_service()
                 return "Dota GSI остановлен"
             gid.GSI_PORT = int(settings["gsi_port"])
-            if not gid.auto_setup_gsi_config():
+            if not gid.auto_setup_gsi_config(self.config_mgr.snapshot()["steam"]["install_path"]):
                 raise RuntimeError(
                     "Не удалось создать GSI-конфиг: проверьте путь Steam и существующий файл. Подробности в журнале."
                 )
@@ -2076,6 +2133,12 @@ class ControlCenterApp(
                 self.dota_label.configure(
                     text=(f"GSI: порт {info['port']}" if info["running"] else "GSI выключен")
                     + f" · Время матча: {info['match_seconds'] // 60}:{info['match_seconds'] % 60:02}"
+                    + "\n"
+                    + (
+                        "Получаю данные из игры"
+                        if info.get("connected")
+                        else info.get("setup_message", "Ожидаю матч")
+                    )
                 )
             self.overview_label.configure(
                 text=f"{len(self.runtime.manager.catalog())} навыков готовы  ·  "

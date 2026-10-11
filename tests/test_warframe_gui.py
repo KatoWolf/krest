@@ -332,3 +332,38 @@ def test_saved_effect_restores_on_next_menu_launch(tmp_path):
             indicator_controller.stop()
             logging.getLogger().removeHandler(ui._log_handler)
             ui.destroy()
+
+
+def test_new_hud_and_simplified_home_have_no_initial_tables(app):
+    from game_overlay import draw_panel, draw_cross
+
+    app.switch_page("wf_home")
+    app.update()
+    assert not app.wf_trees["cycles"].winfo_ismapped()
+    assert not app.wf_trees["events"].winfo_ismapped()
+    canvas = tk.Canvas(app, width=390, height=340)
+    try:
+        for _ in range(20):
+            draw_cross(canvas, 52)
+            draw_panel(canvas, {"title": "Сводка", "lines": ["Подсказка"] * 6}, 390, 78)
+            assert len(canvas.find_all()) == 13
+    finally:
+        canvas.destroy()
+    assert not app.test_errors
+
+
+def test_bot_preferences_survive_theme_and_save_without_launching(app, monkeypatch):
+    monkeypatch.setattr(app.config_mgr, "is_premium", lambda: True)
+    app.switch_page("discord_account")
+    app.switch_page("discord_bot")
+    app.reply_vars["style"].set("gothic")
+    app.account_vars["status_text"].set("В космосе · Крест рядом")
+    app.apply_theme("Amethyst Modern")
+    app.update()
+    assert app.reply_vars["style"].get() == "gothic"
+    assert app.save_all_settings(quiet=True)
+    saved = app.config_mgr.snapshot()
+    assert saved["auto_replies"]["style"] == "gothic"
+    assert saved["discord_account"]["status_text"] == "В космосе · Крест рядом"
+    assert not app.integration.processes
+    assert not app.test_errors

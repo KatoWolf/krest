@@ -3,6 +3,8 @@
 DEFAULT_WARFRAME = {
     "enabled": True,
     "vision_enabled": True,
+    "context_hints": True,
+    "route_enabled": False,
     "platform": "pc",
     "poll_seconds": 120,
     "auto_summary": True,

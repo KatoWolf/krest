@@ -4,6 +4,7 @@ BUILTIN_SERVICES = (
     "tg_bridge.py",
     "krest_bot.py",
     "ds_session.py",
+    "discord_account.py",
     "steam_bot.py",
     "discord_presence.py",
 )
@@ -28,6 +29,10 @@ def run_service(name):
         from ds_session import start_ds_bridge
 
         start_ds_bridge(NotificationQueue())
+    elif name == "discord_account.py":
+        from discord_account import main
+
+        main()
     elif name == "steam_bot.py":
         from steam_bot import main
 

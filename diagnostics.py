@@ -32,6 +32,7 @@ def validate_module(filename, cfg):
     required = {
         "krest_bot.py": ("krest_bot_token", "telegram_owner_id"),
         "ds_session.py": ("discord_token",),
+        "discord_account.py": ("discord_user_token",),
         "tg_bridge.py": ("telegram_api_id", "telegram_api_hash"),
     }
     for key in required.get(filename, ()):
@@ -52,6 +53,7 @@ def validate_module(filename, cfg):
         "steam_bot.py": ("requests",),
         "discord_presence.py": ("pypresence",),
         "ds_session.py": ("discord",),
+        "discord_account.py": ("aiohttp",),
         "tg_bridge.py": ("pyrogram",),
         "krest_bot.py": ("telebot", "psutil", "requests"),
         "main.py": ("torch", "vosk", "sounddevice", "num2words", "numpy"),
@@ -64,6 +66,8 @@ def validate_module(filename, cfg):
         and not str(cfg.get("discord_presence", {}).get("application_id", "")).isdigit()
     ):
         raise ValueError("Введите Application ID приложения Discord на странице «Мой Discord»")
+    if filename == "discord_account.py" and not cfg["discord_account"]["enabled"]:
+        raise ValueError("Включите личную сессию на странице «Мой Discord»")
     if filename == "main.py":
         if not (BASE_DIR / "model").is_dir() or not (BASE_DIR / "model_silero.pt").is_file():
             raise RuntimeError(

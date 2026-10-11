@@ -107,6 +107,22 @@ class AssistantRuntime:
             thread.start()
         self.warframe.start()
         cfg = self.settings()
+        if (
+            not cfg.get("safe_mode")
+            and cfg.get("dota_guide", {}).get("enabled", False)
+            and cfg.get("skills", {}).get("gid", True)
+        ):
+            from skills import gid
+
+            try:
+                gid.start_service(
+                    {
+                        **cfg["dota_guide"],
+                        "steam_path": cfg.get("steam", {}).get("install_path", ""),
+                    }
+                )
+            except OSError as exc:
+                self.events.put(("error", "Dota: не удалось открыть GSI-сервер: " + str(exc)))
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
             self.start_voice()
 
@@ -114,6 +130,18 @@ class AssistantRuntime:
         text = text.strip()
         if not text:
             return False
+        # Emergency release must not wait behind network commands in the execution queue.
+        from speech_tools import normalize_command
+
+        _, stop_text = check_wake_word(
+            text, self.settings().get("app_settings", {}).get("wake_word", "крест")
+        )
+        if normalize_command(stop_text or text) in (
+            "верни управление",
+            "останови маршрут",
+            "я вернулся в игру",
+        ):
+            self.warframe.routes.cancel()
         if len(text) > 2000:
             self.events.put(("error", "Команда слишком длинная: максимум 2000 символов."))
             return False

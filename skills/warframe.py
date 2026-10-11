@@ -234,3 +234,71 @@ def launch(state):
 )
 def vision(state):
     return run(state, "vision")
+
+
+@skill(
+    keywords=["открой сводку по миру", "покажи сводку по миру", "разверни сводку"],
+    description="Короткая сводка Warframe под игровым крестом",
+    category="Warframe",
+)
+def show_briefing(state):
+    return run(state, "show_briefing")
+
+
+@skill(
+    keywords=["скрой сводку", "закрой сводку", "сверни сводку"],
+    description="Свернуть игровую сводку",
+    category="Warframe",
+)
+def hide_briefing(state):
+    return run(state, "hide_panel")
+
+
+@skill(
+    keywords=["что мне делать в игре", "помоги в варфрейме", "подскажи по экрану"],
+    description="Подсказка по последнему распознанному экрану",
+    category="Warframe",
+)
+def guide(state):
+    return run(state, "guide")
+
+
+@skill(
+    keywords=["запиши маршрут варфрейм"],
+    description="Записать до минуты клавиш движения в активном Warframe",
+    category="Warframe",
+)
+def route_record(state):
+    return run(state, "route_record")
+
+
+@skill(keywords=["сохрани маршрут"], description="Завершить запись маршрута", category="Warframe")
+def route_save(state):
+    return run(state, "route_save")
+
+
+@skill(
+    keywords=["я отойду от игры", "повтори маршрут варфрейм"],
+    description="Предложить однократный повтор с отдельным подтверждением",
+    category="Warframe",
+)
+def route_request(state):
+    return run(state, "route_request")
+
+
+@skill(
+    keywords=["подтверждаю маршрут"],
+    description="Подтвердить ожидающий повтор маршрута",
+    category="Warframe",
+)
+def route_confirm(state):
+    return run(state, "route_confirm")
+
+
+@skill(
+    keywords=["верни управление", "останови маршрут", "я вернулся в игру"],
+    description="Немедленно остановить повтор движения",
+    category="Warframe",
+)
+def route_stop(state):
+    return run(state, "route_stop")

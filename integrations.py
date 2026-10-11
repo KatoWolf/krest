@@ -25,6 +25,7 @@ def redact(text, settings):
     for key in (
         "krest_bot_token",
         "discord_token",
+        "discord_user_token",
         "telegram_api_hash",
         "steam_api_key",
     ):
@@ -45,6 +46,7 @@ class IntegrationManager:
         "tg_user": ("tg_bridge.py", "Telegram User"),
         "tgt": ("krest_bot.py", "Telegram Terminal"),
         "discord": ("ds_session.py", "Discord Bot"),
+        "discord_account": ("discord_account.py", "Discord — личная сессия"),
         "steam": ("steam_bot.py", "Steam"),
         "presence": ("discord_presence.py", "Discord — мой статус"),
     }

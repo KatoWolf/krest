@@ -67,6 +67,7 @@ def local_games(install_path=""):
                     "name": values["name"],
                     "installed": bool(flags & 4),
                     "library": str(root),
+                    **({"install_dir": values["installdir"]} if values.get("installdir") else {}),
                 }
             except (ValueError, OSError):
                 continue

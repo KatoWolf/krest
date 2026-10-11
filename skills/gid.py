@@ -29,108 +29,68 @@ DOTA_PROCESS_NAME = "dota2.exe"
 WARNING_LEAD_TIME = 30  # Оповещать за 30 секунд до события
 GSI_PORT = 3000
 
-config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config.json"))
-try:
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config_data = json.load(f)
-            dota_config = config_data.get("dota_guide", {})
-            DOTA_PROCESS_NAME = dota_config.get("process_name", DOTA_PROCESS_NAME)
-            WARNING_LEAD_TIME = dota_config.get("warning_lead_time", WARNING_LEAD_TIME)
-            GSI_PORT = dota_config.get("gsi_port", GSI_PORT)
-            logger.info("Настройки Dota 2 Гида успешно загружены из config.json")
-except Exception as e:
-    logger.error(f"Ошибка при чтении config.json: {e}")
 
-
-def auto_setup_gsi_config() -> bool:
-    """Автоматически находит папку Dota 2 и создает GSI конфиг-файл."""
-    steam_paths = []
-
-    if winreg:
-        for key_path in [r"SOFTWARE\WOW6432Node\Valve\Steam", r"Software\Valve\Steam"]:
-            for hkey in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
-                try:
-                    with winreg.OpenKey(hkey, key_path) as key:
-                        val, _ = winreg.QueryValueEx(key, "InstallPath")
-                        if val and os.path.exists(val):
-                            steam_paths.append(val)
-                except OSError:
-                    pass
-
-    for drive in ["C", "D", "E", "F", "G", "H", "Z"]:
-        steam_paths.extend(
-            [
-                f"{drive}:\\Program Files (x86)\\Steam",
-                f"{drive}:\\Steam",
-                f"{drive}:\\SteamLibrary",
-                f"{drive}:\\Games\\SteamLibrary",
-            ]
-        )
-
-    library_folders = set()
-    for s_path in steam_paths:
-        if not os.path.exists(s_path):
-            continue
-        library_folders.add(s_path)
-        vdf_path = os.path.join(s_path, "steamapps", "libraryfolders.vdf")
-        if os.path.exists(vdf_path):
-            try:
-                with open(vdf_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                    found_paths = re.findall(r'"path"\s+"([^"]+)"', content)
-                    for p in found_paths:
-                        clean_p = p.replace("\\\\", "\\")
-                        if os.path.exists(clean_p):
-                            library_folders.add(clean_p)
-            except Exception as e:
-                logger.debug(f"Ошибка парсинга libraryfolders.vdf: {e}")
-
-    dota_cfg_dir = None
-    for lib in library_folders:
-        dota_base = os.path.join(lib, "steamapps", "common", "dota 2 beta")
-        if os.path.exists(dota_base):
-            dota_cfg_dir = os.path.join(dota_base, "game", "dota", "cfg", "gamestate_integration")
-            break
-
-    if not dota_cfg_dir:
-        logger.warning("Dota 2 не обнаружена в файловой системе.")
-        return False
-
-    config_file_path = os.path.join(dota_cfg_dir, "gamestate_integration_krest.cfg")
+def auto_setup_gsi_config(install_path="") -> bool:
+    """Discover Steam libraries and atomically provision only Krest's GSI file."""
+    from pathlib import Path
+    from steam_service import local_games
+    from storage import atomic_write_text
 
     try:
-        os.makedirs(dota_cfg_dir, exist_ok=True)
-        gsi_content = f""""Krest Dota Guide Configuration"
-{{
-    "uri"           "http://127.0.0.1:{GSI_PORT}/"
-    "timeout"       "5.0"
-    "buffer"        "0.1"
-    "throttle"      "0.5"
-    "heartbeat"     "10.0"
-    "data"
-    {{
-        "provider"      "1"
-        "map"           "1"
-        "player"        "1"
-        "hero"          "1"
-        "abilities"     "1"
-        "items"         "1"
-    }}
-}}"""
-        if os.path.exists(config_file_path):
-            existing = open(config_file_path, encoding="utf-8").read()
-            if existing != gsi_content:
-                raise RuntimeError(
-                    "GSI-конфиг уже существует и отличается. Сохраните его резервную копию перед заменой."
-                )
-        # Записывается только по явной команде из меню.
-        with open(config_file_path, "w", encoding="utf-8") as f:
-            f.write(gsi_content)
-        logger.info(f"GSI конфиг записан: {config_file_path}")
+        games = local_games(install_path)
+        game = next((g for g in games if g["appid"] == "570" and g["installed"]), None)
+        if not game:
+            dota_state.setup_message = "Dota 2 не установлена в найденных библиотеках Steam"
+            return False
+        folder = (
+            Path(game["library"]) / "steamapps/common" / (game.get("install_dir") or "dota 2 beta")
+        )
+        if folder.resolve().parent != (Path(game["library"]) / "steamapps/common").resolve():
+            raise ValueError("Некорректная папка игры в манифесте Steam")
+        if not (folder / "game/dota").is_dir():
+            raise ValueError("Папка Dota 2 из манифеста Steam не найдена")
+        target = folder / "game/dota/cfg/gamestate_integration/gamestate_integration_krest.cfg"
+        content = "\n".join(
+            [
+                '"Krest Dota Guide Configuration"',
+                "{",
+                f'    "uri" "http://127.0.0.1:{GSI_PORT}/"',
+                '    "timeout" "5.0"',
+                '    "buffer" "0.1"',
+                '    "throttle" "0.5"',
+                '    "heartbeat" "5.0"',
+                '    "data"',
+                "    {",
+                *[
+                    f'        "{key}" "1"'
+                    for key in ("provider", "map", "player", "hero", "abilities", "items")
+                ],
+                "    }",
+                "}",
+                "",
+            ]
+        )
+        changed = not target.exists() or target.read_text(encoding="utf-8") != content
+        if changed:
+            if target.exists():
+                import shutil
+
+                backup = target.with_suffix(".cfg.bak")
+                if not backup.exists():
+                    shutil.copy2(target, backup)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(target, content)
+        dota_state.gsi_configured = True
+        dota_state.setup_message = (
+            "Связь подготовлена. Если Dota уже открыта, перезапустите игру."
+            if changed
+            else "Файл связи готов. Жду данные матча."
+        )
+        dota_state.config_file = str(target)
         return True
-    except Exception as e:
-        logger.error(f"Не удалось записать GSI конфиг: {e}")
+    except (OSError, ValueError) as exc:
+        dota_state.setup_message = "Настройка Dota: " + str(exc)
+        logger.warning(dota_state.setup_message)
         return False
 
 
@@ -147,11 +107,15 @@ class DotaState:
     waiting_for_user_answer: bool = False
     timer_thread: threading.Thread | None = None
 
+    setup_message: str = "Связь ещё не подготовлена"
+    config_file: str = ""
     gsi_configured: bool = False
     last_gsi_update: float = 0.0
     activation_time: float = 0.0
     diagnostic_warned: bool = False
-    auto_mode: bool = False  # Флаг стопроцентной автономии
+    auto_mode: bool = False
+    hero: dict = field(default_factory=dict)
+    player: dict = field(default_factory=dict)
 
 
 dota_state = DotaState()
@@ -172,11 +136,14 @@ _service_lock = threading.RLock()
 _lifecycle_lock = threading.RLock()
 _server = None
 _threads = []
+_setup_settings = {}
 
 
 def apply_gsi(data):
     if not isinstance(data, dict) or not isinstance(data.get("map"), dict):
         raise ValueError("Ожидается объект map")
+    hero = data.get("hero") if isinstance(data.get("hero"), dict) else {}
+    player = data.get("player") if isinstance(data.get("player"), dict) else {}
     data = data["map"]
     clock = data.get("clock_time", 0)
     if (
@@ -187,20 +154,25 @@ def apply_gsi(data):
         raise ValueError("Некорректное время матча")
     new_state = str(data.get("game_state", ""))
     with _service_lock:
+        dota_state.hero = {
+            key: hero.get(key) for key in ("name", "health_percent", "mana_percent", "alive")
+        }
+        dota_state.player = {key: player.get(key) for key in ("kills", "deaths", "assists", "gold")}
         dota_state.last_gsi_update = time.time()
         dota_state.match_state = new_state
         if new_state in (
             "DOTA_GAMERULES_STATE_PRE_GAME",
             "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS",
         ):
-            if clock < dota_state.match_time_seconds - 10:
+            if clock < dota_state.match_time_seconds - 10 or (
+                new_state.endswith("PRE_GAME") and dota_state.match_started
+            ):
                 dota_state.last_announced_events.clear()
                 dota_state.roshan_death_time = None
             dota_state.match_time_seconds = int(clock)
             if dota_state.auto_mode:
                 dota_state.is_active = True
-            if new_state.endswith("GAME_IN_PROGRESS"):
-                dota_state.match_started = True
+            dota_state.match_started = new_state.endswith("GAME_IN_PROGRESS")
         elif new_state in (
             "DOTA_GAMERULES_STATE_POST_GAME",
             "DOTA_GAMERULES_STATE_DISCONNECT",
@@ -232,7 +204,7 @@ class GSIDataHandler(BaseHTTPRequestHandler):
 
 
 def _start_service(settings=None):
-    global _server, GSI_PORT, WARNING_LEAD_TIME, DOTA_PROCESS_NAME, _threads
+    global _server, GSI_PORT, WARNING_LEAD_TIME, DOTA_PROCESS_NAME, _threads, _setup_settings
     with _service_lock:
         if _server is not None:
             return _server.server_port
@@ -243,7 +215,8 @@ def _start_service(settings=None):
         GSI_PORT = int(settings.get("gsi_port", GSI_PORT))
         WARNING_LEAD_TIME = int(settings.get("warning_lead_time", WARNING_LEAD_TIME))
         DOTA_PROCESS_NAME = settings.get("process_name", DOTA_PROCESS_NAME).lower()
-        dota_state.auto_mode = bool(settings.get("auto_mode", False))
+        dota_state.auto_mode = bool(settings.get("auto_mode", True))
+        _setup_settings = dict(settings)
         server = HTTPServer(("127.0.0.1", GSI_PORT), GSIDataHandler)
         _server = server
         _service_stop.clear()
@@ -292,6 +265,11 @@ def service_status():
         "active": dota_state.is_active,
         "match_seconds": dota_state.match_time_seconds,
         "last_gsi_update": dota_state.last_gsi_update,
+        "connected": 0 < time.time() - dota_state.last_gsi_update < 15,
+        "setup_message": dota_state.setup_message,
+        "config_file": dota_state.config_file,
+        "hero": dict(dota_state.hero),
+        "player": dict(dota_state.player),
     }
 
 
@@ -306,11 +284,13 @@ def dota_timer_loop():
             if time.time() - dota_state.activation_time > 120 and not dota_state.diagnostic_warned:
                 if time.time() - dota_state.last_gsi_update > 60:
                     voice.speak(
-                        "Внимание. Данные из Доты не поступают. Скажите 'Крест, матч начался' для ручного старта."
+                        "Внимание. Данные из Доты не поступают. Перезапустите игру кнопкой «Играть с гидом» в меню Крест."
                     )
                 dota_state.diagnostic_warned = True
 
-        if dota_state.match_started:
+        if dota_state.match_started and (
+            not dota_state.last_gsi_update or time.time() - dota_state.last_gsi_update < 15
+        ):
             t = dota_state.match_time_seconds
             target = t + WARNING_LEAD_TIME
 
@@ -409,7 +389,11 @@ def monitor_dota_process():
     if not psutil:
         return
 
+    last_setup = float("-inf")
     while not _service_stop.is_set():
+        if _setup_settings.get("auto_setup", True) and time.monotonic() - last_setup > 60:
+            auto_setup_gsi_config(_setup_settings.get("steam_path", ""))
+            last_setup = time.monotonic()
         dota_found = False
         try:
             for proc in psutil.process_iter(["name"]):
@@ -594,3 +578,56 @@ def stop_dota_guide(text: str = ""):
     dota_state.is_active = False
     dota_state.match_started = False
     voice.speak("Гид по Доте успешно остановлен.")
+
+
+@skill(
+    keywords=["запусти доту с гидом", "играть в доту с гидом"],
+    description="Запустить Dota через Steam с передачей состояния матча",
+    category="Dota 2",
+)
+def launch_dota_guide():
+    from app_state import get_state
+
+    cfg = get_state().config_getter()
+    start_service({**cfg["dota_guide"], "steam_path": cfg["steam"]["install_path"]})
+    dota_state.auto_mode = True
+    dota_state.is_active = True
+    dota_state.activation_time = time.time()
+    if not auto_setup_gsi_config(cfg["steam"]["install_path"]):
+        return dota_state.setup_message
+    if os.name != "nt":
+        return "Запуск Dota с гидом доступен в Windows."
+    os.startfile("steam://run/570//-gamestateintegration/")
+    return "Запуск Dota с передачей состояния запрошен. Если игра уже открыта, сначала завершите её и повторите команду."
+
+
+@skill(
+    keywords=["сводка матча", "мой герой в доте"],
+    description="Состояние героя, счёт и золото из Dota GSI",
+    category="Dota 2",
+)
+def match_briefing():
+    if time.time() - dota_state.last_gsi_update > 15:
+        return "Свежих данных матча нет. Запустите игру кнопкой «Играть с гидом» и войдите в матч."
+    hero, player = dota_state.hero, dota_state.player
+
+    def number(value):
+        return (
+            str(int(value))
+            if isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 0 <= value <= 100000
+            else "нет данных"
+        )
+
+    return (
+        "Здоровье: "
+        + number(hero.get("health_percent"))
+        + " процентов. Мана: "
+        + number(hero.get("mana_percent"))
+        + " процентов. Счёт: "
+        + "/".join(number(player.get(k)) for k in ("kills", "deaths", "assists"))
+        + ". Золото: "
+        + number(player.get("gold"))
+        + "."
+    )

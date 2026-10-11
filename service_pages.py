@@ -306,6 +306,65 @@ class ServicePages:
         except (ValueError, OverflowError, TypeError, OSError):
             return "неизвестно"
 
+    def build_reply_controls(self, page):
+        from auto_replies import STYLES, render_reply
+
+        card = self.card(
+            page,
+            "Голос Крест в переписке",
+            "Общий стиль Telegram User, Discord Bot и личной Discord-сессии. Изменения применяются после сохранения.",
+        )
+        ttk.Checkbutton(
+            card, text="Отвечать на входящие личные сообщения", variable=self.reply_vars["enabled"]
+        ).pack(anchor="w", pady=4)
+        choice = tk.StringVar(self, value=STYLES[self.reply_vars["style"].get()])
+        combo = ttk.Combobox(
+            card, textvariable=choice, values=list(STYLES.values()), state="readonly"
+        )
+        combo.pack(fill="x", pady=5)
+        combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _: self.reply_vars["style"].set(
+                next(key for key, label in STYLES.items() if label == choice.get())
+            ),
+        )
+
+        def sync_style(*_):
+            choice.set(STYLES[self.reply_vars["style"].get()])
+
+        trace = self.reply_vars["style"].trace_add("write", sync_style)
+        combo.bind("<Destroy>", lambda _: self.reply_vars["style"].trace_remove("write", trace))
+        preview = self.label(card, "", wraplength=650)
+        preview.pack(anchor="w", pady=12)
+
+        def show(*_):
+            if preview.winfo_exists():
+                preview.configure(
+                    text=render_reply(
+                        self.owner_var.get(),
+                        {"is_playing": True},
+                        {
+                            "style": self.reply_vars["style"].get(),
+                            "share_activity": self.reply_vars["share_activity"].get(),
+                        },
+                    )
+                )
+
+        show()
+        ttk.Button(card, text="Предпросмотр ответа", command=show).pack(anchor="w")
+        advanced = self.advanced(card, "Частота, приватность и удаление")
+        self.field(
+            advanced, "Пауза между ответами контакту, сек.", self.reply_vars["cooldown_seconds"]
+        )
+        self.field(
+            advanced, "Удалять через, сек. (0 — сохранять)", self.reply_vars["delete_seconds"]
+        )
+        ttk.Checkbutton(
+            advanced,
+            text="Сообщать собеседнику, что я играю или работаю",
+            variable=self.reply_vars["share_activity"],
+        ).pack(anchor="w", pady=4)
+
     def build_discord_tabs(self):
         card = self.card(
             self.page_bodies["discord_bot"],
@@ -317,6 +376,24 @@ class ServicePages:
                 card, caption, self.api_vars[key], key == "discord_token"
             )
         self.service_controls(card, "ds_session.py")
+        self.build_reply_controls(self.page_bodies["discord_bot"])
+        account = self.card(
+            self.page_bodies["discord_account"],
+            "Личный аккаунт · отдельная сессия",
+            "Токен аккаунта отличается от Bot Token. Неофициальная автоматизация может привести к блокировке Discord. Токен вводится только здесь, не в чат Крест.",
+        )
+        self.field(account, "Токен личной сессии", self.api_vars["discord_user_token"], True)
+        for key, label in (
+            ("enabled", "Разрешить личную сессию"),
+            ("auto_reply", "Автоответы в личных сообщениях"),
+            ("update_status", "Обновлять мой текстовый статус"),
+            ("follow_activity", "Показывать, когда я играю"),
+        ):
+            ttk.Checkbutton(account, text=label, variable=self.account_vars[key]).pack(
+                anchor="w", pady=4
+            )
+        self.field(account, "Текст статуса", self.account_vars["status_text"])
+        self.service_controls(account, "discord_account.py")
         card = self.card(
             self.page_bodies["discord_account"],
             "Discord · мой статус",

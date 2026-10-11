@@ -66,7 +66,19 @@ class WarframeService:
         self._world_lock = threading.Lock()
         self._last_notice = 0
         self._last_notice_text = ""
+        self.panel = {}
+        self._hint_screen = ""
         self._network_thread = None
+        from game_routes import RouteController
+
+        self.routes = RouteController(
+            self.root,
+            allowed=lambda: (
+                self.cfg().get("route_enabled", False)
+                and self.cfg()["enabled"]
+                and not self.runtime.settings().get("safe_mode")
+            ),
+        )
         from game_vision import GameVision
 
         self.vision = GameVision(
@@ -92,6 +104,7 @@ class WarframeService:
 
     def close(self):
         self.stop.set()
+        self.routes.close()
         self.vision.close()
         if self.thread:
             self.thread.join(timeout=1)
@@ -101,7 +114,11 @@ class WarframeService:
         with self.lock:
             return {
                 "running": self.running,
+                "panel": copy.deepcopy(self.panel)
+                if self.panel.get("until", 0) > time.time()
+                else {},
                 "vision": self.vision.snapshot(),
+                "route": self.routes.snapshot(),
                 "started": self.started,
                 "busy": bool(self.busy),
                 "operation": self.operation,
@@ -232,6 +249,19 @@ class WarframeService:
     def tick(self, now=None):
         now = time.time() if now is None else now
         cfg = self.cfg()
+        confirmed = self.vision.confirmed
+        if confirmed and confirmed != self._hint_screen:
+            self._hint_screen = confirmed
+            if (
+                confirmed != "unknown"
+                and cfg.get("context_hints", True)
+                and self.panel.get("until", 0) < now
+            ):
+                self.show_panel(
+                    "Подсказка по экрану",
+                    [self.guide_hint(), "«Что мне делать в игре» — повторить"],
+                    seconds=12,
+                )
         if self.runtime.settings().get("safe_mode") or not cfg["enabled"]:
             self.vision.tick(False, False, now)
             if self.running:
@@ -524,9 +554,82 @@ class WarframeService:
                 self.busy -= 1
                 self.operation = "" if not self.busy else self.operation
 
+    def show_panel(self, title, lines, seconds=90, stale=False):
+        with self.lock:
+            self.panel = {
+                "title": title[:60],
+                "lines": [str(line)[:130] for line in lines[:6]],
+                "until": time.time() + seconds,
+                "stale": bool(stale),
+            }
+
+    def guide_hint(self):
+        from game_vision import screen_hint
+
+        vision = self.vision.snapshot()
+        fresh = time.time() - vision.get("observed", 0) < 40
+        return screen_hint(vision.get("screen", "unknown") if fresh else "unknown")
+
     def _action(self, action, **args):
         state = self.store.snapshot()
         aliases = state["aliases"]
+        if action.startswith("route_"):
+            methods = {
+                "route_record": self.routes.record,
+                "route_save": self.routes.cancel,
+                "route_request": self.routes.request,
+                "route_confirm": self.routes.confirm,
+                "route_stop": self.routes.cancel,
+            }
+            text = methods[action]()
+            self.show_panel(
+                "Маршрут · под вашим контролем",
+                [text, "Esc / F8 / «верни управление» — остановка"],
+                seconds=20,
+            )
+            return {"text": text}
+        if action == "hide_panel":
+            self.panel = {}
+            return {"text": "Сводка скрыта."}
+        if action == "guide":
+            hint = self.guide_hint()
+            self.show_panel(
+                "Подсказка Крест",
+                [hint, "«Открой сводку по миру» — циклы и цели", "«Скрой сводку» — свернуть"],
+            )
+            return {"text": hint}
+        if action == "show_briefing":
+            try:
+                world = self.world()
+            except Exception:
+                world = self.last_world
+            lines = []
+            stale = (
+                not world
+                or world.get("stale", True)
+                or time.time() - world.get("updated", 0) > self.cfg()["poll_seconds"]
+            )
+            if world:
+                lines += [
+                    r["name"] + ": " + r["state"] + " · " + r["remaining"]
+                    for r in cycle_rows(world["data"])
+                ][:3]
+                events = event_rows(world["data"])
+                if events:
+                    row = events[0]
+                    lines.append(row["kind"] + ": " + row["name"])
+            else:
+                lines.append("Нет связи с источником мира. Личные цели доступны.")
+            goal = next((g for g in state["goals"] if not g.get("done")), None)
+            if goal:
+                lines.append("Ваша цель: " + goal["name"])
+            lines.append(self.guide_hint())
+            self.show_panel("Мир Warframe", lines, stale=stale)
+            return {
+                "text": "Сводка открыта под крестом на 90 секунд."
+                + (" Данные мира не подтверждены." if stale else ""),
+                "stale": stale,
+            }
         if action == "vision":
             return {"text": self.vision.snapshot()["status"]}
         if action == "snapshot":
@@ -990,6 +1093,14 @@ class WarframeService:
 
 
 ACTIONS = {
+    "route_record",
+    "route_save",
+    "route_request",
+    "route_confirm",
+    "route_stop",
+    "show_briefing",
+    "hide_panel",
+    "guide",
     "vision",
     "snapshot",
     "refresh",

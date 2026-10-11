@@ -47,6 +47,10 @@ SESSION_PATH = os.path.join(BASE_DIR, f"{SESSION_NAME}.session")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [TG-BRIDGE]: %(message)s")
 logger = logging.getLogger("TGBridge")
 
+from auto_replies import ReplyGate
+
+reply_gate = ReplyGate()
+
 spam_control = {}
 last_outgoing = {}
 
@@ -148,6 +152,7 @@ async def auto_delete_message(message, delay: int):
 async def track_outgoing(client, message):
     chat_id = message.chat.id
     last_outgoing[chat_id] = time.time()
+    reply_gate.outgoing(chat_id)
     if chat_id in spam_control:
         del spam_control[chat_id]
 
@@ -175,7 +180,9 @@ async def auto_reply(client, message):
     text = message.text.lower() if message.text else ""
     is_urgent = any(word in text for word in ["срочно", "важно", "горит", "ответь"])
 
-    if not is_urgent and user_id in spam_control and current_time - spam_control[user_id] < 300:
+    from configuration import ConfigManager
+
+    if not reply_gate.allow(chat_id, ConfigManager().snapshot()["auto_replies"], is_urgent):
         return
 
     spam_control[user_id] = current_time
@@ -195,39 +202,24 @@ async def auto_reply(client, message):
 
         await asyncio.sleep(random.uniform(1.2, 2.5))
 
-        if message.voice or message.video_note:
-            reply_text = (
-                f"💠 **KREST: Голосовое сообщение**\n"
-                f"───\n"
-                f"{owner_name} сейчас на движе / занят.\n"
-                f"Модули распознавания голоса отключены. Напишите текстом."
-            )
-        elif is_night:
-            reply_text = (
-                f"💠 **KREST: Ночной режим**\n"
-                f"───\n"
-                f"● `Статус:` Восстановление ресурсов 🌙\n"
-                f"───\n"
-                f"{owner_name} отдыхает. Сообщение будет прочитано утром."
-            )
-        elif is_playing or activity_type in ["GAME", "WORK", "REST", "SOCIAL"]:
-            context_msg = full_msg if full_msg else f"{owner_name} сейчас занят делами."
-            if is_urgent:
-                context_msg = f"⚠️ Приоритетный сигнал!\n{context_msg}\nПоставлена пометка «СРОЧНО»."
-            reply_text = f"💠 **KREST: Автоответчик**\n───\n{context_msg}"
-        else:
-            reply_text = (
-                f"💠 **KREST: Автономный режим**\n"
-                f"───\n"
-                f"● `Статус:` В движении / Отошел\n"
-                f"───\n"
-                f"{owner_name} отошел от ПК. Я передам сообщение, как только он вернется."
-            )
+        from auto_replies import render_reply
+        from configuration import ConfigManager
+        from pyrogram.enums import ParseMode
 
-        final_text = f"{reply_text}\n\n_(Автоматический ответ КРЕСТ. Исчезнет через 5 минут.)_"
-        sent_msg = await message.reply(final_text)
-
-        asyncio.create_task(auto_delete_message(sent_msg, 300))
+        reply_cfg = ConfigManager().snapshot()["auto_replies"]
+        if not reply_cfg["enabled"]:
+            return
+        final_text = render_reply(
+            owner_name,
+            status_data,
+            reply_cfg,
+            bool(message.voice or message.video_note),
+            is_urgent,
+            is_night,
+        )
+        sent_msg = await message.reply(final_text, parse_mode=ParseMode.DISABLED)
+        if reply_cfg["delete_seconds"]:
+            asyncio.create_task(auto_delete_message(sent_msg, reply_cfg["delete_seconds"]))
 
         if hasattr(client, "notifications_queue") and client.notifications_queue:
             if not is_night:
