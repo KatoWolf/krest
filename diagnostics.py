@@ -27,7 +27,7 @@ def voice_report(cfg):
     return "\n".join(lines)
 
 
-def validate_module(filename, cfg):
+def validate_module(filename, cfg, data_path=None):
     keys = cfg.get("api_keys", {})
     required = {
         "krest_bot.py": ("krest_bot_token", "telegram_owner_id"),
@@ -83,5 +83,13 @@ def validate_module(filename, cfg):
                 + ", ".join(missing)
                 + ". Поместите их в папку model рядом с Крест или откройте раздел «Голос»."
             )
-    if filename == "tg_bridge.py" and not (BASE_DIR / "krest_user_session.session").exists():
-        raise RuntimeError("Сначала войдите в Telegram с помощью кнопок Код / Войти.")
+    if filename == "tg_bridge.py":
+        from app_paths import data_dir
+
+        folder = Path(data_path) if data_path is not None else data_dir()
+        if not (folder / "krest_user_session.session").exists():
+            raise RuntimeError(
+                "Сначала войдите в Telegram с помощью кнопок «Получить код» / «Войти»."
+            )
+        if (folder / "tg_auth_temp.json").exists():
+            raise RuntimeError("Завершите вход кнопкой «Войти» перед запуском Telegram User.")

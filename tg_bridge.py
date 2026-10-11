@@ -8,9 +8,20 @@ import json
 import logging
 import sqlite3
 import threading
+import re
+
+# Pyrogram's synchronous wrappers inspect the current loop during import, even
+# when every client operation is async. GUI workers have no loop. Supply an idle
+# bootstrap loop only for that import; clients still belong to their running loop.
+_import_loop = None
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    _import_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_import_loop)
 
 try:
-    from pyrogram import Client, filters, enums
+    from pyrogram import Client, filters, enums, raw, types
     from pyrogram.handlers import MessageHandler
     from pyrogram.errors import (
         AuthKeyUnregistered,
@@ -22,11 +33,17 @@ try:
         PhoneCodeExpired,
         PhoneCodeInvalid,
         PasswordHashInvalid,
+        ApiIdInvalid,
+        PhoneNumberInvalid,
     )
 
     PYROGRAM_AVAILABLE = True
 except ImportError:
     PYROGRAM_AVAILABLE = False
+finally:
+    if _import_loop is not None:
+        asyncio.set_event_loop(None)
+        _import_loop.close()
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -54,50 +71,12 @@ reply_gate = ReplyGate()
 spam_control = {}
 last_outgoing = {}
 
-QUOTES = [
-    "Я курю эври дей...",
-    "i can't fix that... Maybe again?",
-    "03:33",
-    "Мальборо Голд - я Ван Гог",
-    "Шипучка - Твоя Мать Горячая Штучка",
-    "На моей руке кресты, на кровати две пизды",
-    "SNOW WHITE MARBLE",
-    "Глаза красные, но не от слез",
-    "yeyo!",
-    "я типо сигарета",
-    "Моя ассистентка Крест следит за тобой",
-    "Слишком много мыслей, слишком мало смысла",
-    "Я умру в ахуенных вещах",
-    "Ты ищешь меня там, где меня больше нет",
-    "stalk ur socials",
-    "I can’t fix my life, but I can fix this code",
-    "#TWOPHONES xd",
-    "Музыка на максимум, чувства на минимум.",
-    "Фура переехала мои мозги как тесто",
-    "Подонок",
-    "zzz",
-    "Нахуй SLEEP??",
-    "error 404: feelings not found",
-    "Ctrl+Z не работает в реальной жизни.",
-    "System.NullReferenceException: Soul not found",
-    "03:33??? FFM<<<",
-    "dead inside, coding outside.",
-    "digital ghost.",
-    "offline in real life.",
-]
-
 
 def load_app_config() -> dict:
-    """Безопасное чтение конфигурации с защитой от мгновенной обнуляющей перезаписи."""
-    if os.path.exists(CONFIG_FILE) and os.path.getsize(CONFIG_FILE) > 0:
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
-                return json.load(f) or {}
-        except (json.JSONDecodeError, OSError):
-            pass
-        except Exception as e:
-            logger.error(f"Ошибка чтения config.json: {e}")
-    return {}
+    """Use the shared loader, including keys stored in Windows Credential Manager."""
+    from configuration import ConfigManager
+
+    return ConfigManager(CONFIG_FILE).snapshot()
 
 
 def get_owner_name() -> str:
@@ -116,22 +95,29 @@ async def get_local_status() -> dict:
 
 
 async def status_updater(client):
+    last_bio = None
     while True:
         try:
+            settings = load_app_config()["telegram_user"]
+            if not settings["update_bio"]:
+                await asyncio.sleep(30)
+                continue
             status_data = await get_local_status()
             is_playing = status_data.get("is_playing", False)
             game = status_data.get("game", "")
 
-            if is_playing and game:
+            if settings["follow_activity"] and is_playing and game:
                 new_bio = f"Занят в {game} 🎮 | КРЕСТ Online"
             else:
-                new_bio = random.choice(QUOTES)
+                new_bio = settings["bio_text"]
 
             if len(new_bio) > 70:
                 new_bio = new_bio[:67] + "..."
 
-            await client.update_profile(bio=new_bio)
-            logger.info(f"Обновлен Telegram Bio: {new_bio}")
+            if new_bio != last_bio:
+                await client.update_profile(bio=new_bio)
+                last_bio = new_bio
+                logger.info("Описание Telegram обновлено")
         except FloodWait as e:
             logger.warning(f"FloodWait от Telegram: ждем {e.value} секунд")
             await asyncio.sleep(e.value)
@@ -159,6 +145,8 @@ async def track_outgoing(client, message):
 
 async def auto_reply(client, message):
     if not message.from_user:
+        return
+    if not load_app_config()["telegram_user"]["auto_reply"]:
         return
 
     user_id = message.from_user.id
@@ -226,10 +214,18 @@ async def auto_reply(client, message):
                 client.notifications_queue.put(sender_name)
 
     except Exception as e:
+        reply_gate.failed(chat_id)
         logger.error(f"Ошибка отправки автоответа: {e}")
 
 
+class AuthRetryError(ValueError):
+    """The challenge remains valid; the user can retry without requesting a code."""
+
+
 class AuthManager:
+    SEND_CODE_TIMEOUT = 90
+    LOGIN_TIMEOUT = 180
+
     def __init__(self):
         self.loop = None
         self.thread = None
@@ -266,7 +262,7 @@ class AuthManager:
 
     @staticmethod
     def _normalize_phone(phone: str) -> str:
-        phone_clean = str(phone or "").strip().replace(" ", "").replace("-", "")
+        phone_clean = re.sub(r"[\s()\-]", "", str(phone or ""))
         if not phone_clean:
             raise ValueError("Номер телефона не указан!")
 
@@ -275,8 +271,12 @@ class AuthManager:
         elif not phone_clean.startswith("+"):
             phone_clean = "+" + phone_clean
 
-        if len(phone_clean) < 8:
-            raise ValueError("Некорректный номер телефона!")
+        if not re.fullmatch(r"\+[1-9][0-9]{6,14}", phone_clean):
+            raise ValueError(
+                "Укажите полный номер телефона с кодом страны, например +7 900 123-45-67."
+            )
+        if phone_clean.startswith("+7") and len(phone_clean) != 12:
+            raise ValueError("Для номера с кодом +7 нужны ещё 10 цифр. Проверьте полный номер.")
         return phone_clean
 
     @staticmethod
@@ -287,15 +287,23 @@ class AuthManager:
             raise ValueError("Telegram API ID должен быть числом!")
 
         api_hash_clean = str(api_hash or "").strip()
-        if not api_hash_clean:
-            raise ValueError("Telegram API Hash не указан!")
+        if api_id_int <= 0:
+            raise ValueError("Telegram API ID должен быть положительным числом!")
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", api_hash_clean):
+            raise ValueError(
+                "Telegram API Hash должен содержать 32 символа. Скопируйте его целиком."
+            )
         return api_id_int, api_hash_clean
 
     def _write_state(self, data: dict):
-        tmp = self.state_file + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.state_file)
+        from storage import atomic_write_json
+        from secret_store import protect_bootstrap
+
+        os.makedirs(BASE_DIR, exist_ok=True)
+        stored = dict(data)
+        if os.name == "nt" and stored.get("api_hash"):
+            stored["api_hash_protected"] = protect_bootstrap(stored.pop("api_hash"))
+        atomic_write_json(self.state_file, stored)
 
     def _remove_state(self):
         try:
@@ -309,32 +317,66 @@ class AuthManager:
         if self.client is not None:
             try:
                 if getattr(self.client, "is_connected", False):
-                    await self.client.disconnect()
+                    await asyncio.wait_for(self.client.disconnect(), timeout=5)
+                else:
+                    # connect() may fail after opening SQLite but before setting
+                    # is_connected. Release that handle so the next attempt works.
+                    session = getattr(self.client, "session", None)
+                    if session is not None and getattr(session, "connection", None) is not None:
+                        await asyncio.wait_for(session.stop(), timeout=5)
             except Exception as e:
                 logger.debug(f"Ошибка отключения auth-клиента: {e}")
             finally:
+                storage = getattr(self.client, "storage", None)
+                if storage is not None and getattr(storage, "conn", None) is not None:
+                    try:
+                        await storage.close()
+                    except Exception:
+                        pass
                 self.client = None
+
+    def _run_auth(self, operation, timeout, timeout_message):
+        self._ensure_loop()
+
+        async def bounded():
+            # wait_for cancels and awaits cleanup before releasing the GUI worker.
+            return await asyncio.wait_for(operation, timeout=timeout)
+
+        future = asyncio.run_coroutine_threadsafe(bounded(), self.loop)
+        try:
+            return future.result(timeout=timeout + 15)
+        except TimeoutError:
+            future.cancel()
+            raise TimeoutError(timeout_message) from None
+        except ApiIdInvalid:
+            raise ValueError(
+                "Telegram отклонил API ID / API Hash. Проверьте оба поля на my.telegram.org."
+            ) from None
+        except PhoneNumberInvalid:
+            raise ValueError(
+                "Telegram отклонил номер телефона. Укажите полный номер с кодом страны."
+            ) from None
+        except FloodWait as exc:
+            raise ValueError(
+                f"Telegram ограничил попытки входа. Повторите через {exc.value} сек."
+            ) from None
 
     def send_code(self, api_id: str, api_hash: str, phone: str) -> str:
         if not PYROGRAM_AVAILABLE:
             raise RuntimeError("Pyrogram не установлен. Установите pyrogram и tgcrypto.")
 
         with self._auth_operation_lock:
-            self._ensure_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_send_code(api_id, api_hash, phone), self.loop
+            return self._run_auth(
+                self._async_send_code(api_id, api_hash, phone),
+                self.SEND_CODE_TIMEOUT,
+                "Telegram слишком долго отвечает. Проверьте подключение и нажмите «Получить код» снова.",
             )
-            try:
-                return future.result(timeout=90)
-            except TimeoutError:
-                future.cancel()
-                raise TimeoutError("Telegram слишком долго отвечает на запрос кода (90 сек).")
 
     async def _async_send_code(self, api_id: str, api_hash: str, phone: str) -> str:
         api_id_int, api_hash_clean = self._validate_api(api_id, api_hash)
         phone_clean = self._normalize_phone(phone)
 
-        logger.info("Запрашиваем код Telegram для %s", phone_clean)
+        logger.info("Запрашиваем код Telegram")
         self._write_state({"status": "sending_code", "phone": phone_clean})
 
         try:
@@ -349,28 +391,38 @@ class AuthManager:
                 system_version="Windows 11",
                 app_version="4.14.9 x64",
                 lang_code="ru",
+                no_updates=True,
+                sleep_threshold=0,
             )
             self.client = probe
 
             try:
-                await self.client.connect()
+                authorized = await self.client.connect()
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
                     raise RuntimeError(
                         "Файл Telegram-сессии занят работающим юзерботом. "
-                        "Подождите несколько секунд и нажмите «Отправить код» ещё раз."
+                        "Подождите несколько секунд и нажмите «Получить код» ещё раз."
                     ) from e
                 raise
 
-            try:
+            if authorized:
                 me = await self.client.get_me()
-            except Exception:
-                me = None
-
-            if me is not None:
-                raise ValueError(
-                    "Этот Telegram-аккаунт уже авторизован в КРЕСТ. "
-                    "Новый код не требуется. Перезапустите программу, если bridge ещё не активен."
+                if me is None:
+                    raise RuntimeError(
+                        "Telegram не подтвердил данные аккаунта. Повторите подключение."
+                    )
+                existing_phone = str(getattr(me, "phone_number", "") or "").lstrip("+")
+                if existing_phone and existing_phone != phone_clean.lstrip("+"):
+                    raise ValueError(
+                        "В Крест уже подключён другой Telegram-аккаунт. "
+                        "Для замены завершите сессию Крест в Telegram → Устройства."
+                    )
+                await self._disconnect_client()
+                self._remove_state()
+                self.phone_code_hash = None
+                return (
+                    "Аккаунт уже авторизован. Код не нужен — нажмите «Запустить» у Telegram User."
                 )
 
             sent_code_info = await self.client.send_code(phone_clean)
@@ -392,10 +444,9 @@ class AuthManager:
                 "Запрос кода Telegram принят. Код обычно приходит в Telegram-приложение, "
                 "а способ доставки выбирает Telegram."
             )
-            return "Запрос кода авторизации успешно отправлен Telegram."
+            return "Код отправлен. Проверьте сообщения Telegram, введите код и нажмите «Войти»."
 
-        except Exception:
-            logger.exception("ОШИБКА ПРИ ЗАПРОСЕ КОДА TELEGRAM")
+        except (Exception, asyncio.CancelledError):
             await self._disconnect_client()
             self._remove_state()
             self.phone_code_hash = None
@@ -406,33 +457,33 @@ class AuthManager:
             raise RuntimeError("Pyrogram не установлен. Установите pyrogram и tgcrypto.")
 
         with self._auth_operation_lock:
-            self._ensure_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_login(code, password_callback), self.loop
+            return self._run_auth(
+                self._async_login(code, password_callback),
+                self.LOGIN_TIMEOUT,
+                "Вход в Telegram занял слишком много времени. Нажмите «Получить код» и повторите вход.",
             )
-            try:
-                return future.result(timeout=180)
-            except TimeoutError:
-                future.cancel()
-                raise TimeoutError("Авторизация Telegram слишком долго выполняется (180 сек).")
 
     async def _async_login(self, code: str, password_callback=None) -> str:
         code_clean = str(code or "").strip().replace(" ", "")
         if not code_clean:
             raise ValueError("Код Telegram не введён!")
 
-        data = None
+        preserve_challenge = False
         try:
             if not os.path.exists(self.state_file):
                 raise ValueError(
-                    "Сначала нажмите «Отправить код» и дождитесь подтверждения запроса."
+                    "Сначала нажмите «Получить код» и дождитесь подтверждения запроса."
                 )
 
-            with open(self.state_file, "r", encoding="utf-8-sig") as f:
-                data = json.load(f)
+            from storage import read_json
+            from secret_store import protect_bootstrap
 
-            if data.get("status") != "code_sent":
-                raise ValueError("Код ещё не был запрошен. Сначала нажмите «Отправить код».")
+            data = read_json(self.state_file)
+            if data.get("api_hash_protected"):
+                data["api_hash"] = protect_bootstrap(data["api_hash_protected"], decrypt=True)
+
+            if data.get("status") not in ("code_sent", "password_required"):
+                raise ValueError("Код ещё не был запрошен. Сначала нажмите «Получить код».")
 
             api_id = int(data["api_id"])
             api_hash = str(data["api_hash"]).strip()
@@ -450,6 +501,8 @@ class AuthManager:
                     system_version="Windows 11",
                     app_version="4.14.9 x64",
                     lang_code="ru",
+                    no_updates=True,
+                    sleep_threshold=0,
                 )
                 try:
                     await self.client.connect()
@@ -461,30 +514,43 @@ class AuthManager:
                         ) from e
                     raise
 
-            try:
-                await self.client.sign_in(
-                    self.phone,
-                    self.phone_code_hash,
-                    code_clean,
-                )
-            except SessionPasswordNeeded:
+            if data["status"] == "code_sent":
+                try:
+                    user = await self.client.sign_in(self.phone, self.phone_code_hash, code_clean)
+                    if user is False or isinstance(user, types.TermsOfService):
+                        raise ValueError(
+                            "Сначала зарегистрируйте этот номер в официальном Telegram."
+                        )
+                except SessionPasswordNeeded:
+                    # Telegram has accepted the code: do not submit it again if
+                    # the password is mistyped or the dialog is cancelled.
+                    data["status"] = "password_required"
+                    self._write_state(data)
+                except PhoneCodeExpired as exc:
+                    raise ValueError("Срок действия кода истёк. Нажмите «Получить код».") from exc
+                except PhoneCodeInvalid as exc:
+                    raise AuthRetryError(
+                        "Неверный код Telegram. Проверьте его и нажмите «Войти» ещё раз."
+                    ) from exc
+
+            if data["status"] == "password_required":
                 if password_callback is None:
-                    raise ValueError(
+                    raise AuthRetryError(
                         "На аккаунте включён облачный 2FA. Введите пароль 2FA в окне КРЕСТ."
                     )
 
-                pwd = password_callback()
+                # The Tk dialog waits on the GUI thread. Keep the Telegram loop
+                # alive so its network heartbeat continues while the user types.
+                pwd = await asyncio.to_thread(password_callback)
                 if not pwd:
-                    raise ValueError("Облачный 2FA пароль не введён!")
+                    raise AuthRetryError("Пароль 2FA не введён. Нажмите «Войти», чтобы продолжить.")
 
                 try:
                     await self.client.check_password(str(pwd))
                 except PasswordHashInvalid as e:
-                    raise ValueError("Неверный пароль облачного 2FA!") from e
-            except PhoneCodeExpired as e:
-                raise ValueError("Срок действия кода истёк. Запросите новый код.") from e
-            except PhoneCodeInvalid as e:
-                raise ValueError("Введён неверный код подтверждения Telegram.") from e
+                    raise AuthRetryError(
+                        "Неверный пароль 2FA. Нажмите «Войти» и введите пароль ещё раз."
+                    ) from e
 
             me = await self.client.get_me()
             if me is None:
@@ -492,16 +558,17 @@ class AuthManager:
 
             name = " ".join(x for x in [me.first_name, me.last_name] if x) or "Пользователь"
             user_info = f"{name} (@{me.username})" if me.username else name
-            logger.info("Telegram успешно авторизован: %s", user_info)
+            logger.info("Telegram успешно авторизован")
             return user_info
 
-        except Exception:
-            logger.exception("ОШИБКА ПРИ АВТОРИЗАЦИИ TELEGRAM")
+        except (AuthRetryError, FloodWait):
+            preserve_challenge = True
             raise
         finally:
-            await self._disconnect_client()
-            self._remove_state()
-            self.phone_code_hash = None
+            if not preserve_challenge:
+                await self._disconnect_client()
+                self._remove_state()
+                self.phone_code_hash = None
 
 
 _auth_mgr = AuthManager()
@@ -513,6 +580,19 @@ def send_code(api_id: str, api_hash: str, phone: str) -> str:
 
 def login(code: str, password_callback=None) -> str:
     return _auth_mgr.login(code, password_callback=password_callback)
+
+
+async def _start_authorized_client(app):
+    """Start only a GUI-authorized session; never prompt in a hidden EXE console."""
+    if not await app.connect():
+        return None
+    me = await app.get_me()
+    if me is None:
+        return None
+    app.me = me
+    await app.invoke(raw.functions.updates.GetState())
+    await app.initialize()
+    return me
 
 
 def start_tg_bridge(notifications_queue=None):
@@ -586,8 +666,7 @@ def start_tg_bridge(notifications_queue=None):
 
             try:
                 logger.info("Запуск Telegram Юзербота...")
-                await app.start()
-                me = await app.get_me()
+                me = await _start_authorized_client(app)
                 if me is None:
                     stop_reason["value"] = "UNAUTHORIZED"
                     return stop_reason["value"]
@@ -626,7 +705,10 @@ def start_tg_bridge(notifications_queue=None):
                     if task and not task.done():
                         task.cancel()
                 try:
-                    await app.stop()
+                    if app.is_initialized:
+                        await app.stop()
+                    elif app.is_connected:
+                        await app.disconnect()
                 except Exception:
                     pass
 

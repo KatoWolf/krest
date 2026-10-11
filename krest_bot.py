@@ -7,6 +7,7 @@ import requests
 import json
 import time
 import shutil
+import threading
 from datetime import datetime
 
 # --- ИНИЦИАЛИЗАЦИЯ КОНФИГА ---
@@ -59,6 +60,7 @@ from configuration import ConfigManager
 
 BASE_DIR = str(ConfigManager().filepath.parent)
 CACHE_FILE = os.path.join(BASE_DIR, "steam_cache.json")
+CACHE_LOCK = threading.Lock()
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 
 
@@ -86,16 +88,18 @@ def get_cached_data(key, max_age_seconds):
 
 
 def save_cached_data(key, data):
+    from storage import atomic_write_json, read_json
+
     try:
-        cache = {}
-        if os.path.exists(CACHE_FILE):
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-        cache[key] = {"time": time.time(), "data": data}
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        add_log(f"Ошибка сохранения кэша: {e}")
+        with CACHE_LOCK:
+            try:
+                cache = read_json(CACHE_FILE)
+            except (ValueError, OSError):
+                cache = {}
+            cache[key] = {"time": time.time(), "data": data}
+            atomic_write_json(CACHE_FILE, cache)
+    except OSError:
+        add_log("Кэш Telegram Terminal не сохранён")
 
 
 # --- ИНТЕРФЕЙС (ПАНЕЛЬ КНОПОК) ---
@@ -183,81 +187,58 @@ def get_sys_info():
 
 
 def check_cs2_inventory(force_update=False):
-    if not STEAM_ID:
-        return "❌ Ошибка: В конфиге нет `STEAM_ID`."
-    if not force_update:
-        cached = get_cached_data("cs2_inv", 900)
-        if cached:
-            return cached + "\n\n_(⚡ Данные из кэша)_"
+    from steam_service import SteamClient, SteamError, inventory_summary
 
+    keys = ConfigManager().snapshot()["api_keys"]
+    steam_id = keys["steam_id"]
+    cache_key = "cs2_inv:" + steam_id
+    cached = get_cached_data(cache_key, 900)
+    if cached and not force_update:
+        return cached + "\nДанные из кэша (до 15 минут)."
     try:
-        r = requests.get(
-            f"https://steamcommunity.com/inventory/{STEAM_ID}/730/2?l=russian&count=1000",
-            timeout=10,
+        items = SteamClient(keys["steam_api_key"], steam_id).inventory("730", "2")
+        counts = inventory_summary(items)
+        result = (
+            f"CS2 · предметов: {counts['total']}\n"
+            f"Доступны для обмена: {counts['tradable']}\n"
+            f"Недоступны: {counts['locked']} · Статус неизвестен: {counts['unknown']}"
         )
-        if r.status_code == 429:
-            old_cache = get_cached_data("cs2_inv", 999999)
-            if old_cache:
-                return old_cache + "\n\n_(⚠️ Steam Rate Limit. Показаны старые данные)_"
-            return "❌ Стим заблокировал запрос (Rate Limit)."
-        if r.status_code != 200:
-            return "❌ Инвентарь скрыт или API недоступен."
-
-        data = r.json()
-        if "descriptions" not in data:
-            return "✅ Инвентарь пуст."
-
-        locked_items = []
-        now = datetime.utcnow()
-        for desc in data["descriptions"]:
-            if desc.get("tradable") == 0 and "cache_expiration" in desc:
-                name = desc.get("market_name", desc.get("name", "Неизвестный предмет"))
-                exp_str = desc["cache_expiration"]
-                try:
-                    exp_time = datetime.strptime(exp_str, "%Y-%m-%dT%H:%M:%SZ")
-                    delta = exp_time - now
-                    if delta.total_seconds() > 0:
-                        locked_items.append(
-                            f"🔒 `{name}`\n⏳ Бан спадёт через: **{delta.days}д {delta.seconds // 3600 % 24}ч**"
-                        )
-                except:
-                    locked_items.append(f"🔒 `{name}`\n⏳ Дата разбана: **{exp_str}**")
-
-        if not locked_items:
-            res = "✅ В инвентаре CS2 нет предметов с трейд-баном."
-        else:
-            list_str = "\n\n".join(locked_items[:20]) + (
-                f"\n\n...и еще {len(locked_items) - 20} шт." if len(locked_items) > 20 else ""
+        locked = [item for item in items if item.get("tradable") is False]
+        for item in locked[:15]:
+            date = (
+                datetime.fromtimestamp(item["unlock_at"]).strftime("%d.%m.%Y %H:%M")
+                if item.get("unlock_at")
+                else "Steam не сообщил срок"
             )
-            res = f"📦 **ИНВЕНТАРЬ CS2:**\n\n{list_str}"
-
-        save_cached_data("cs2_inv", res)
-        return res
-    except Exception as e:
-        return f"❌ Ошибка инвентаря: {e}"
+            result += "\n" + item["name"][:100] + " · " + date
+        if locked:
+            result += "\nНедоступность обмена не всегда означает временную блокировку."
+        save_cached_data(cache_key, result)
+        return result
+    except (SteamError, ValueError, KeyError, TypeError):
+        old = get_cached_data(cache_key, 86400)
+        return (
+            (old + "\nПоказаны прежние данные: Steam сейчас недоступен.")
+            if old
+            else "Не удалось проверить инвентарь. Проверьте SteamID64 и видимость инвентаря в Steam."
+        )
 
 
 def check_active_trades():
-    if not STEAM_API_KEY:
-        return "❌ Ошибка: Нет `STEAM_API_KEY`."
-    cached = get_cached_data("active_trades", 300)
+    from steam_service import SteamClient, SteamError
+
+    keys = ConfigManager().snapshot()["api_keys"]
+    cache_key = "active_trades:" + keys["steam_id"]
+    cached = get_cached_data(cache_key, 300)
     if cached:
-        return cached
+        return cached + "\nДанные из кэша (до 5 минут)."
     try:
-        url = f"https://api.steampowered.com/IEconService/GetTradeOffers/v1/?key={STEAM_API_KEY}&get_received_offers=1&active_only=1"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 429:
-            return get_cached_data("active_trades", 999999) or "❌ Steam Rate Limit."
-        data = r.json()
-        offers = data.get("response", {}).get("trade_offers_received", [])
-        if not offers:
-            res = "🤝 Активных предложений обмена нет."
-        else:
-            res = f"🤝 **НОВЫЕ ТРЕЙДЫ!** У тебя **{len(offers)}** активных предложений на обмен."
-        save_cached_data("active_trades", res)
-        return res
-    except:
-        return "❌ Ошибка при проверке трейдов."
+        offers = SteamClient(keys["steam_api_key"], keys["steam_id"]).offers()
+        result = f"Предложения обмена: входящих {sum(o['direction'] == 'in' for o in offers)}, исходящих {sum(o['direction'] == 'out' for o in offers)}."
+        save_cached_data(cache_key, result)
+        return result
+    except (SteamError, ValueError, KeyError, TypeError):
+        return "Не удалось проверить обмены. Проверьте Steam Web API Key и доступность Steam."
 
 
 # --- ЗАГРУЗКА ФАЙЛОВ С ТЕЛЕФОНА НА ПК ---

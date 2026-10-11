@@ -106,6 +106,18 @@ DEFAULT_CONFIG = {
         "follow_activity": False,
         "status_text": "Крест рядом",
     },
+    "discord_bot": {
+        "auto_reply": True,
+        "status": "online",
+        "activity_text": "Крест · помощник рядом",
+        "follow_activity": True,
+    },
+    "telegram_user": {
+        "auto_reply": True,
+        "update_bio": False,
+        "follow_activity": True,
+        "bio_text": "Крест рядом",
+    },
     "discord_presence": {
         "application_id": "",
         "details": "Крест — личный ассистент",
@@ -239,6 +251,8 @@ def validate(data):
     for section, keys in (
         ("auto_replies", ("enabled", "share_activity")),
         ("discord_account", ("enabled", "auto_reply", "update_status", "follow_activity")),
+        ("discord_bot", ("auto_reply", "follow_activity")),
+        ("telegram_user", ("auto_reply", "update_bio", "follow_activity")),
     ):
         if any(type(data[section][key]) is not bool for key in keys):
             raise ValueError("Настройки автоответов: нужны переключатели")
@@ -258,6 +272,16 @@ def validate(data):
     ):
         raise ValueError("Некорректный токен Discord-аккаунта")
     presence = data["discord_presence"]
+    bot = data["discord_bot"]
+    if (
+        not isinstance(data["telegram_user"]["bio_text"], str)
+        or len(data["telegram_user"]["bio_text"]) > 70
+    ):
+        raise ValueError("Описание Telegram: не более 70 символов")
+    if bot["status"] not in ("online", "idle", "dnd", "invisible"):
+        raise ValueError("Выберите статус серверного Discord-бота")
+    if not isinstance(bot["activity_text"], str) or not 1 <= len(bot["activity_text"]) <= 128:
+        raise ValueError("Активность Discord-бота: от 1 до 128 символов")
     if presence["application_id"] and not str(presence["application_id"]).isdigit():
         raise ValueError("Discord Application ID должен быть числом")
     if not isinstance(presence["follow_activity"], bool):

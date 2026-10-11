@@ -64,8 +64,8 @@ class ControlCenterApp(
         ("maintenance", "Нагрузка и файлы"),
         ("api", "Telegram"),
         ("steam", "Steam / CS2"),
-        ("discord_account", "Мой Discord"),
-        ("discord_bot", "Discord-бот"),
+        ("discord_account", "Discord · мой аккаунт"),
+        ("discord_bot", "Discord · серверный бот"),
         ("scripts", "Скрипты и мосты"),
         ("dota", "Dota 2"),
         ("settings", "Настройки"),
@@ -180,6 +180,18 @@ class ControlCenterApp(
             )
             for key, value in self.config_mgr.config["discord_account"].items()
         }
+        self.bot_vars = {
+            key: tk.BooleanVar(self, value=value)
+            if isinstance(value, bool)
+            else tk.StringVar(self, value=value)
+            for key, value in self.config_mgr.config["discord_bot"].items()
+        }
+        self.tg_vars = {
+            key: tk.BooleanVar(self, value=value)
+            if isinstance(value, bool)
+            else tk.StringVar(self, value=value)
+            for key, value in self.config_mgr.config["telegram_user"].items()
+        }
         self.dota_vars = {
             key: (
                 tk.BooleanVar(value=value) if isinstance(value, bool) else tk.StringVar(value=value)
@@ -208,6 +220,8 @@ class ControlCenterApp(
             *self.dota_vars.values(),
             *self.reply_vars.values(),
             *self.account_vars.values(),
+            *self.bot_vars.values(),
+            *self.tg_vars.values(),
             *self.steam_vars.values(),
             *self.presence_vars.values(),
         ]:
@@ -292,12 +306,19 @@ class ControlCenterApp(
     def advanced(self, parent, title="Дополнительные настройки"):
         return Disclosure(parent, title, self.theme).body
 
-    def field(self, parent, title, variable, secret=False):
+    def field(self, parent, title, variable, secret=False, paste_button=False):
         row = tk.Frame(parent, bg=parent.cget("bg"))
         row.pack(fill="x", pady=5)
         self.label(row, title, width=24).pack(side="left")
         entry = ttk.Entry(row, textvariable=variable, show="•" if secret else "")
         entry.pack(side="left", fill="x", expand=True)
+        from entry_clipboard import attach, paste
+
+        attach(entry, self.theme)
+        if secret or paste_button:
+            ttk.Button(row, text="Вставить", command=lambda: paste(entry, replace=True)).pack(
+                side="right", padx=(6, 0)
+            )
         if secret:
             ttk.Button(
                 row,
@@ -457,9 +478,6 @@ class ControlCenterApp(
             if not hasattr(self, "wf_trees"):
                 self.wf_trees, self.wf_output_widgets = {}, {}
             getattr(self, "build_" + code)()
-        elif code in ("discord_account", "discord_bot"):
-            self._built_pages.update(("discord_account", "discord_bot"))
-            self.build_discord_tabs()
         else:
             self._built_pages.add(code)
             builders = {"license": self.build_premium_tab, "appearance": self.build_appearance}
@@ -1286,19 +1304,38 @@ class ControlCenterApp(
             for key, label, secret in fields:
                 self.api_entries[key] = self.field(credentials, label, self.api_vars[key], secret)
             if filename == "tg_bridge.py":
+                for key, caption in (
+                    ("auto_reply", "Автоответы с моего Telegram-аккаунта"),
+                    ("update_bio", "Обновлять описание моего профиля"),
+                    ("follow_activity", "Показывать игру в описании профиля"),
+                ):
+                    ttk.Checkbutton(card, text=caption, variable=self.tg_vars[key]).pack(
+                        anchor="w", pady=4
+                    )
+                self.field(card, "Описание профиля", self.tg_vars["bio_text"])
+                self.label(
+                    credentials,
+                    "Телефон — полностью, с кодом страны. Код входа придёт способом, выбранным Telegram.",
+                    muted=True,
+                    wraplength=680,
+                ).pack(anchor="w", pady=(4, 0))
                 row = tk.Frame(credentials, bg=self.theme["card"])
                 row.pack(fill="x", pady=8)
                 self.code_var = tk.StringVar()
-                ttk.Entry(row, textvariable=self.code_var, show="•").pack(
-                    side="left", fill="x", expand=True
-                )
+                code_entry = ttk.Entry(row, textvariable=self.code_var, show="•")
+                code_entry.pack(side="left", fill="x", expand=True)
+                from entry_clipboard import attach
+
+                attach(code_entry, self.theme)
                 self.auth_buttons = [
                     ttk.Button(row, text="Получить код", command=self.handle_tg_send_code),
                     ttk.Button(row, text="Войти", command=self.handle_tg_login),
                 ]
                 for button in self.auth_buttons:
                     button.pack(side="left", padx=5)
-                self.auth_label = self.label(credentials, "Авторизация Telegram", muted=True)
+                self.auth_label = self.label(
+                    credentials, "Авторизация Telegram", muted=True, wraplength=680
+                )
                 self.auth_label.pack(anchor="w")
         self.label(
             self.page_bodies["api"],
@@ -1620,6 +1657,8 @@ class ControlCenterApp(
         data["skills"].update({key: var.get() for key, var in self.skill_vars.items()})
         data["auto_replies"].update({key: var.get() for key, var in self.reply_vars.items()})
         data["discord_account"].update({key: var.get() for key, var in self.account_vars.items()})
+        data["discord_bot"].update({key: var.get() for key, var in self.bot_vars.items()})
+        data["telegram_user"].update({key: var.get() for key, var in self.tg_vars.items()})
         data["dota_guide"].update({key: var.get() for key, var in self.dota_vars.items()})
         if self.CORE_PAGES & self._built_pages:
             data.update(self.core_settings_draft())
@@ -1805,7 +1844,10 @@ class ControlCenterApp(
                     )
                 )
             )
-            return result.get(timeout=120)
+            try:
+                return result.get(timeout=120)
+            except queue.Empty:
+                return None
 
         def operation():
             try:
@@ -1820,21 +1862,20 @@ class ControlCenterApp(
                     )
                     self.post_ui(lambda: self.code_var.set(""))
                 else:
-                    bridge.send_code(
+                    message = bridge.send_code(
                         values["telegram_api_id"],
                         values["telegram_api_hash"],
                         values["telegram_phone"],
                     )
-                    self.post_ui(
-                        lambda: self.auth_label.configure(text="Код отправлен. Проверьте Telegram.")
-                    )
-            except Exception:
-                self.post_ui(
-                    lambda: self.auth_label.configure(
-                        text="Авторизация не завершена; подробности в журнале."
-                    )
-                )
-                raise
+                    self.post_ui(lambda message=message: self.auth_label.configure(text=message))
+            except Exception as exc:
+                from integrations import redact
+
+                error = redact(str(exc), self.config_mgr.snapshot())
+                if code:
+                    error = error.replace(code, "[код скрыт]")
+                self.post_ui(lambda error=error: self.auth_label.configure(text=error))
+                self.post_ui(lambda error=error: self._report_error(error))
             finally:
                 self.post_ui(self._auth_finished)
 
@@ -2065,7 +2106,7 @@ class ControlCenterApp(
                     self.service_labels[filename].configure(
                         text="● " + statuses[key],
                         fg=self.theme["accent"]
-                        if detail["running"]
+                        if detail["health"] == "ready"
                         else self.theme["danger"]
                         if detail["error"]
                         else self.theme["sub_text"],
@@ -2102,6 +2143,8 @@ class ControlCenterApp(
             if self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             self._update_license_view()
+            if self.current_page == "discord_bot" and "discord_bot" in self._built_pages:
+                self._update_discord_bot()
             if self.current_page in self.BOT_PAGES and not self.config_mgr.is_premium():
                 if self.pages[self.current_page].winfo_manager():
                     self.switch_page(self.current_page)

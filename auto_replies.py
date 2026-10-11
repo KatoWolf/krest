@@ -60,6 +60,10 @@ class ReplyGate:
     def outgoing(self, contact):
         self.manual[str(contact)] = self.clock()
 
+    def failed(self, contact):
+        """A failed send must not count as a delivered auto-reply."""
+        self.sent.pop(str(contact), None)
+
     def allow(self, contact, settings=None, important=False):
         cfg = {**DEFAULT_REPLIES, **(settings or {})}
         if not cfg["enabled"]:

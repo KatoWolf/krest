@@ -17,6 +17,12 @@ API = "https://discord.com/api/v9"
 GATEWAY = "wss://gateway.discord.gg/?v=9&encoding=json"
 
 
+class RateLimited(RuntimeError):
+    def __init__(self, seconds):
+        self.seconds = min(3600, max(1, float(seconds)))
+        super().__init__(f"Discord ограничил запросы на {self.seconds:g} сек.")
+
+
 class AccountSession:
     def __init__(self, manager):
         self.manager = manager
@@ -36,14 +42,15 @@ class AccountSession:
 
     async def request(self, session, method, route, **kwargs):
         async with session.request(method, API + route, **kwargs) as response:
-            if response.status in (401, 403):
+            if response.status == 401:
                 raise PermissionError(
                     "Discord отклонил доступ аккаунта; проверьте сессию в приложении Discord"
                 )
             if response.status == 429:
                 value = await response.json()
-                await asyncio.sleep(min(60, max(1, float(value.get("retry_after", 5)))))
-                raise RuntimeError("Discord ограничил частоту запросов; запрос пропущен")
+                raise RateLimited(value.get("retry_after", 5))
+            if response.status == 403:
+                raise ValueError("Discord запретил действие; проверьте доступ к этому чату")
             if response.status >= 400:
                 raise RuntimeError("Discord HTTP " + str(response.status))
             return await response.json() if response.status != 204 else {}
@@ -81,8 +88,6 @@ class AccountSession:
         if not opts["enabled"] or not opts["auto_reply"]:
             return
         important = urgent(data.get("content", ""))
-        if not self.gate.allow(channel, cfg["auto_replies"], important):
-            return
         if channel not in self.dm_channels:
             info = await self.request(session, "GET", "/channels/" + channel)
             if info.get("type") != 1:
@@ -90,16 +95,22 @@ class AccountSession:
             if len(self.dm_channels) >= 1000:
                 self.dm_channels.clear()
             self.dm_channels.add(channel)
+        if not self.gate.allow(channel, cfg["auto_replies"], important):
+            return
         status = self.local_status()
         text = render_reply(
             cfg["owner_name"], status, cfg["auto_replies"], bool(data.get("attachments")), important
         )
-        sent = await self.request(
-            session,
-            "POST",
-            f"/channels/{channel}/messages",
-            json={"content": text, "allowed_mentions": {"parse": []}},
-        )
+        try:
+            sent = await self.request(
+                session,
+                "POST",
+                f"/channels/{channel}/messages",
+                json={"content": text, "allowed_mentions": {"parse": []}},
+            )
+        except Exception:
+            self.gate.failed(channel)
+            raise
         ident = str(sent.get("id", ""))
         self.own_messages.add(ident)
         if len(self.own_messages) > 1000:
@@ -133,13 +144,28 @@ class AccountSession:
                 if cfg["follow_activity"]:
                     state = self.local_status()
                     text = "В игре · Крест рядом" if state.get("is_playing") else cfg["status_text"]
-                if text != self.last_status and time.monotonic() - self.status_updated > 300:
-                    await self.request(
-                        session,
-                        "PATCH",
-                        "/users/@me/settings",
-                        json={"custom_status": {"text": text}},
-                    )
+                if self.last_status is None or (
+                    text != self.last_status and time.monotonic() - self.status_updated > 300
+                ):
+                    try:
+                        await self.request(
+                            session,
+                            "PATCH",
+                            "/users/@me/settings",
+                            json={"custom_status": {"text": text}},
+                        )
+                    except RateLimited as exc:
+                        emit("status", str(exc))
+                        await asyncio.sleep(exc.seconds)
+                        continue
+                    except PermissionError:
+                        raise
+                    except (OSError, ValueError, RuntimeError):
+                        emit(
+                            "status", "Discord: статус не обновлён; следующая попытка через 30 сек."
+                        )
+                        await asyncio.sleep(30)
+                        continue
                     self.last_status = text
                     self.status_updated = time.monotonic()
             await asyncio.sleep(30)
@@ -151,6 +177,9 @@ class AccountSession:
                 await self.message(session, data)
             except PermissionError:
                 raise
+            except RateLimited as exc:
+                emit("status", str(exc))
+                await asyncio.sleep(exc.seconds)
             except Exception:
                 emit("error", "Discord: автоответ не отправлен; проверьте соединение и лимиты")
             finally:
@@ -177,16 +206,24 @@ class AccountSession:
                 incoming = asyncio.Queue(maxsize=32)
                 try:
                     async with session.ws_connect(GATEWAY, max_msg_size=4 * 1024 * 1024) as ws:
+
+                        def task_finished(task):
+                            # A failed consumer/status task must wake the gateway
+                            # even when no more messages arrive from Discord.
+                            if not task.cancelled() and task.exception() is not None:
+                                asyncio.create_task(ws.close())
+
+                        def watch(coro):
+                            task = asyncio.create_task(coro)
+                            task.add_done_callback(task_finished)
+                            tasks.append(task)
+
                         hello = await ws.receive_json(timeout=20)
                         if hello.get("op") != 10:
                             raise RuntimeError("Discord не прислал приветствие шлюза")
                         self.acknowledged = True
                         self.sequence = None
-                        tasks.append(
-                            asyncio.create_task(
-                                self.heartbeat(ws, max(1, hello["d"]["heartbeat_interval"] / 1000))
-                            )
-                        )
+                        watch(self.heartbeat(ws, max(1, hello["d"]["heartbeat_interval"] / 1000)))
                         await ws.send_json(
                             {
                                 "op": 2,
@@ -220,11 +257,13 @@ class AccountSession:
                                     for c in (event.get("d") or {}).get("private_channels", [])
                                     if isinstance(c, dict) and c.get("type") == 1 and c.get("id")
                                 }
-                                emit("ready", "Личная сессия Discord подключена")
-                                tasks.append(asyncio.create_task(self.status_loop(session, ws)))
-                                tasks.append(
-                                    asyncio.create_task(self.consume_messages(session, incoming))
+                                emit(
+                                    "ready",
+                                    "Личный аккаунт Discord подключён: "
+                                    + str(identity.get("username", ""))[:80],
                                 )
+                                watch(self.status_loop(session, ws))
+                                watch(self.consume_messages(session, incoming))
                             elif event.get("t") == "MESSAGE_CREATE":
                                 data = event.get("d") or {}
                                 if not data.get("guild_id"):
@@ -238,16 +277,22 @@ class AccountSession:
                             for task in tasks:
                                 if task.done() and not task.cancelled() and task.exception():
                                     raise task.exception()
+                        for task in tasks:
+                            if task.done() and not task.cancelled() and task.exception():
+                                raise task.exception()
                         if ws.close_code in (4004, 4014):
                             raise PermissionError("Discord отклонил авторизацию личной сессии")
                 except PermissionError:
                     raise
                 except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RuntimeError):
-                    emit("status", "Переподключаю личную сессию Discord")
+                    emit("disconnected", "Переподключаю личную сессию Discord")
                 finally:
                     for task in tasks:
                         task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
+                emit("disconnected", "Соединение личного аккаунта закрыто; ожидаю переподключения")
+                if not self.config()["discord_account"]["enabled"]:
+                    return
                 await asyncio.sleep(min(60, 10 * (attempt + 1)))
             raise RuntimeError(
                 "Discord: соединение нестабильно. Сессия остановлена после пяти попыток"

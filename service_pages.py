@@ -9,9 +9,10 @@ import uuid
 import webbrowser
 
 from steam_service import read_cache
+from discord_bot_pages import DiscordBotPages
 
 
-class ServicePages:
+class ServicePages(DiscordBotPages):
     def _startup_checks(self):
         import psutil
 
@@ -115,8 +116,12 @@ class ServicePages:
             "Steam · библиотека и CS2",
             "Автоматическое обновление AppID, инвентаря и предложений обмена. Крест не принимает и не отправляет обмены.",
         )
-        self.field(card, "Steam Web API Key", self.api_vars["steam_api_key"], True)
-        self.field(card, "SteamID64", self.api_vars["steam_id"])
+        self.api_entries["steam_api_key"] = self.field(
+            card, "Steam Web API Key", self.api_vars["steam_api_key"], True
+        )
+        self.api_entries["steam_id"] = self.field(
+            card, "SteamID64", self.api_vars["steam_id"], paste_button=True
+        )
         advanced = self.advanced(card, "Папка Steam и частота обновления")
         self.field(advanced, "Папка Steam", self.steam_vars["install_path"])
         ttk.Button(advanced, text="Найти папку Steam…", command=self._choose_steam_folder).pack(
@@ -365,22 +370,11 @@ class ServicePages:
             variable=self.reply_vars["share_activity"],
         ).pack(anchor="w", pady=4)
 
-    def build_discord_tabs(self):
-        card = self.card(
-            self.page_bodies["discord_bot"],
-            "Discord · обычный бот",
-            "Отдельный аккаунт бота, автоответы в его личных сообщениях и уведомления Крест. Нужен Bot Token из Developer Portal.",
-        )
-        for key, caption in (("discord_token", "Bot Token"), ("discord_channel_id", "Channel ID")):
-            self.api_entries[key] = self.field(
-                card, caption, self.api_vars[key], key == "discord_token"
-            )
-        self.service_controls(card, "ds_session.py")
-        self.build_reply_controls(self.page_bodies["discord_bot"])
+    def build_discord_account_tab(self):
         account = self.card(
             self.page_bodies["discord_account"],
-            "Личный аккаунт · отдельная сессия",
-            "Токен аккаунта отличается от Bot Token. Неофициальная автоматизация может привести к блокировке Discord. Токен вводится только здесь, не в чат Крест.",
+            "Личный Discord-аккаунт",
+            "Вход в ваш аккаунт, автоответы в личных сообщениях и ваш текстовый статус. Настройки серверного бота находятся на соседней вкладке.",
         )
         self.field(account, "Токен личной сессии", self.api_vars["discord_user_token"], True)
         for key, label in (
@@ -394,6 +388,7 @@ class ServicePages:
             )
         self.field(account, "Текст статуса", self.account_vars["status_text"])
         self.service_controls(account, "discord_account.py")
+        self.build_reply_controls(self.page_bodies["discord_account"])
         card = self.card(
             self.page_bodies["discord_account"],
             "Discord · мой статус",

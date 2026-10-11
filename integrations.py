@@ -42,6 +42,7 @@ def redact(text, settings):
 
 
 class IntegrationManager:
+    BUILTIN_COMMANDS = {"ds_session.py": {"refresh", "channels", "send_message"}}
     MODULES = {
         "tg_user": ("tg_bridge.py", "Telegram User"),
         "tgt": ("krest_bot.py", "Telegram Terminal"),
@@ -103,7 +104,9 @@ class IntegrationManager:
             return "Не установлен"
         proc = self.processes.get(filename)
         if proc and proc.poll() is None:
-            return "Запущен"
+            if self.errors.get(filename):
+                return "Требует внимания"
+            return "Подключён" if self.bridge.get(filename, {}).get("ready") else "Подключение…"
         return "Ошибка запуска" if filename in self.errors else "Не запущен"
 
     def details(self, filename):
@@ -130,7 +133,7 @@ class IntegrationManager:
             "restarts": len(self.restart_history.get(filename, [])),
         }
 
-    def send(self, filename, command):
+    def send(self, filename, command, **payload):
         from licensing import require_premium
 
         require_premium(self.app.config_mgr.snapshot())
@@ -139,7 +142,12 @@ class IntegrationManager:
             capabilities = self.bridge.get(filename, {}).get("capabilities", [])
             if proc is None or proc.poll() is not None or command not in capabilities:
                 raise RuntimeError("Скрипт не запущен или не объявил поддержку команды " + command)
-            proc.stdin.write(json.dumps({"command": command}) + "\n")
+            if not self.bridge.get(filename, {}).get("ready"):
+                raise RuntimeError("Сервис ещё не подтвердил подключение")
+            encoded = json.dumps({**payload, "command": command}, ensure_ascii=False)
+            if len(encoded) > 8192:
+                raise ValueError("Команда моста слишком длинная")
+            proc.stdin.write(encoded + "\n")
             proc.stdin.flush()
 
     def autostart(self):
@@ -170,17 +178,25 @@ class IntegrationManager:
         if kind == "ready":
             self.errors.pop(filename, None)
             caps = value.get("capabilities", [])
+            custom = settings.get("services", {}).get(filename, {}).get("path")
+            allowed = self.BUILTIN_COMMANDS.get(filename, set()) if not custom else set()
+            allowed = allowed | ({"refresh"} if "refresh" in permissions else set())
             self.bridge[filename] = {
+                **self.bridge.get(filename, {}),
                 "text": message,
                 "ready": True,
                 "last_event": time.time(),
-                "capabilities": [c for c in caps if c in ("refresh",) and c in permissions]
-                if isinstance(caps, list)
-                else [],
+                "capabilities": [c for c in caps if c in allowed] if isinstance(caps, list) else [],
             }
         elif kind == "status":
             self.errors.pop(filename, None)
             self.bridge.setdefault(filename, {})["text"] = message
+        elif kind == "disconnected":
+            self.bridge[filename].update(ready=False, text=message)
+        elif kind == "data" and filename in ("ds_session.py", "discord_account.py"):
+            data = value.get("data")
+            if isinstance(data, dict):
+                self.bridge[filename].setdefault("data", {}).update(data)
         elif kind == "error":
             self.errors[filename] = message
         elif (
@@ -211,8 +227,9 @@ class IntegrationManager:
                     code = proc.poll()
                     if code is not None:
                         if code:
-                            self.errors[filename] = (
-                                f"Процесс завершился с кодом {code}; подробности в журнале"
+                            self.errors.setdefault(
+                                filename,
+                                f"Процесс завершился с кодом {code}; подробности в журнале",
                             )
                         self.processes.pop(filename, None)
                         if proc.stdin:
@@ -287,7 +304,8 @@ class IntegrationManager:
                     while line and not line.endswith("\n"):
                         line = proc.stdout.readline(8193)
                     line = "[слишком длинная строка сервиса пропущена]\n"
-                self._event(filename, line, settings)
+                if self.processes.get(filename) is proc:
+                    self._event(filename, line, settings)
                 record = logging.LogRecord(
                     filename,
                     logging.INFO,
@@ -319,7 +337,7 @@ class IntegrationManager:
             settings = self.app.config_mgr.snapshot()
             custom = settings.get("services", {}).get(filename, {}).get("path")
             if not custom:
-                validate_module(filename, settings)
+                validate_module(filename, settings, self.app.config_mgr.filepath.parent)
             from plugin_manifest import inspect_plugin
 
             self.manifests[filename] = (

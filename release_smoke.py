@@ -92,11 +92,29 @@ def check_models(settings):
     print("Vosk и синтез Silero проверены без микрофона и динамиков.")
 
 
+def check_telegram_worker():
+    """Exercise the GUI's first import from a fresh worker, without logging in."""
+    from concurrent.futures import ThreadPoolExecutor
+    import importlib
+
+    def load():
+        bridge = importlib.import_module("tg_bridge")
+        if not bridge.PYROGRAM_AVAILABLE:
+            raise RuntimeError("Pyrogram недоступен для авторизации Telegram")
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="TelegramAuthCheck") as pool:
+        pool.submit(load).result(timeout=20)
+    print("Telegram: импорт из фонового потока выполнен без подключения к аккаунту.", flush=True)
+
+
 def check_dependencies():
     """Verify native speech/media libraries without downloads or hardware access."""
     import importlib
     import os
 
+    # Must run before anything imports Pyrogram on the main thread: that would
+    # hide the missing-event-loop error that occurs after pressing Get code.
+    check_telegram_worker()
     modules = [
         "torch",
         "vosk",
@@ -106,7 +124,6 @@ def check_dependencies():
         "aiohttp",
         "discord",
         "telebot",
-        "pyrogram",
     ]
     if os.name == "nt":
         modules += [
