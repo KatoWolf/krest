@@ -201,3 +201,26 @@ def test_real_child_kernel_status_and_safe_reconnect(tmp_path):
         if remote:
             remote.detach()
         client.call("shutdown")
+
+
+def test_proxy_error_clears_only_on_fresh_confirmed_recovery():
+    from types import SimpleNamespace
+    from kernel_client import ServiceProxy
+
+    name = "krest_bot.py"
+    ready = {"running": True, "health": "ready", "error": ""}
+    remote = SimpleNamespace(cached={"modules": {}, "services": {name: ready}}, settings=lambda: {})
+    proxy = ServiceProxy(remote)
+    def fail(filename):
+        raise RuntimeError("restart failed")
+    proxy.restart = fail
+    with pytest.raises(RuntimeError):
+        proxy.perform(name, "restart")
+    assert proxy.details(name)["health"] == "error"  # old snapshot must not erase failure
+    remote.cached = {"modules": {}, "services": {name: {**ready, "health": "unknown"}}}
+    assert proxy.details(name)["error"] == "restart failed"
+    remote.cached = {"modules": {}, "services": {name: {**ready, "error": "server failure"}}}
+    assert proxy.details(name)["health"] == "error"
+    remote.cached = {"modules": {}, "services": {name: ready}}
+    assert proxy.details(name)["health"] == "ready"
+    assert not proxy.details(name)["error"]

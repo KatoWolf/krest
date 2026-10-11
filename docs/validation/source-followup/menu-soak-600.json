@@ -1,0 +1,452 @@
+{
+  "scope": "Linux/Xvfb; offline Tk; no microphone, models, games or accounts",
+  "python": "3.13.5",
+  "tk": "8.6.16",
+  "cycles": 600,
+  "page_transitions": 3600,
+  "theme_rebuilds": 600,
+  "duration_seconds": 143.23,
+  "transition_ms_median": 9.95,
+  "transition_ms_p95": 23.41,
+  "transition_ms_max": 156.21,
+  "samples": [
+    {
+      "rss_mb": 52.41,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.48,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.65,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.79,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 53.92,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.05,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.25,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.37,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.52,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.63,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.75,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 54.92,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.04,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.19,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.3,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.45,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.62,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.76,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 55.89,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.01,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.13,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.3,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.42,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.55,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.68,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.81,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 56.97,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.1,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.21,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.36,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.51,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.65,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.78,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 57.89,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 58.04,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 58.11,
+      "pending_after": 1,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.02,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.16,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 58.64,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 58.76,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.55,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.72,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.16,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.31,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.39,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.55,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.7,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 59.85,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.68,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.09,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.21,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.38,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.5,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.62,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 60.81,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 61.61,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 61.79,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 61.23,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 62.06,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 62.18,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    },
+    {
+      "rss_mb": 62.31,
+      "pending_after": 2,
+      "owner_traces": 2,
+      "personality_traces": 3,
+      "motion_widgets": 0
+    }
+  ],
+  "final": {
+    "rss_mb": 62.32,
+    "pending_after": 1,
+    "owner_traces": 2,
+    "personality_traces": 3,
+    "motion_widgets": 0
+  },
+  "remaining_transition_items": 0,
+  "remaining_transition_job": null,
+  "remaining_motion_jobs": 0,
+  "callback_errors": []
+}

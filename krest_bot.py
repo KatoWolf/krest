@@ -26,6 +26,59 @@ except ImportError:
     exit()
 
 
+class TerminalHealth:
+    """Observe existing polling requests; never add a network health probe."""
+
+    def __init__(self):
+        self.state = None
+
+    def waiting(self):
+        from bridge_sdk import emit
+
+        self.state = "unknown"
+        emit(
+            "status",
+            "Токен Telegram подтверждён; ожидается первый ответ опроса сообщений",
+            health="unknown",
+        )
+
+    def failed(self, exc):
+        from bridge_sdk import emit
+
+        code = getattr(exc, "error_code", None)
+        message = {
+            401: "Telegram отклонил токен Terminal. Проверьте токен бота.",
+            409: "Telegram отклонил опрос сообщений: конфликт другого опроса или webhook (409).",
+            429: "Telegram ограничил частоту запросов; SDK ожидает повторного подключения.",
+        }.get(code, "Связь Telegram Terminal не подтверждена; опрос сообщений будет повторён.")
+        if self.state != message:
+            self.state = message
+            emit("error", message)
+
+    def confirmed(self):
+        from bridge_sdk import emit
+
+        if self.state != "ready":
+            self.state = "ready"
+            emit("ready", "Telegram Terminal подтвердил получение обновлений")
+
+
+class ObservedTeleBot(telebot.TeleBot):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.health = TerminalHealth()
+
+    def get_updates(self, *args, **kwargs):
+        # TeleBot's internal retry loop calls this public method as well.
+        try:
+            updates = super().get_updates(*args, **kwargs)
+        except Exception as exc:
+            self.health.failed(exc)
+            raise
+        self.health.confirmed()
+        return updates
+
+
 class BotProxy:
     def __init__(self):
         self.client = None
@@ -41,7 +94,7 @@ class BotProxy:
     def initialize(self, token):
         if self.client is not None:
             return
-        self.client = telebot.TeleBot(token)
+        self.client = ObservedTeleBot(token)
         for callback, filters in self.handlers:
             self.client.register_message_handler(callback, **filters)
 
@@ -312,10 +365,22 @@ def handle_remote_upload(message):
             file_name += ".mp3"
 
         if file_info:
-            if not 0 <= (file_info.file_size or 0) <= 20 * 1024 * 1024:
-                bot.reply_to(message, "Размер файла превышает 20 МБ.")
+            limit = 20 * 1024 * 1024
+            declared_size = getattr(file_info, "file_size", None)
+            if declared_size is not None and (
+                not isinstance(declared_size, int)
+                or isinstance(declared_size, bool)
+                or not 0 <= declared_size <= limit
+            ):
+                bot.reply_to(message, "Размер файла некорректен или превышает 20 МБ.")
                 return
             downloaded_file = bot.download_file(file_info.file_path)
+            if not isinstance(downloaded_file, (bytes, bytearray)):
+                bot.reply_to(message, "Telegram вернул некорректные данные файла.")
+                return
+            if len(downloaded_file) > limit:
+                bot.reply_to(message, "Фактический размер файла превышает 20 МБ.")
+                return
             save_path = os.path.join(UPLOADS_DIR, file_name)
             if os.path.exists(save_path):
                 stem, extension = os.path.splitext(save_path)
@@ -411,10 +476,13 @@ def run_krest_service(shared_queue=None):
     if not TOKEN or not MY_ID:
         raise RuntimeError("Заполните токен TGT и Telegram ID владельца в меню.")
     bot.initialize(TOKEN)
-    bot.get_me()  # Fail on invalid authentication before starting background workers.
-    from bridge_sdk import emit
-
-    emit("ready", "Telegram подтвердил токен бота")
+    health = getattr(bot, "health", None) or TerminalHealth()
+    try:
+        bot.get_me()  # Fail on invalid authentication before starting background workers.
+    except Exception as exc:
+        health.failed(exc)
+        raise
+    health.waiting()
     for directory in [UPLOADS_DIR]:
         os.makedirs(directory, exist_ok=True)
     global SHARED_QUEUE
@@ -428,10 +496,12 @@ def run_krest_service(shared_queue=None):
         try:
             bot.infinity_polling(timeout=20, logger_level=None)
             return  # The SDK returns after an intentional stop (including Ctrl+C).
-        except requests.exceptions.ReadTimeout:
+        except requests.exceptions.ReadTimeout as exc:
+            health.failed(exc)
             print("--- [TG TERMINAL]: Потеряна связь. Переподключение... ---")
             time.sleep(3)
         except Exception as e:
+            health.failed(e)
             print(f"--- [TG TERMINAL FATAL]: {type(e).__name__} ---")
             time.sleep(5)
 

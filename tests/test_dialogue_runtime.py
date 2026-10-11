@@ -30,11 +30,22 @@ def test_repeat_reads_previous_answer_without_repeating_action(session):
 def test_repeat_expires_and_remote_cannot_read_local_reply(session, monkeypatch):
     runtime, cfg = session
     runtime.execute('расскажи факт')
-    runtime._last_local_reply = (0, 'private previous response')
+    monkeypatch.setattr('app_runtime.time.monotonic', lambda: 1000.0)
+    runtime._last_local_reply = (879.0, 'private previous response')
     assert not runtime.execute('повтори ответ').success
-    runtime._last_local_reply = (10**20, 'private previous response')
+    runtime._last_local_reply = (1000.0, 'private previous response')
     result = runtime.execute('повтори ответ', source='remote')
     assert not result.success and 'private previous response' not in result.text
+
+
+@pytest.mark.parametrize('age,expected', [(119.999, True), (120.0, False), (120.001, False), (-0.001, False)])
+def test_repeat_ttl_boundary_uses_controlled_clock(session, monkeypatch, age, expected):
+    runtime, _ = session
+    monkeypatch.setattr('app_runtime.time.monotonic', lambda: 1000.0)
+    runtime._last_local_reply = (1000.0 - age, 'private previous response')
+    result = runtime.execute('повтори ответ')
+    assert result.success is expected
+    assert ('private previous response' in result.text) is expected
 
 
 @pytest.mark.parametrize('style', PERSONALITIES)
@@ -172,3 +183,12 @@ def test_remote_cannot_confirm_local_game_guide_prompt(session, monkeypatch):
     runtime.manager.execute = Mock(return_value=CommandResult(False, False, 'unknown'))
     assert not runtime.execute('да', source='remote').success
     runtime.manager.execute.assert_called_once_with('да', runtime.state, normalize=False)
+
+
+def test_successful_context_action_ends_conversation_topic(session):
+    runtime, _ = session
+    runtime.state.add_timer(300, 'чай')
+    assert runtime.execute('расскажи факт').success
+    assert runtime.execute('отмени его').success
+    assert not runtime.state.snapshot()['active_timers']
+    assert not runtime.execute('ещё').success

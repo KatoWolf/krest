@@ -142,6 +142,7 @@ class ServiceProxy:
     def __init__(self, remote):
         self.remote = remote
         self.errors = {}
+        self._error_snapshots = {}
         self.MODULES = dict(remote.cached["modules"])
 
     @property
@@ -161,6 +162,15 @@ class ServiceProxy:
                 },
             )
         )
+        if (
+            filename in self.errors
+            and self._error_snapshots.get(filename) is not self.remote.cached
+            and detail.get("running")
+            and detail.get("health") == "ready"
+            and not detail.get("error")
+        ):
+            self.errors.pop(filename, None)
+            self._error_snapshots.pop(filename, None)
         if filename in self.errors:
             detail["error"] = self.errors[filename]
             detail["health"] = "error"
@@ -189,11 +199,13 @@ class ServiceProxy:
         try:
             result = getattr(self, action)(filename)
             self.errors.pop(filename, None)
+            self._error_snapshots.pop(filename, None)
             return result
         except Exception as exc:
             from integrations import redact
 
             self.errors[filename] = redact(str(exc), self.remote.settings())
+            self._error_snapshots[filename] = self.remote.cached
             raise
 
     def __getattr__(self, name):

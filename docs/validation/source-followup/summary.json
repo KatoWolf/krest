@@ -1,0 +1,22 @@
+{
+  "base": "ba5c9e72b6ef29d315af194f06748508bdd428b0",
+  "scope": "Linux offline; no live accounts; installer postponed",
+  "tests": {
+    "312": {
+      "tests": 751,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "passed": 748,
+      "seconds": 37.59
+    },
+    "313": {
+      "tests": 751,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "passed": 748,
+      "seconds": 38.952
+    }
+  }
+}

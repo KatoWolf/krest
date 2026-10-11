@@ -298,6 +298,8 @@ class AssistantRuntime:
             else self.manager.execute(command, self.state)
         )
         if source in ("text", "voice"):
+            if followup is not None and followup.success:
+                self.state._dialogue_topic = None
             result = self._local_dialogue(normalized, result)
         else:
             self.state._dialogue_topic, self.state._dialogue_updated_at = dialogue_before

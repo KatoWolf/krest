@@ -1,0 +1,118 @@
+{
+  "environment": "Linux / Xvfb; Python 3.13.5; offline profile; actual Tk widgets",
+  "pages": {
+    "actions": {
+      "first_ms": 9.76,
+      "repeat_ms": [
+        6.13,
+        3.94,
+        3.99,
+        4.29,
+        3.89
+      ]
+    },
+    "settings": {
+      "first_ms": 29.11,
+      "repeat_ms": [
+        3.77,
+        3.86,
+        4.5,
+        4.33,
+        4.48
+      ]
+    },
+    "appearance": {
+      "first_ms": 24.24,
+      "repeat_ms": [
+        4.25,
+        4.7,
+        9.68,
+        3.85,
+        3.97
+      ]
+    },
+    "bot_status": {
+      "first_ms": 32.85,
+      "repeat_ms": [
+        9.31,
+        8.34,
+        8.01,
+        8.22,
+        8.39
+      ]
+    },
+    "voice": {
+      "first_ms": 41.39,
+      "repeat_ms": [
+        4.25,
+        3.13,
+        3.18,
+        3.2,
+        3.24
+      ]
+    },
+    "skills": {
+      "first_ms": 63.37,
+      "repeat_ms": [
+        3.89,
+        3.84,
+        3.49,
+        3.79,
+        4.45
+      ]
+    },
+    "wf_home": {
+      "first_ms": 27.34,
+      "repeat_ms": [
+        7.42,
+        8.28,
+        12.67,
+        9.53,
+        11.61
+      ]
+    }
+  },
+  "startup_ms": 352.72,
+  "stress": {
+    "transitions": 20,
+    "theme_changes": 4,
+    "remaining_transition_job": null,
+    "remaining_canvas_items": 0,
+    "max_update_ms": 4.08
+  },
+  "large_scale": {
+    "scale_percent": 150,
+    "window": "1020x700",
+    "pages": {
+      "settings": {
+        "requested_width": 653,
+        "viewport_width": 687,
+        "save_button_visible": true
+      },
+      "bot_status": {
+        "requested_width": 676,
+        "viewport_width": 687,
+        "save_button_visible": true
+      },
+      "appearance": {
+        "requested_width": 644,
+        "viewport_width": 687,
+        "save_button_visible": true
+      },
+      "voice": {
+        "requested_width": 687,
+        "viewport_width": 687,
+        "save_button_visible": true
+      },
+      "security": {
+        "requested_width": 667,
+        "viewport_width": 687,
+        "save_button_visible": true
+      }
+    }
+  },
+  "settings_search": {
+    "pending_scroll_job": null
+  },
+  "callback_errors": []
+}
