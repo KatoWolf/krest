@@ -1,14 +1,15 @@
 """Read-only command inspection using the same normalization and dispatcher as speech."""
 
-from speech_tools import normalize_command, split_wake
+from speech_tools import normalize_command
+from speech_recognition import decode_voice_command
 
 
 def parse_command(manager, text, settings):
     text = str(text).strip()
     if len(text) > 2000:
         raise ValueError("Максимум 2000 символов")
-    wake, command = split_wake(text, settings.get("app_settings", {}).get("wake_word", "крест"))
-    normalized = normalize_command(command if wake else text, settings.get("command_aliases", {}))
+    wake, command = decode_voice_command(manager, text, settings)
+    normalized = normalize_command(command, settings.get("command_aliases", {}))
     match = manager.match(normalized)
     entry, params = match if match else (None, {})
     return {

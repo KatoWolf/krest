@@ -61,6 +61,7 @@ class AssistantRuntime:
         self._voice_control = threading.Lock()
         self._voice_stop = threading.Event()
         self._active_until = 0
+        self._last_voice_retry = float("-inf")
         self._arm_requested = threading.Event()
         self.download_status = "Автосортировка выключена"
         self.last_result = None
@@ -126,7 +127,7 @@ class AssistantRuntime:
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
             self.start_voice()
 
-    def submit(self, text, source="text", confidence=None, request_key=None):
+    def submit(self, text, source="text", confidence=None, request_key=None, alternatives=None):
         text = text.strip()
         if not text:
             return False
@@ -155,7 +156,7 @@ class AssistantRuntime:
             if not fresh:
                 return True
             try:
-                self.requests.put_nowait((text, source, confidence, job_id))
+                self.requests.put_nowait((text, source, confidence, job_id, alternatives))
                 return True
             except queue.Full:
                 self.jobs.transition(job_id, "cancelled", "Очередь заполнена")
@@ -179,7 +180,7 @@ class AssistantRuntime:
         with self._request_lock:
             return self.current_command, self.requests.qsize()
 
-    def execute(self, text, source="text", confidence=None):
+    def execute(self, text, source="text", confidence=None, alternatives=None):
         with self._execute_lock:
             ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
             if not self.jobs.transition(ident, "running"):
@@ -191,7 +192,7 @@ class AssistantRuntime:
             with self._jobs_lock:
                 self._active_jobs[ident] = token
             try:
-                result = self._execute(text, source, confidence)
+                result = self._execute(text, source, confidence, alternatives)
                 status = (
                     "completed" if result.success else "cancelled" if token.is_set() else "failed"
                 )
@@ -224,9 +225,21 @@ class AssistantRuntime:
             return "Задание отменено до выполнения"
         return "Задание уже завершено или не поддерживает остановку"
 
-    def _execute(self, text, source="text", confidence=None):
+    def _voice_retry(self, addressed):
+        # During the follow-up window, game chat must not start spoken tutorials.
+        now = time.monotonic()
+        if addressed and now - self._last_voice_retry >= 10:
+            self._last_voice_retry = now
+            voice.speak("Не расслышала. Повтори, пожалуйста.")
+
+    def _execute(self, text, source="text", confidence=None, alternatives=None):
         cfg = self.settings().get("app_settings", {})
-        wake, command = check_wake_word(text, cfg.get("wake_word", "крест"))
+        if source == "voice":
+            from speech_recognition import decode_voice_command
+
+            wake, command = decode_voice_command(self.manager, text, self.settings())
+        else:
+            wake, command = check_wake_word(text, cfg.get("wake_word", "крест"))
         from speech_tools import normalize_command
 
         def observed(status):
@@ -249,12 +262,19 @@ class AssistantRuntime:
             if not wake and time.monotonic() > self._active_until:
                 observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
+            from speech_recognition import resolve_media_alternative
+
+            recovered = resolve_media_alternative(
+                self.manager, command, alternatives, self.settings(), wake
+            )
+            if recovered:
+                command, confidence = recovered
             if confidence is not None and confidence * 100 < cfg.get("speech_confidence", 60):
                 observed("Низкая уверенность — повторите фразу")
                 result = CommandResult(
                     True, False, "Не уверена, что расслышала правильно. Повторите команду."
                 )
-                voice.speak(result.text)
+                self._voice_retry(wake)
                 self.events.put(("result", result))
                 return result
             if wake:
@@ -296,7 +316,17 @@ class AssistantRuntime:
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         self.last_result = result
         if result.text and not result.responded:
-            voice.speak(result.text)
+            if source == "voice" and not result.handled:
+                self._voice_retry(wake)
+            elif (
+                source == "voice"
+                and result.success
+                and self.performance.active == "game"
+                and result.skill_id.startswith("skills.media.")
+            ):
+                voice.speak("Готово.")
+            else:
+                voice.speak(result.text)
         if result.skill_id.startswith("skills.media."):
             self.publish_notice(result.text, "Музыка", "low", speak=False)
         self.events.put(("result", result))
@@ -308,7 +338,7 @@ class AssistantRuntime:
                 if self.stop_event.is_set():
                     break
                 try:
-                    text, source, confidence, job_id = self.requests.get_nowait()
+                    text, source, confidence, job_id, alternatives = self.requests.get_nowait()
                 except queue.Empty:
                     text = None
                 if text is not None:
@@ -318,7 +348,9 @@ class AssistantRuntime:
                 continue
             try:
                 self._job_local.current = job_id
-                if confidence is None:
+                if alternatives:
+                    self.execute(text, source, confidence=confidence, alternatives=alternatives)
+                elif confidence is None:
                     self.execute(text, source)
                 else:
                     self.execute(text, source, confidence=confidence)
@@ -544,7 +576,13 @@ class AssistantRuntime:
                         )
                     )
                 if text:
-                    self.submit(text, "voice", voice.recognition().get("confidence"))
+                    recognition = voice.recognition()
+                    self.submit(
+                        text,
+                        "voice",
+                        recognition.get("confidence"),
+                        alternatives=recognition.get("alternatives"),
+                    )
         except Exception as exc:
             failure = str(exc)
             self.events.put(("error", f"Голос: {exc}"))

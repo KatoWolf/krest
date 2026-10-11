@@ -27,6 +27,7 @@ import hashlib
 import threading
 from collections import deque
 from speech_tools import Endpoint, pcm_levels, verbalize_numbers, AdaptiveNoiseFloor
+from speech_recognition import hypotheses, combine_hypotheses
 
 # --- Индикатор и конфигурация ---
 
@@ -113,6 +114,7 @@ _audio_cfg = {}
 _audio_cfg_at = 0
 _segments = []
 _words = []
+_hypotheses = []
 _preroll = deque(maxlen=3)
 is_speaking = False
 stream = None
@@ -315,6 +317,7 @@ def initialize_models(models=None):
         model_vosk = vosk.Model(vosk_path)
         rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
         rec.SetWords(True)
+        rec.SetMaxAlternatives(3)
     except Exception as e:
         metrics["model_error"] = str(e)
         logging.getLogger(__name__).info(
@@ -459,6 +462,7 @@ def _reset_recognizer():
     _endpoint.reset()
     _segments.clear()
     _words.clear()
+    _hypotheses.clear()
     _preroll.clear()
     metrics["partial"] = ""
 
@@ -514,17 +518,22 @@ def listen():
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
             if rec.AcceptWaveform(data):
                 result = json.loads(rec.Result())
-                _segments.append(result.get("text", ""))
-                _words.extend(result.get("result", []))
+                rows = hypotheses(result)
+                _hypotheses.append(rows)
+                _segments.append(rows[0]["text"])
+                _words.extend(rows[0]["words"])
             if finished:
                 result = json.loads(rec.FinalResult())
-                _segments.append(result.get("text", ""))
-                _words.extend(result.get("result", []))
+                rows = hypotheses(result)
+                _hypotheses.append(rows)
+                _segments.append(rows[0]["text"])
+                _words.extend(rows[0]["words"])
                 text = " ".join(v for v in _segments if v).strip()
                 confidences = [float(v["conf"]) for v in _words if "conf" in v]
                 last_recognition = {
                     "text": text,
                     "confidence": sum(confidences) / len(confidences) if confidences else None,
+                    "alternatives": combine_hypotheses(_hypotheses),
                 }
                 _reset_recognizer()
                 return text
