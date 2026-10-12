@@ -525,7 +525,7 @@ class ProductPages:
         draft = self.config_mgr.snapshot()
         draft["license"]["code"] = ""
         if draft["selected_theme"] in PREMIUM_THEMES:
-            draft["selected_theme"] = "Amethyst Modern"
+            draft["selected_theme"] = "Graphite"
         try:
             self.config_mgr.save_config(draft)
         except (ValueError, OSError) as exc:
@@ -535,5 +535,5 @@ class ProductPages:
         self.license_feedback_var.set("")
         self._background(self.integration.enforce_license)
         if self.theme_var.get() in PREMIUM_THEMES:
-            self.apply_theme("Amethyst Modern")
+            self.apply_theme("Graphite")
         self._update_license_view()

@@ -95,7 +95,6 @@ class Kernel:
             cfg["safe_mode"] = True
             cfg["event_rules"] = []
             cfg["app_settings"]["downloads_auto_sort"] = False
-            cfg["dota_guide"]["auto_mode"] = False
         return cfg
 
     def system_event(self, kind, payload):
@@ -129,7 +128,6 @@ class Kernel:
 
     def snapshot(self, after=0):
         import voice
-        from skills import gid
 
         rt = self.runtime
         with self._events_lock:
@@ -141,10 +139,7 @@ class Kernel:
             "started": self.started,
             "state": rt.state.snapshot(),
             "reminders": rt.state.reminders(),
-            "flags": {
-                k: getattr(rt.state, k)
-                for k in ("is_muted", "is_sleeping", "dota_guide_active", "load_error")
-            },
+            "flags": {k: getattr(rt.state, k) for k in ("is_muted", "is_sleeping", "load_error")},
             "voice": {
                 "enabled": voice.is_enabled(),
                 "status": rt.voice_status,
@@ -170,7 +165,6 @@ class Kernel:
             "service_statuses": self.integrations.refresh(),
             "events": events,
             "sequence": seq,
-            "gid": gid.service_status(),
             "safe_mode": self.safe,
             "windows_events_error": self.windows.error,
             "tray": {"ready": self.tray.ready, "error": self.tray.error},
@@ -209,6 +203,8 @@ class Kernel:
             from command_parser import parse_command
 
             return parse_command(rt.manager, args.get("text", ""), self.settings())
+        if method == "catalog.names":
+            return rt.manager.name_vocabulary.rows
         if method == "media_query":
             import media_control
 
@@ -371,28 +367,6 @@ class Kernel:
             if name not in operations:
                 raise ValueError("Неизвестная операция сервиса")
             return operations[name](filename)
-        if method == "dota":
-            from skills import gid
-
-            settings = self.settings()
-            cfg = {**settings["dota_guide"], "steam_path": settings["steam"]["install_path"]}
-            if args["action"] == "reload":
-                gid.stop_service()
-                if (
-                    not settings.get("safe_mode")
-                    and cfg["enabled"]
-                    and settings["skills"].get("gid", True)
-                ):
-                    return gid.start_service(cfg)
-                return True
-            if args["action"] == "start":
-                return gid.start_service(cfg)
-            if args["action"] == "stop":
-                gid.stop_service()
-                return True
-            if args["action"] == "setup":
-                gid.GSI_PORT = cfg["gsi_port"]
-                return gid.auto_setup_gsi_config(cfg["steam_path"])
         raise ValueError("Неизвестная операция ядра")
 
     def pump(self):

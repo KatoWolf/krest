@@ -55,7 +55,6 @@ class AssistantState:
         self.filepath = Path(filepath) if filepath else None
         self.is_muted = False
         self.is_sleeping = False
-        self.dota_guide_active = False
         self.pending_prompt = None
         self.start_time = time.time()
         self.active_timers = []

@@ -41,8 +41,8 @@ DEFAULT_CONFIG = {
         "mode": "auto",
         "game_processes": "cs2.exe,dota2.exe,Warframe.x64.exe,Warframe.exe",
     },
-    "notification_settings": {"mode": "all", "game_important_only": True},
-    "selected_theme": "Amethyst Modern",
+    "notification_settings": {"mode": "all", "game_important_only": True, "announce_senders": True},
+    "selected_theme": "Graphite",
     "app_settings": {
         "autostart": False,
         "minimize_to_tray": True,
@@ -131,15 +131,6 @@ DEFAULT_CONFIG = {
         "follow_activity": True,
     },
     "services": {},
-    "dota_guide": {
-        "process_name": "dota2.exe",
-        "warning_lead_time": 30,
-        "gsi_port": 3000,
-        "enabled": True,
-        "auto_mode": True,
-        "auto_setup": True,
-        "hero_alerts": True,
-    },
     "skills": {
         name: True
         for name in (
@@ -154,7 +145,6 @@ DEFAULT_CONFIG = {
             "system_mon",
             "webo",
             "windows",
-            "gid",
             "steam",
             "warframe",
         )
@@ -179,6 +169,8 @@ def merge(default, values):
 def validate(data):
     # Retire particle settings from older installations on load and save.
     data.pop("visual_effects", None)
+    data.pop("dota_guide", None)
+    data.get("skills", {}).pop("gid", None)
     validate_game_settings(data)
     validate_scenarios(data["scenarios"])
     remote = data["remote_control"]
@@ -221,6 +213,7 @@ def validate(data):
     if (
         data["notification_settings"]["mode"] not in ("all", "important", "silent")
         or type(data["notification_settings"]["game_important_only"]) is not bool
+        or type(data["notification_settings"]["announce_senders"]) is not bool
     ):
         raise ValueError("Некорректные настройки уведомлений")
 
@@ -354,7 +347,7 @@ def validate(data):
         or len(data["media"]["preferred_app"]) > 512
     ):
         raise ValueError("Некорректный идентификатор плеера")
-    for section in ("app_settings", "skills", "dota_guide"):
+    for section in ("app_settings", "skills"):
         for key, default in DEFAULT_CONFIG[section].items():
             if isinstance(default, bool) and not isinstance(data[section].get(key), bool):
                 raise ValueError(f"{key}: требуется логический переключатель")
@@ -368,8 +361,6 @@ def validate(data):
         ("app_settings", "speech_threshold", 20, 5000),
         ("app_settings", "speech_confidence", 0, 100),
         ("app_settings", "tts_threads", 1, 4),
-        ("dota_guide", "gsi_port", 1024, 65535),
-        ("dota_guide", "warning_lead_time", 0, 120),
     ]:
         value = data[section][key]
         if isinstance(value, bool) or not str(value).isdigit() or not lo <= int(value) <= hi:

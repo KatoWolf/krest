@@ -44,6 +44,9 @@ class WarframeService:
         self.runtime = runtime
         self.root = Path(root)
         self.store = WarframeStore(self.root / "warframe_state.json")
+        from warframe_farm import FarmJournal
+
+        self.farm_journal = FarmJournal(self.root / "warframe_farm.json")
         self.cache = cache or DataCache(self.root / "warframe_cache")
         self.catalog = ItemCatalog(self.cache)
         self.stop = threading.Event()
@@ -139,6 +142,7 @@ class WarframeService:
                 if self.panel.get("until", 0) > time.time()
                 else {},
                 "vision": self.vision.snapshot(),
+                "farm": self.farm_journal.snapshot(),
                 "route": self.routes.snapshot(),
                 "study": self.study.snapshot(),
                 "started": self.started,
@@ -183,6 +187,7 @@ class WarframeService:
             [
                 self.study.profile_text(),
                 "Зрение: " + vision["status"],
+                self.farm_journal.summary(),
                 f"Готовых типов экранов: {len(SCREENS)}. В этой сессии узнано кадров: {vision.get('recognized', 0)} из {vision.get('attempts', 0)} попыток.",
                 "Личные примеры: "
                 + (", ".join(memory["screens"]) or "ещё нет")
@@ -307,6 +312,7 @@ class WarframeService:
                 )
         if self.runtime.settings().get("safe_mode") or not cfg["enabled"]:
             self.vision.tick(False, False, now)
+            self.farm_journal.suspend(stopped=True)
             if self.running:
                 self.running = False
                 self._restore_profile()
@@ -321,6 +327,20 @@ class WarframeService:
                 else:
                     self._on_stop(now)
         self.vision.tick(cfg.get("vision_enabled", True), self.running, now)
+        observation = self.vision.snapshot()
+        if self.running and cfg.get("vision_enabled", True) and observation.get("observed", 0):
+            message = self.farm_journal.observe(observation, cfg.get("study_node", ""))
+            if message and cfg.get("context_hints", True):
+                self.show_panel(
+                    "Warframe · ход забега", [message, self.farm_journal.summary()], seconds=18
+                )
+                self.runtime.publish_notice(
+                    message, "Warframe", "high" if "Жизнеобеспечение" in message else "normal"
+                )
+        else:
+            self.farm_journal.suspend(
+                stopped=not self.running or not cfg.get("vision_enabled", True)
+            )
         record_auto = cfg.get("study_auto", True) and cfg.get("study_record_auto", False)
         if not record_auto and self.study.automatic and self.study.active:
             self.study.finish()
@@ -477,6 +497,7 @@ class WarframeService:
             self._volumes = []
 
     def _on_stop(self, now):
+        self.farm_journal.suspend(stopped=True)
         self.study.finish()
         self._restore_profile()
         self.store.add(
@@ -650,6 +671,8 @@ class WarframeService:
                 + screen_hint(guess)
             )
         hint = screen_hint(code)
+        if code in ("disruption", "survival", "extraction", "mission_complete", "mission_failed"):
+            hint = self.farm_journal.summary() + "\n" + hint
         if code in ("mission_complete", "relic_reward"):
             goal = next(
                 (row for row in self.store.snapshot()["goals"] if not row.get("done")), None
@@ -762,6 +785,10 @@ class WarframeService:
                 [hint, "«Открой сводку по миру» — циклы и цели", "«Скрой сводку» — свернуть"],
             )
             return {"text": hint}
+        if action == "farm_report":
+            text = self.farm_journal.summary()
+            self.show_panel("Warframe · отчёт фарма", text.splitlines(), seconds=45)
+            return {"text": text}
         if action == "show_briefing":
             try:
                 world = self.world()
@@ -1257,6 +1284,7 @@ class WarframeService:
 
 
 ACTIONS = {
+    "farm_report",
     "confirm_progress",
     "vision_teach",
     "vision_check",

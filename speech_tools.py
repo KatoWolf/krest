@@ -61,6 +61,28 @@ def split_wake(text, wake_word):
     return False, original
 
 
+def addressed_speech(text, wake_word):
+    """Cut conversation before a whole wake word; preserve everything after it.
+
+    Text/alias parsing deliberately uses split_wake instead. This boundary is
+    for microphone transcripts only, including a wake word in mid-utterance.
+    """
+    for match in re.finditer(r"(?<!\w)" + re.escape(wake_word) + r"(?!\w)", text, re.I):
+        before = text[: match.start()].casefold()
+        # Reported speech is not an address. Vosk usually omits punctuation.
+        if re.search(
+            r"(?:сказал[аи]?|говорил[аи]?|просит|попросил[аи]?|скажи|слово|команда|называется)\s*[: ,]*$",
+            before,
+        ):
+            continue
+        if before.count('"') % 2 or before.count("«") > before.count("»"):
+            continue
+        body = text[match.end() :].strip(" ,.:!?—-\n")
+        repeated, rest = split_wake(body, wake_word)
+        return True, rest if repeated else body
+    return False, text
+
+
 def alias_body(text, wake_word="крест"):
     value = re.sub(r"\s+", " ", str(text)).strip()
     addressed, command = split_wake(value, wake_word)

@@ -68,9 +68,6 @@ from auto_replies import ReplyGate, urgent
 
 reply_gate = ReplyGate()
 
-spam_control = {}
-last_outgoing = {}
-
 
 def load_app_config() -> dict:
     """Use the shared loader, including keys stored in Windows Credential Manager."""
@@ -137,53 +134,40 @@ async def auto_delete_message(message, delay: int):
 
 async def track_outgoing(client, message):
     chat_id = message.chat.id
-    last_outgoing[chat_id] = time.time()
-    reply_gate.outgoing(chat_id)
-    if chat_id in spam_control:
-        del spam_control[chat_id]
+    if not reply_gate.own_echo(chat_id, message.text or "", getattr(message, "id", None)):
+        reply_gate.outgoing(chat_id)
 
 
 async def auto_reply(client, message):
     if not message.from_user:
         return
-    if not load_app_config()["telegram_user"]["auto_reply"]:
-        return
-
-    user_id = message.from_user.id
     chat_id = message.chat.id
-    current_time = time.time()
-    owner_name = get_owner_name()
-
-    if chat_id in last_outgoing and (current_time - last_outgoing[chat_id] < 300):
+    if not reply_gate.incoming(chat_id, getattr(message, "id", None)):
         return
-
-    keys_to_del = [k for k, v in spam_control.items() if current_time - v > 3600]
-    for k in keys_to_del:
-        del spam_control[k]
-
-    out_to_del = [k for k, v in last_outgoing.items() if current_time - v > 3600]
-    for k in out_to_del:
-        del last_outgoing[k]
-
+    sender_name = message.from_user.first_name or "контакта"
     text = message.text.lower() if message.text else ""
     is_urgent = urgent(text)
+    from bridge_sdk import emit
 
-    from configuration import ConfigManager
-
-    if not reply_gate.allow(chat_id, ConfigManager().snapshot()["auto_replies"], is_urgent):
+    emit(
+        "notification",
+        "Telegram: новое сообщение от " + str(sender_name)[:80],
+        priority="high" if is_urgent else "normal",
+        notice_kind="message",
+    )
+    cfg = load_app_config()
+    if not cfg["telegram_user"]["auto_reply"] or not reply_gate.allow(
+        chat_id, cfg["auto_replies"], is_urgent
+    ):
         return
 
-    spam_control[user_id] = current_time
-    sender_name = message.from_user.first_name or "Пользователь"
-    logger.info(f"Входящее сообщение от {sender_name}")
-
     try:
-        await client.send_chat_action(message.chat.id, enums.ChatAction.TYPING)
+        try:
+            await client.send_chat_action(message.chat.id, enums.ChatAction.TYPING)
+        except Exception:
+            pass  # Typing is cosmetic; it must never prevent the reply itself.
 
         status_data = await get_local_status()
-        is_playing = status_data.get("is_playing", False)
-        activity_type = status_data.get("activity_type", "IDLE")
-        full_msg = status_data.get("full_message", "")
 
         current_hour = datetime.datetime.now().hour
         is_night = 1 <= current_hour < 8
@@ -191,15 +175,15 @@ async def auto_reply(client, message):
         await asyncio.sleep(random.uniform(1.2, 2.5))
 
         from auto_replies import render_reply
-        from configuration import ConfigManager
         from pyrogram.enums import ParseMode
 
-        current_cfg = ConfigManager().snapshot()
+        current_cfg = load_app_config()
         reply_cfg = current_cfg["auto_replies"]
-        if not reply_cfg["enabled"]:
+        if not reply_cfg["enabled"] or not current_cfg["telegram_user"]["auto_reply"]:
+            reply_gate.failed(chat_id)
             return
         final_text = render_reply(
-            owner_name,
+            current_cfg["owner_name"],
             status_data,
             reply_cfg,
             bool(message.voice or message.video_note),
@@ -207,14 +191,17 @@ async def auto_reply(client, message):
             is_night,
             personality=current_cfg["profile"]["personality"],
         )
+        reply_gate.sending(chat_id, final_text)
         sent_msg = await message.reply(final_text, parse_mode=ParseMode.DISABLED)
+        reply_gate.delivered(chat_id, sent_msg.id)
         if reply_cfg["delete_seconds"]:
             asyncio.create_task(auto_delete_message(sent_msg, reply_cfg["delete_seconds"]))
 
-        if hasattr(client, "notifications_queue") and client.notifications_queue:
-            if not is_night:
-                client.notifications_queue.put(sender_name)
-
+    except FloodWait as exc:
+        # Release the per-contact reservation, respect the platform-wide limit.
+        reply_gate.failed(chat_id)
+        reply_gate.blocked_until = time.monotonic() + max(1, exc.value)
+        logger.warning("Telegram просит подождать %s секунд перед автоответом", exc.value)
     except Exception as e:
         reply_gate.failed(chat_id)
         logger.error(f"Ошибка отправки автоответа: {e}")

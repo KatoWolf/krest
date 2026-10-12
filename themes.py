@@ -1,4 +1,18 @@
 THEMES = {
+    "Graphite": {
+        "bg": "#101319",
+        "sidebar": "#151a23",
+        "card": "#1c222e",
+        "card_hover": "#293344",
+        "accent": "#b6a0f5",
+        "accent_hover": "#cbbcfa",
+        "text": "#f1f4fa",
+        "sub_text": "#b1bdd0",
+        "glow": "#3b3554",
+        "success": "#76d6b2",
+        "danger": "#ff8596",
+        "border": "#414c60",
+    },
     "Amethyst Modern": {
         "bg": "#100e15",
         "sidebar": "#15121c",

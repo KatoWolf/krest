@@ -78,14 +78,16 @@ class AccountSession:
             return
         if str(author.get("id")) == self.user_id:
             # Own replies are deduplicated, genuine outgoing messages pause automation.
-            if str(data.get("id")) not in self.own_messages:
+            if str(data.get("id")) not in self.own_messages and not self.gate.own_echo(
+                channel, data.get("content", "")
+            ):
                 self.gate.outgoing(channel)
             return
         if author.get("bot") or not author.get("id"):
             return
         cfg = self.config()
         opts = cfg["discord_account"]
-        if not opts["enabled"] or not opts["auto_reply"]:
+        if not opts["enabled"]:
             return
         important = urgent(data.get("content", ""))
         if channel not in self.dm_channels:
@@ -95,7 +97,16 @@ class AccountSession:
             if len(self.dm_channels) >= 1000:
                 self.dm_channels.clear()
             self.dm_channels.add(channel)
-        if not self.gate.allow(channel, cfg["auto_replies"], important):
+        if not self.gate.incoming(channel, data.get("id")):
+            return
+        emit(
+            "notification",
+            "Discord: новое сообщение от "
+            + str(author.get("global_name") or author.get("username", "контакта"))[:80],
+            priority="high" if important else "normal",
+            notice_kind="message",
+        )
+        if not opts["auto_reply"] or not self.gate.allow(channel, cfg["auto_replies"], important):
             return
         status = self.local_status()
         text = render_reply(
@@ -107,16 +118,23 @@ class AccountSession:
             personality=cfg["profile"]["personality"],
         )
         try:
+            self.gate.sending(channel, text)
             sent = await self.request(
                 session,
                 "POST",
                 f"/channels/{channel}/messages",
                 json={"content": text, "allowed_mentions": {"parse": []}},
             )
+        except RateLimited as exc:
+            self.gate.failed(channel)
+            self.gate.blocked_until = time.monotonic() + exc.seconds
+            emit("status", str(exc))
+            return
         except Exception:
             self.gate.failed(channel)
             raise
         ident = str(sent.get("id", ""))
+        self.gate.delivered(channel, ident)
         self.own_messages.add(ident)
         if len(self.own_messages) > 1000:
             self.own_messages = {ident}
@@ -125,12 +143,6 @@ class AccountSession:
             task = asyncio.create_task(self.delete_later(session, channel, ident, delay))
             self.deletions.add(task)
             task.add_done_callback(self.deletions.discard)
-        emit(
-            "notification",
-            "Discord: сообщение от "
-            + str(author.get("global_name") or author.get("username", "контакта"))[:80],
-            priority="high" if important else "normal",
-        )
 
     def local_status(self):
         try:

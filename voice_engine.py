@@ -616,9 +616,11 @@ def listen():
                     _decode(rec.AcceptWaveform, prefix)
                 _preroll.clear()
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
-            from speech_tools import split_wake
+            from speech_tools import addressed_speech
 
-            addressed, body = split_wake(metrics.get("partial", ""), cfg.get("wake_word", "крест"))
+            addressed, body = addressed_speech(
+                metrics.get("partial", ""), cfg.get("wake_word", "крест")
+            )
             quick = (cfg.get("wake_word", "крест") + " " + body) if addressed else body
             # Never execute a partial hypothesis. Only shorten the end-of-speech
             # wait for a complete known transport command; FinalResult still wins.

@@ -58,6 +58,12 @@ class AssistantRuntime:
             "discord": threading.RLock(),
         }
         self.manager = SkillManager(settings, plugin_dir=Path(data_dir) / "imported_skills")
+        from name_vocabulary import NameVocabulary
+
+        self.manager.name_vocabulary = NameVocabulary()
+        self.manager.name_vocabulary.update(
+            settings().get("applications", []), [], settings().get("application_aliases", {})
+        )
         from command_understanding import VoiceUnderstanding
 
         from companion_session import CompanionSession
@@ -131,27 +137,12 @@ class AssistantRuntime:
             ],
             threading.Thread(target=self._scheduler, daemon=True, name="krest-scheduler"),
             threading.Thread(target=self._downloads, daemon=True, name="krest-downloads"),
+            threading.Thread(target=self._catalog_worker, daemon=True, name="krest-catalog"),
         ]
         for thread in self._threads:
             thread.start()
         self.warframe.start()
         cfg = self.settings()
-        if (
-            not cfg.get("safe_mode")
-            and cfg.get("dota_guide", {}).get("enabled", False)
-            and cfg.get("skills", {}).get("gid", True)
-        ):
-            from skills import gid
-
-            try:
-                gid.start_service(
-                    {
-                        **cfg["dota_guide"],
-                        "steam_path": cfg.get("steam", {}).get("install_path", ""),
-                    }
-                )
-            except OSError as exc:
-                self.events.put(("error", "Dota: не удалось открыть GSI-сервер: " + str(exc)))
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
             self.start_voice()
 
@@ -337,11 +328,6 @@ class AssistantRuntime:
             if not wake and time.monotonic() > self._active_until:
                 observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
-            if not wake and not self.companion.accepts_followup(
-                normalize_command(command, self.settings().get("command_aliases", {}))
-            ):
-                observed("Фраза вне текущей темы — ожидаю обращения")
-                return CommandResult(False, False, "")
             if not wake:
                 from command_understanding import exact_command
 
@@ -401,15 +387,17 @@ class AssistantRuntime:
                 self._voice_retry(wake)
                 self.events.put(("result", result))
                 return result
-            if wake:
-                self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
             if not command and wake:
+                self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
                 observed("Ожидаю команду")
                 from companion_behavior import policy
 
                 text = policy(self.settings(), bool(self.performance.game))["listen"]
                 voice.speak(text)
                 return CommandResult(True, True, text)
+            # A command consumes an explicitly opened listening window. Ordinary
+            # conversation after a successful action never opens another one.
+            self._active_until = 0
         else:
             command = command if wake else text
         if self.state.is_sleeping and normalize_command(
@@ -458,13 +446,6 @@ class AssistantRuntime:
                 self.events.put(("result", result))
                 return result
             command, learning = interpreted.command, interpreted.learning or learning
-        from skills import gid
-
-        if gid.dota_state.waiting_for_user_answer:
-            if command.strip().casefold() in ("да", "давай", "конечно"):
-                command = "включи гид"
-            elif command.strip().casefold() in ("нет", "не надо", "отмена"):
-                command = "отмена гида"
         observed("Передано на выполнение")
         normalized = normalize_command(command, self.settings().get("command_aliases", {}))
         followup = self.context.handle(normalized) if source != "scenario" else None
@@ -495,7 +476,6 @@ class AssistantRuntime:
         if source == "voice":
             if result.success:
                 self.companion.remember_topic(result.skill_id)
-                self._active_until = self.companion.topic_until
         self.last_result = result
         if result.text and not result.responded:
             if source == "voice" and not result.handled:
@@ -563,21 +543,17 @@ class AssistantRuntime:
                             envelope.get("text", ""),
                             envelope.get("source", "Боты"),
                             envelope.get("priority", "normal"),
+                            kind=envelope.get("kind", ""),
                         )
                     else:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
                 self.automation.tick()
                 self.companion.tick()
-                from skills import gid
-
-                self.state.dota_guide_active = gid.dota_state.is_active
                 status = {
-                    "is_playing": bool(gid.dota_state.dota_running or self.performance.game),
-                    "game": "Dota 2" if gid.dota_state.dota_running else self.performance.game,
-                    "activity_type": "GAME"
-                    if gid.dota_state.dota_running or self.performance.game
-                    else "IDLE",
+                    "is_playing": bool(self.performance.game),
+                    "game": self.performance.game,
+                    "activity_type": "GAME" if self.performance.game else "IDLE",
                     "full_message": "Режим сна" if self.state.is_sleeping else "Ожидание команды",
                     "updated_at": time.time(),
                 }
@@ -594,6 +570,43 @@ class AssistantRuntime:
                 logger.exception("Сбой планировщика")
                 self.events.put(("error", str(exc)))
                 self.stop_event.wait(2)
+
+    def _catalog_worker(self):
+        from app_catalog import scan_apps
+        from steam_service import cached_catalog
+        import os
+
+        scanned_at = -1e9
+        while not self.stop_event.is_set():
+            try:
+                if os.name == "nt" and time.monotonic() - scanned_at >= 600:
+                    scanned_at = time.monotonic()
+                    rows = scan_apps()
+                    if rows and not self.stop_event.is_set():
+                        # Merge with manually added executables; never replace a
+                        # concurrently edited settings snapshot with the scan's.
+                        with self.config_manager._lock:
+                            cfg = self.config_manager.snapshot()
+                            manual = [r for r in cfg["applications"] if r["kind"] == "exe"]
+                            apps = {r["name"].casefold(): r for r in [*rows, *manual]}
+                            cfg["applications"] = sorted(
+                                apps.values(), key=lambda r: r["name"].casefold()
+                            )
+                            if (
+                                cfg["applications"]
+                                != self.config_manager.snapshot()["applications"]
+                            ):
+                                self.config_manager.save_config(cfg)
+                                self.events.put(("catalog_changed", None))
+                cfg = self.settings()
+                self.manager.name_vocabulary.update(
+                    cfg.get("applications", []),
+                    cached_catalog(self.state),
+                    cfg.get("application_aliases", {}),
+                )
+            except Exception as exc:
+                logger.warning("Каталог программ будет обновлён повторно: %s", exc)
+            self.stop_event.wait(60)
 
     def _downloads(self):
         from downloads import DownloadSorter
@@ -649,19 +662,21 @@ class AssistantRuntime:
                 self.download_status = "Автосортировка выключена"
             self.stop_event.wait(1)
 
-    def publish_notice(self, text, source="Система", priority="normal", speak=True):
+    def publish_notice(self, text, source="Система", priority="normal", speak=True, kind=""):
         if priority not in ("low", "normal", "high"):
             priority = "normal"
-        ident, fresh = self.center.add(text, source, priority)
+        ident, fresh = self.center.add(text, source, priority, kind=kind)
         cfg = self.settings().get("notification_settings", {})
         mode = self.notification_mode or cfg.get("mode", "all")
         if (
             fresh
             and speak
+            and (kind != "message" or cfg.get("announce_senders", True))
             and should_speak(
                 priority,
                 mode,
-                self.performance.active == "game",
+                self.performance.active == "game"
+                and not (kind == "message" and cfg.get("announce_senders", True)),
                 cfg.get("game_important_only", True),
             )
         ):
@@ -738,6 +753,11 @@ class AssistantRuntime:
                     quick_phrases(
                         self.manager, self.settings(), self.companion.snapshot()["learning"]
                     )
+                    | self.manager.name_vocabulary.phrases()
+                    | {
+                        self.settings()["app_settings"]["wake_word"] + " " + p
+                        for p in self.manager.name_vocabulary.phrases()
+                    }
                 )
 
             refresh_dictionary()
@@ -859,9 +879,6 @@ class AssistantRuntime:
         if self.scenarios.thread:
             self.scenarios.thread.join(timeout=1)
         self.stop_voice()
-        from skills import gid
-
-        gid.stop_service()
         for thread in self._threads:
             thread.join(timeout=1)
         self.state.persist()

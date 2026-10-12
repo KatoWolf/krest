@@ -76,13 +76,57 @@ class ReplyGate:
         self.clock = clock
         self.sent = {}
         self.manual = {}
+        self.automatic = {}
+        self.automatic_ids = {}
+        self.received = {}
+        self.blocked_until = 0
+
+    def incoming(self, contact, ident):
+        """Deduplicate gateway retries independently of auto-reply cooldowns."""
+        if not ident:
+            return True
+        now = self.clock()
+        self.received = {k: v for k, v in self.received.items() if now - v < 900}
+        key = (str(contact), str(ident))
+        if key in self.received:
+            return False
+        if len(self.received) >= 2000:
+            self.received.pop(next(iter(self.received)))
+        self.received[key] = now
+        return True
+
+    def sending(self, contact, text):
+        # Register before awaiting HTTP: the outgoing gateway update may arrive
+        # before the send call returns its message ID.
+        now = self.clock()
+        self.automatic = {k: v for k, v in self.automatic.items() if now - v[1] < 60}
+        if len(self.automatic) >= 1000:
+            self.automatic.pop(next(iter(self.automatic)))
+        self.automatic[str(contact)] = (str(text), now)
+
+    def own_echo(self, contact, text, ident=None):
+        if ident and (str(contact), str(ident)) in self.automatic_ids:
+            return True
+        row = self.automatic.get(str(contact))
+        return bool(row and row[0] == str(text) and self.clock() - row[1] < 60)
+
+    def delivered(self, contact, ident=None):
+        self.sent[str(contact)] = self.clock()
+        if ident:
+            if len(self.automatic_ids) >= 1000:
+                self.automatic_ids.pop(next(iter(self.automatic_ids)))
+            self.automatic_ids[(str(contact), str(ident))] = self.clock()
+            self.automatic.pop(str(contact), None)
 
     def outgoing(self, contact):
+        if len(self.manual) >= 1000:
+            self.manual.pop(next(iter(self.manual)))
         self.manual[str(contact)] = self.clock()
 
     def failed(self, contact):
         """A failed send must not count as a delivered auto-reply."""
         self.sent.pop(str(contact), None)
+        self.automatic.pop(str(contact), None)
 
     def allow(self, contact, settings=None, important=False):
         cfg = {**DEFAULT_REPLIES, **(settings or {})}
@@ -92,9 +136,14 @@ class ReplyGate:
             return False
         now = self.clock()
         key = str(contact)
-        for cache in (self.sent, self.manual):
+        if now < self.blocked_until:
+            return False
+        for cache, retention in (
+            (self.sent, max(3600, cfg["cooldown_seconds"])),
+            (self.manual, 3600),
+        ):
             for old in list(cache):
-                if now - cache[old] > 3600:
+                if now - cache[old] >= retention:
                     del cache[old]
         if now - self.manual.get(key, -1e9) < 300:
             return False

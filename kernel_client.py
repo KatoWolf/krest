@@ -105,7 +105,7 @@ class StateProxy:
         return self.remote.cached["reminders"]
 
     def __getattr__(self, name):
-        if name in ("is_muted", "is_sleeping", "dota_guide_active", "load_error"):
+        if name in ("is_muted", "is_sleeping", "load_error"):
             return self.remote.cached["flags"][name]
         if name in (
             "add_timer",

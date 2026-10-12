@@ -17,6 +17,69 @@ def contrasting_text(colour):
     )
 
 
+def _button_surface(root, style, name, base, hover, colours):
+    """One small nine-slice image per state, rendered once per theme change."""
+    from PIL import Image, ImageDraw, ImageTk
+
+    cache = getattr(root, "_button_surfaces", {})
+    root._button_surfaces = cache
+    element = "Krest" + name.replace(".", "") + ".surface"
+    background = (
+        colours["sidebar"] if "Nav" in name else colours["bg"] if "Tab" in name else colours["card"]
+    )
+    states = [
+        (base, colours["accent"] if name.startswith("Selected") else colours["border"]),
+        (hover, colours["accent"]),
+        (base, colours["accent"]),
+        (colours["card"], colours["border"]),
+    ]
+    images = []
+    for index, (fill, border) in enumerate(states):
+        bitmap = Image.new("RGB", (96, 96), background)
+        ImageDraw.Draw(bitmap).rounded_rectangle(
+            (1, 1, 94, 94), radius=21, fill=fill, outline=border, width=3
+        )
+        small = bitmap.resize((32, 32), Image.Resampling.LANCZOS)
+        key = (name, index)
+        if key in cache:
+            cache[key].paste(small)
+        else:
+            cache[key] = ImageTk.PhotoImage(small, master=root)
+        images.append(cache[key])
+        small.close()
+        bitmap.close()
+    if element not in style.element_names():
+        style.element_create(
+            element,
+            "image",
+            images[0],
+            ("disabled", images[3]),
+            ("pressed", images[1]),
+            ("active", images[1]),
+            ("focus", images[2]),
+            border=9,
+            padding=0,
+            sticky="nsew",
+        )
+    style.layout(
+        name,
+        [
+            (
+                element,
+                {
+                    "sticky": "nsew",
+                    "children": [
+                        (
+                            "Button.padding",
+                            {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]},
+                        )
+                    ],
+                },
+            )
+        ],
+    )
+
+
 def apply_style(root, colours):
     load_fonts(root)
     c = colours
@@ -47,7 +110,7 @@ def apply_style(root, colours):
         ("TButton", c["card_hover"], c["border"], c["text"]),
         ("Accent.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
         ("Nav.TButton", c["card_hover"], c["border"], c["text"]),
-        ("Selected.Nav.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
+        ("Selected.Nav.TButton", c["glow"], c["border"], c["text"]),
         ("Tab.TButton", c["card_hover"], c["border"], c["text"]),
         ("Selected.Tab.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
     ]:
@@ -75,10 +138,14 @@ def apply_style(root, colours):
                 ("focus", hover),
             ],
             foreground=[("disabled", c["sub_text"]), ("!disabled", fg)],
-            bordercolor=[("focus", c["accent"]), ("!focus", c["border"])],
+            bordercolor=[
+                ("focus", c["accent"]),
+                ("!focus", c["accent"] if name.startswith("Selected") else c["border"]),
+            ],
             lightcolor=[("!disabled", c["border"])],
             darkcolor=[("!disabled", c["border"])],
         )
+        _button_surface(root, style, name, base, hover, c)
     for name in ("TEntry", "TCombobox", "TSpinbox"):
         style.configure(
             name,

@@ -49,10 +49,18 @@ def check_kernel(config_path):
             ("Крест, можешь пожалуйста сделать скриншот", "skills.windows.take_screenshot"),
             ("креси с ключи трек", "skills.media.next_track"),
             ("Крест, выключи микрофон в Дискорде", "skills.discord_voice.mute_microphone"),
+            ("ребята сейчас приду крест переключи трек", "skills.media.next_track"),
+            ("крест можешь сейчас пожалуйста переключить трек", "skills.media.next_track"),
+            ("крест кто написал", "skills.workflows.missed_messages"),
+            ("крест отчёт фарма", "skills.warframe.farm_report"),
         ):
             parsed = client.call("command.parse", text=phrase)
             if parsed["skill"] != expected:
                 raise RuntimeError("Разбор команды в отдельном ядре: " + phrase)
+        if "dota_guide" in cfg.snapshot() or "gid" in client.call("snapshot"):
+            raise RuntimeError("Удалённый Dota-гид остался в сборке")
+        if not isinstance(client.call("catalog.names"), list):
+            raise RuntimeError("Недоступен словарь приложений")
         # Exercise new modules through the packaged child kernel, without a game or account.
         snapshot = client.call("companion", action="snapshot")
         if snapshot.get("learning") != []:
@@ -201,8 +209,43 @@ def check_dependencies():
 
         close()
         print("UI Automation: повторные запросы к помощнику проверены без нажатий.", flush=True)
+        check_menu_surface()
     import torch
 
     if torch.tensor([1.0, 2.0]).sum().item() != 3:
         raise RuntimeError("PyTorch не выполнил операцию на CPU")
     print("Голосовые и сервисные библиотеки загружены; CPU PyTorch проверен.")
+
+
+def check_menu_surface():
+    """Exercise native Tk layout and wheel bounds in the packaged Windows app."""
+    import tkinter as tk
+    from tkinter import ttk
+    from ui_scroll import ScrollViewport
+    from ui_design import apply_style
+    from themes import THEMES
+
+    root = tk.Tk()
+    try:
+        root.geometry("480x320")
+        apply_style(root, THEMES["Graphite"])
+        pane = ScrollViewport(root, bg=THEMES["Graphite"]["bg"])
+        pane.pack(fill="both", expand=True)
+        for index in range(20):
+            ttk.Button(pane.content, text=f"Кнопка {index}").pack(fill="x", pady=4)
+        root.update()
+        pane.yview_scroll(137, "units")
+        root.update()
+        if pane.content.winfo_y() != -137:
+            raise RuntimeError("Страница не прокручивается на целое число пикселей")
+        pane.yview_moveto(1)
+        root.update()
+        if pane.yview()[1] != 1:
+            raise RuntimeError("Прокрутка вышла за пределы страницы")
+        pane.yview_moveto(0)
+        root.update()
+        if pane.content.winfo_y() != 0:
+            raise RuntimeError("Не удалось вернуть страницу в начало")
+        print("Меню: шрифт, кнопки и границы прокрутки проверены.", flush=True)
+    finally:
+        root.destroy()

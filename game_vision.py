@@ -54,6 +54,22 @@ SCREENS = (
         "Ожидание возрождения",
         ("ожидание возрождения", "удерживайте для возрождения", "hold to revive"),
     ),
+    (
+        "extraction",
+        "Эвакуация",
+        (
+            "доберитесь до эвакуации",
+            "направляйтесь к эвакуации",
+            "get to extraction",
+            "reach extraction",
+        ),
+    ),
+    (
+        "exterminate",
+        "Зачистка",
+        ("врагов осталось", "уничтожьте всех врагов", "enemies remaining", "eliminate all enemies"),
+    ),
+    ("capture", "Захват", ("захватите цель", "capture the target")),
 )
 
 
@@ -67,6 +83,9 @@ def classify_screen(text):
 
 
 SCREEN_HINTS = {
+    "extraction": "Задание указывает на эвакуацию. Соберите нужную добычу и двигайтесь к маркеру выхода.",
+    "exterminate": "На задании зачистки следите за оставшимися врагами и маркером цели.",
+    "capture": "Захват: доберитесь до отмеченной цели и выполните взаимодействие после её остановки.",
     "disruption": "Сбой: подберите подходящий ключ, активируйте проводник и найдите демолиста по звуку. «Варфрейм аполлон» — план фарма Акси; «открой сводку по миру» — события.",
     "survival": "Следите за жизнеобеспечением и точкой эвакуации. «Мои цели варфрейм» — ваш список фарма.",
     "revive": "Игра показывает возрождение. Проверьте оставшиеся попытки и возможность помощи союзника.",
@@ -91,9 +110,14 @@ async def _read_image(image):
     from winsdk.windows.media.ocr import OcrEngine
     from winsdk.windows.storage.streams import InMemoryRandomAccessStream, DataWriter
 
-    engine = OcrEngine.try_create_from_user_profile_languages()
+    languages = list(getattr(OcrEngine, "available_recognizer_languages", ()))
+    russian = next((lang for lang in languages if lang.language_tag.lower().startswith("ru")), None)
+    engine = (
+        OcrEngine.try_create_from_language(russian)
+        if russian
+        else OcrEngine.try_create_from_user_profile_languages()
+    )
     if engine is None:
-        languages = list(OcrEngine.available_recognizer_languages)
         preferred = [
             lang for lang in languages if lang.language_tag.lower().startswith(("ru", "en"))
         ]
@@ -146,26 +170,44 @@ def observe_screen():
         feature = signature(image)
 
         async def read():
-            full = image.copy()
+            from PIL import ImageOps, ImageDraw
+            from warframe_farm import PLAYING, read_facts
+
+            # Read the small objective area at native resolution first. Bright
+            # HUD text remains legible even when the full 4K frame is downscaled.
+            crop = image.crop((0, 0, int(image.width * 0.58), int(image.height * 0.52)))
             try:
-                text = await _read_image(full)
-            finally:
-                full.close()
-            result = classify_screen(text)
-            region = "весь экран"
-            if result["screen"] == "unknown":
-                # The objective HUD stays legible at native resolution on large monitors.
-                # Exclude the lower left chat and do not persist raw OCR text.
-                crop = image.crop((0, 0, int(image.width * 0.55), int(image.height * 0.55)))
+                contrast = ImageOps.autocontrast(crop.convert("L"))
                 try:
-                    hud = await _read_image(crop)
+                    hud = await _read_image(contrast)
                 finally:
-                    crop.close()
-                result = classify_screen(hud)
-                if result["screen"] != "unknown":
-                    region = "панель задания"
-                text += " " + hud
-            return {**result, "text_chars": len(text.strip()), "region": region}
+                    contrast.close()
+            finally:
+                crop.close()
+            result = classify_screen(hud)
+            text, region = hud, "панель задания"
+            if result["screen"] not in PLAYING:
+                full = image.copy()
+                try:
+                    # Exclude the chat area before OCR; chat must not pretend
+                    # to be a mission result or a HUD warning.
+                    ImageDraw.Draw(full).rectangle(
+                        (0, int(image.height * 0.6), int(image.width * 0.38), image.height),
+                        fill="black",
+                    )
+                    text = await _read_image(full)
+                finally:
+                    full.close()
+                full_result = classify_screen(text)
+                if full_result["screen"] != "unknown":
+                    result, region = full_result, "весь экран без чата"
+                text = hud + " " + text
+            return {
+                **result,
+                "text_chars": len(text.strip()),
+                "region": region,
+                "facts": read_facts(text, result["screen"]),
+            }
 
         result = asyncio.run(asyncio.wait_for(read(), timeout=10))
         if foreground_game_rect() != bounds:
@@ -236,6 +278,8 @@ class GameVision:
                     label="",
                     visual_guess="unknown",
                     visual_label="",
+                    facts={},
+                    observed=0,
                 )
             self.candidate = self.confirmed = ""
             return
@@ -243,7 +287,10 @@ class GameVision:
             return
         # Confirm transitions promptly; stable screens need fewer OCR calls.
         self.next_scan = now + (
-            3 if self.candidate != self.confirmed or self.candidate == "relic_reward" else 8
+            3
+            if self.candidate != self.confirmed
+            or self.candidate in ("relic_reward", "disruption", "survival", "extraction")
+            else 8
         )
         self.thread = threading.Thread(target=self.scan, daemon=True, name="krest-game-ocr")
         self.thread.start()
@@ -306,6 +353,8 @@ class GameVision:
                     label="",
                     visual_guess="unknown",
                     visual_label="",
+                    facts={},
+                    observed=0,
                 )
             self.candidate = self.confirmed = ""
         except Exception as exc:
@@ -319,6 +368,8 @@ class GameVision:
                     label="",
                     visual_guess="unknown",
                     visual_label="",
+                    facts={},
+                    observed=0,
                 )
             self.next_scan = time.time() + 90
         finally:

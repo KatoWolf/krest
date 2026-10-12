@@ -241,7 +241,12 @@ class IntegrationManager:
             priority = value.get("priority", "normal")
             if priority not in ("low", "normal", "high"):
                 priority = "normal"
-            self.app.runtime.notifications.put(message, source=filename, priority=priority)
+            self.app.runtime.notifications.put(
+                message,
+                source=filename,
+                priority=priority,
+                notice_kind="message" if value.get("notice_kind") == "message" else "",
+            )
 
     def refresh(self):
         if not self._health_lock.acquire(blocking=False):

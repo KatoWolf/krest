@@ -42,6 +42,9 @@ class WorkflowPages:
         self.game_notices_var = tk.BooleanVar(
             value=cfg["notification_settings"]["game_important_only"]
         )
+        self.sender_notices_var = tk.BooleanVar(
+            value=cfg["notification_settings"]["announce_senders"]
+        )
         self.notice_unread = tk.BooleanVar(value=False)
         self.resource_var = tk.StringVar(value="Ожидаю первый замер")
         self.sort_status = tk.StringVar(
@@ -275,6 +278,17 @@ class WorkflowPages:
         ttk.Checkbutton(
             card, text="В игре озвучивать только важные", variable=self.game_notices_var
         ).pack(anchor="w")
+        ttk.Checkbutton(
+            card,
+            text="Коротко называть отправителя сообщения, в том числе в игре",
+            variable=self.sender_notices_var,
+        ).pack(anchor="w")
+        self.label(
+            card,
+            "«Крест, кто написал?» — сводка пропущенных уведомлений. Содержимое переписки не зачитывается.",
+            muted=True,
+            wraplength=660,
+        ).pack(anchor="w", pady=8)
         ttk.Button(card, text="Применить режим уведомлений", command=self._apply_notices).pack(
             anchor="w", pady=8
         )

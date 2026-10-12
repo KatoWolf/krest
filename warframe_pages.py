@@ -54,6 +54,7 @@ class WarframePages:
         self.wf_refreshing = False
         self.wf_refreshed = 0
         self.wf_vision = tk.StringVar(self, value="Ожидаю активное окно Warframe")
+        self.wf_farm_summary = tk.StringVar(self, value="Жду читаемый экран задания")
         self.wf_learning = tk.StringVar(self, value="Отчёт обучения загружается…")
         self.wf_study_state = tk.StringVar(self, value="Ожидаю запуск игры")
         self.wf_status = tk.StringVar(self, value="Игра не обнаружена")
@@ -304,6 +305,7 @@ class WarframePages:
             + (f" · Проверка: {vision['scan_ms']} мс" if "scan_ms" in vision else "")
         )
         self.wf_status.set(label)
+        self.wf_farm_summary.set(status.get("farm", {}).get("summary", "Журнал забегов пока пуст"))
         study = status.get("study", {})
         self.wf_study_state.set(study.get("message", "Ожидаю запуск игры"))
         self.wf_learning.set(data.get("learning", "Нет отчёта обучения"))
@@ -439,10 +441,17 @@ class WarframePages:
             ],
         )
         self.label(card, textvariable=self.wf_source, muted=True, wraplength=670).pack(anchor="w")
-        quick = self.card(page, "Три команды для начала")
+        farm = self.card(
+            page,
+            "Ход фарма",
+            "Показатели подтверждаются двумя кадрами. Журнал сохраняется автоматически, инвентарь и цели — после вашей проверки.",
+        )
+        self.label(farm, textvariable=self.wf_farm_summary, wraplength=660).pack(anchor="w", pady=8)
+        self.wf_buttons(farm, [("Отчёт под крестом", lambda: self.wf_call("farm_report"))])
+        quick = self.card(page, "Команды прямо в игре")
         self.label(
             quick,
-            "«Открой сводку по миру» — циклы, событие и ваша цель\n«Что мне делать в игре» — подсказка по экрану\n«Варфрейм план на тридцать минут» — план сессии",
+            "«Открой сводку по миру» — циклы, событие и ваша цель\n«Что мне делать в игре» — подсказка по экрану\n«Отчёт фарма» — текущий забег и результаты\n«Варфрейм план на тридцать минут» — план сессии",
             wraplength=660,
         ).pack(anchor="w", pady=8)
         self.wf_buttons(
@@ -1377,7 +1386,7 @@ class WarframePages:
         self.field(card, "Программы .exe через ,", self.wf_vars["volume_apps"])
         self.field(card, "Их громкость, %", self.wf_vars["volume_percent"])
         for key, label in [
-            ("vision_enabled", "Читать активное окно игры локально каждые 15 секунд"),
+            ("vision_enabled", "Читать активное окно игры локально раз в 3–8 секунд"),
             ("capture_on_bookmark", "При метке сохранять скриншот активного окна Warframe"),
             ("clip_on_bookmark", "При метке запросить последний клип Game Bar"),
         ]:

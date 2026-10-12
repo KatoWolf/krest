@@ -12,7 +12,6 @@ import urllib.request
 import urllib.parse
 import webbrowser
 import logging
-import difflib
 from typing import Dict, List, Optional, Tuple, Any
 
 
@@ -276,53 +275,31 @@ def scan_installed_steam_games() -> List[Dict[str, str]]:
 def match_game_by_user_input(
     spoken_name: str, installed_games: List[Dict[str, str]]
 ) -> Optional[Dict[str, str]]:
-    """
-    Интеллектуальный алгоритм сопоставления устной русской речи с установленными играми.
-    """
-    if not spoken_name or not installed_games:
+    """Resolve complete catalog names or unique, complete aliases."""
+    from name_vocabulary import key
+
+    query = key(spoken_name)
+    if not query:
         return None
-
-    clean_input = spoken_name.lower().strip()
-    transliterated_input = transliterate_ru_to_en(clean_input)
-
-    # 1. Прямая проверка по словарю популярных псевдонимов (Aliases)
-    for game in installed_games:
-        game_title_lower = game["name"].lower()
-
-        # Проверяем псевдонимы для игры
-        for official_title_key, aliases in POPULAR_GAME_ALIASES.items():
-            if official_title_key in game_title_lower or game_title_lower in official_title_key:
-                if any(alias in clean_input for alias in aliases):
-                    return game
-
-    # 2. Точное или частичное совпадение названий
-    for game in installed_games:
-        title = game["name"].lower()
-        clean_title = re.sub(r"[^a-zA-Z0-9\s]", "", title)
-
-        if clean_input in title or title in clean_input:
-            return game
-        if transliterated_input in clean_title or clean_title in transliterated_input:
-            return game
-
-    # 3. Нечеткое сопоставление (Fuzzy matching)
-    best_match = None
-    highest_score = 0.0
-
-    for game in installed_games:
-        title = game["name"].lower()
-
-        # Сравниваем русскую речь в транслите с английским оригинальным названием
-        score_translit = difflib.SequenceMatcher(None, transliterated_input, title).ratio()
-        score_direct = difflib.SequenceMatcher(None, clean_input, title).ratio()
-
-        max_score = max(score_translit, score_direct)
-
-        if max_score > highest_score and max_score >= 0.45:
-            highest_score = max_score
-            best_match = game
-
-    return best_match
+    exact = {str(g["appid"]): g for g in installed_games if key(g["name"]) == query}
+    if len(exact) == 1:
+        return next(iter(exact.values()))
+    aliases = {key(name): {key(v) for v in values} for name, values in POPULAR_GAME_ALIASES.items()}
+    aliases.setdefault("counter strike 2", set()).update({"контру", "кс два", "ка эс два"})
+    aliases.setdefault("warframe", set()).add("вар фрейм")
+    matches = {
+        str(g["appid"]): g for g in installed_games if query in aliases.get(key(g["name"]), set())
+    }
+    if len(matches) == 1:
+        return next(iter(matches.values()))
+    # A partial name is only useful when it identifies exactly one game. Never
+    # launch a different game on a 45% spelling similarity or a substring alias.
+    if len(query) >= 4 and not matches:
+        for game in installed_games:
+            title = key(game["name"])
+            if title.startswith(query + " "):
+                matches[str(game["appid"])] = game
+    return next(iter(matches.values())) if len(matches) == 1 else None
 
 
 # ==========================================

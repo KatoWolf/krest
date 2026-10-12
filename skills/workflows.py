@@ -4,6 +4,44 @@ from skill_manager import skill
 
 
 @skill(
+    keywords=[
+        "кто написал",
+        "кто мне написал",
+        "пропущенные сообщения",
+        "прочитай пропущенные сообщения",
+    ],
+    description="Назвать отправителей новых сообщений из подключённых мессенджеров",
+    category="Сообщения",
+)
+def missed_messages(state):
+    from collections import Counter
+
+    rows = [r for r in state.runtime.center.list(unread=True) if r.get("kind") == "message"]
+    if not rows:
+        return "Новых уведомлений о сообщениях нет."
+    senders = Counter()
+    for row in rows:
+        senders[row["text"].replace("новое сообщение от ", "")] += row["count"]
+    return (
+        "Пропущенные уведомления: "
+        + "; ".join(f"{name}, сообщений {count}" for name, count in list(senders.items())[:8])
+        + (". Остальные — в меню уведомлений." if len(senders) > 8 else ".")
+    )
+
+
+@skill(
+    keywords=["очисти пропущенные уведомления", "отметь сообщения прочитанными"],
+    description="Отметить уведомления о сообщениях в Крест прочитанными; чаты не меняются",
+    category="Сообщения",
+)
+def clear_missed_messages(state):
+    for row in state.runtime.center.list(unread=True):
+        if row.get("kind") == "message":
+            state.runtime.center.mark_read(row["id"])
+    return "Уведомления о сообщениях в Крест отмечены прочитанными."
+
+
+@skill(
     patterns=[r"(?:создай|составь) (?P<draft>(?:сценарий|режим) .+)"],
     examples=["создай сценарий Вечер из действий приглуши музыку, включи не беспокоить"],
     description="Создать черновик сценария голосом без выполнения",

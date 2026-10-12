@@ -204,10 +204,18 @@ class KrestDS(discord.Client):
         ):
             return
         cfg = self.manager.snapshot()
-        if not cfg["discord_bot"]["auto_reply"]:
+        if not self.gate.incoming(message.channel.id, message.id):
             return
         important = urgent(message.content)
-        if not self.gate.allow(message.channel.id, cfg["auto_replies"], important):
+        emit(
+            "notification",
+            "Discord Bot: новое сообщение от " + message.author.display_name[:80],
+            priority="high" if important else "normal",
+            notice_kind="message",
+        )
+        if not cfg["discord_bot"]["auto_reply"] or not self.gate.allow(
+            message.channel.id, cfg["auto_replies"], important
+        ):
             return
         text = render_reply(
             cfg["owner_name"],
@@ -224,15 +232,11 @@ class KrestDS(discord.Client):
             emit("error", "Discord: автоответ не отправлен")
             return
         delay = cfg["auto_replies"]["delete_seconds"]
+        self.gate.delivered(message.channel.id)
         if delay:
             task = asyncio.create_task(self.auto_delete_message(sent, delay))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
-        emit(
-            "notification",
-            "Discord Bot: сообщение от " + message.author.display_name[:80],
-            priority="high" if important else "normal",
-        )
 
     async def close(self):
         tasks = list(self.tasks) + ([self.presence_task] if self.presence_task else [])

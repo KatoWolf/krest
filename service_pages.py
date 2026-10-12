@@ -429,6 +429,12 @@ class ServicePages(DiscordBotPages):
             text="Отвечать только на срочные сообщения",
             variable=self.reply_vars["urgent_only"],
         ).pack(anchor="w", pady=4)
+        self.label(
+            card,
+            "Повторный автоответ — после заданной паузы. Ваш личный ответ приостанавливает автоответы этому контакту на 5 минут. Уведомления о новых сообщениях продолжают приходить.",
+            muted=True,
+            wraplength=660,
+        ).pack(anchor="w", pady=8)
         traces = []
 
         def selection(key, labels, caption):
@@ -594,7 +600,7 @@ class ServicePages(DiscordBotPages):
             self.field(card, caption, self.presence_vars[key])
         ttk.Checkbutton(
             card,
-            text="Обновлять по состоянию Крест / Dota",
+            text="Обновлять по состоянию Крест / игры",
             variable=self.presence_vars["follow_activity"],
         ).pack(anchor="w", pady=8)
         self.service_controls(card, "discord_presence.py")

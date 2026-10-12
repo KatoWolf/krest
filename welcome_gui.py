@@ -72,7 +72,6 @@ class ControlCenterApp(
         ("discord_account", "Discord · мой аккаунт"),
         ("discord_bot", "Discord · серверный бот"),
         ("scripts", "Скрипты и мосты"),
-        ("dota", "Dota 2"),
         ("settings", "Настройки"),
         ("logs", "Журнал"),
         ("license", "Premium"),
@@ -92,7 +91,7 @@ class ControlCenterApp(
         (
             "bots",
             "Подключения",
-            ("bots", "steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
+            ("bots", "steam", "api", "discord_account", "discord_bot", "scripts"),
         ),
         ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
         ("wf_home", "Warframe", tuple(code for code, _ in PAGE_NAMES)),
@@ -200,12 +199,6 @@ class ControlCenterApp(
             else tk.StringVar(self, value=value)
             for key, value in self.config_mgr.config["telegram_user"].items()
         }
-        self.dota_vars = {
-            key: (
-                tk.BooleanVar(value=value) if isinstance(value, bool) else tk.StringVar(value=value)
-            )
-            for key, value in self.config_mgr.config["dota_guide"].items()
-        }
         self.status_var = tk.StringVar(
             value="Скажите «Крест, который час?» — после подключения микрофона."
         )
@@ -220,12 +213,12 @@ class ControlCenterApp(
             self.game_processes_var,
             self.notice_mode_var,
             self.game_notices_var,
+            self.sender_notices_var,
             self.media_source_var,
             self.theme_var,
             *self.settings_vars.values(),
             *self.api_vars.values(),
             *self.skill_vars.values(),
-            *self.dota_vars.values(),
             *self.reply_vars.values(),
             *self.account_vars.values(),
             *self.bot_vars.values(),
@@ -235,8 +228,8 @@ class ControlCenterApp(
         ]:
             variable.trace_add("write", self._mark_dirty)
         if self.theme_var.get() in PREMIUM_THEMES and not self.config_mgr.is_premium():
-            self.theme_var.set("Amethyst Modern")
-        self.theme = THEMES.get(self.theme_var.get(), THEMES["Amethyst Modern"])
+            self.theme_var.set("Graphite")
+        self.theme = THEMES.get(self.theme_var.get(), THEMES["Graphite"])
 
         class UILogHandler(logging.Handler):
             def emit(handler, record):
@@ -361,19 +354,11 @@ class ControlCenterApp(
         ttk.Button(
             side, text="Свернуть в трей", style="Nav.TButton", command=self.hide_to_tray
         ).pack(side="bottom", fill="x", pady=6)
-        self.nav_canvas = tk.Canvas(
-            side, bg=self.theme["sidebar"], highlightthickness=0, width=210, yscrollincrement=1
-        )
+        from ui_scroll import ScrollViewport
+
+        self.nav_canvas = ScrollViewport(side, bg=self.theme["sidebar"], width=222)
         self.nav_canvas.pack(fill="both", expand=True)
-        self.nav_frame = tk.Frame(self.nav_canvas, bg=self.theme["sidebar"])
-        nav_window = self.nav_canvas.create_window((0, 0), window=self.nav_frame, anchor="nw")
-        self.nav_frame.bind(
-            "<Configure>",
-            lambda e: self.nav_canvas.configure(scrollregion=self.nav_canvas.bbox("all")),
-        )
-        self.nav_canvas.bind(
-            "<Configure>", lambda e: self.nav_canvas.itemconfigure(nav_window, width=e.width)
-        )
+        self.nav_frame = self.nav_canvas.content
         self.nav_buttons = {}
         self.group_buttons = {}
         for default, title, codes in self.NAV_GROUPS:
@@ -432,21 +417,12 @@ class ControlCenterApp(
         self.canvases = {}
         for code, _ in self.NAV:
             page = tk.Frame(self.content, bg=self.theme["bg"])
-            canvas = tk.Canvas(page, bg=self.theme["bg"], highlightthickness=0, yscrollincrement=1)
+            canvas = ScrollViewport(page, bg=self.theme["bg"])
             scroll = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
             scroll.pack(side="right", fill="y")
             canvas.pack(side="left", fill="both", expand=True)
-            canvas.configure(yscrollcommand=scroll.set)
-            inner = tk.Frame(canvas, bg=self.theme["bg"])
-            window = canvas.create_window((0, 0), window=inner, anchor="nw")
-            inner.bind(
-                "<Configure>",
-                lambda event, c=canvas: c.configure(scrollregion=c.bbox("all")),
-            )
-            canvas.bind(
-                "<Configure>",
-                lambda event, c=canvas, w=window: c.itemconfigure(w, width=event.width),
-            )
+            canvas.set_scrollbar(scroll.set)
+            inner = canvas.content
             self.pages[code] = page
             self.page_bodies[code] = inner
             self.canvases[code] = canvas
@@ -1310,69 +1286,6 @@ class ControlCenterApp(
         self.log_source.set(filename)
         self.switch_page("logs")
 
-    def build_dota_tab(self):
-        card = self.card(
-            self.page_bodies["dota"],
-            "Dota 2 — игровой гид",
-            "Крест сама находит Dota в библиотеках Steam и готовит связь. После первой настройки перезапустите игру; в матче время появится автоматически.",
-        )
-        for key, caption in (
-            ("enabled", "Запускать связь с Dota вместе с Крест"),
-            ("auto_setup", "Автоматически готовить файл связи с игрой"),
-            ("hero_alerts", "Подсказывать при низком здоровье или мане"),
-        ):
-            ttk.Checkbutton(card, text=caption, variable=self.dota_vars[key]).pack(
-                anchor="w", pady=4
-            )
-        self.label(
-            card,
-            "Скажите: «когда руны», «когда мудрость», «убили Рошана», «статус гида».",
-            muted=True,
-            wraplength=650,
-        ).pack(anchor="w", pady=8)
-        tuning = self.advanced(card, "Параметры подключения и предупреждений")
-        for key, label in [
-            ("gsi_port", "Порт GSI"),
-            ("warning_lead_time", "Предупреждать за, сек."),
-            ("process_name", "Процесс игры"),
-        ]:
-            self.field(tuning, label, self.dota_vars[key])
-        ttk.Checkbutton(
-            card,
-            text="Включать гид при обнаружении матча",
-            variable=self.dota_vars["auto_mode"],
-        ).pack(anchor="w", pady=8)
-        self.dota_label = self.label(card, "Сервер выключен", wraplength=700)
-        self.dota_label.pack(anchor="w", pady=8)
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x")
-        for title, action in [
-            ("Запустить сервер", "start"),
-            ("Остановить", "stop"),
-            ("Восстановить связь", "setup"),
-        ]:
-            ttk.Button(row, text=title, command=lambda a=action: self._dota_action(a)).pack(
-                side="left", padx=4
-            )
-        row = tk.Frame(card, bg=self.theme["card"])
-        row.pack(fill="x", pady=10)
-        for title, command in [
-            ("Играть с гидом", "запусти доту с гидом"),
-            ("Сводка матча", "сводка матча"),
-            ("Ручной старт матча", "матч начался"),
-            ("Рошан убит", "убили рошана"),
-            ("Статус", "статус гида"),
-        ]:
-            ttk.Button(row, text=title, command=lambda c=command: self.runtime.submit(c)).pack(
-                side="left", padx=4
-            )
-        self.label(
-            card,
-            "Тайминги сохранены из вашего исходного гида. После обновлений Dota их нужно сверять с правилами игры.",
-            muted=True,
-            wraplength=680,
-        ).pack(anchor="w", pady=10)
-
     def _auto_setup(self):
         if self.auto_setup_busy:
             return
@@ -1590,6 +1503,7 @@ class ControlCenterApp(
         data["notification_settings"] = {
             "mode": NOTICE_MODES[self.notice_mode_var.get()],
             "game_important_only": self.game_notices_var.get(),
+            "announce_senders": self.sender_notices_var.get(),
         }
         data["owner_name"] = self.owner_var.get().strip()
         data["profile"]["onboarding_completed"] = data["profile"]["onboarding_completed"] or bool(
@@ -1618,7 +1532,6 @@ class ControlCenterApp(
         data["discord_account"].update({key: var.get() for key, var in self.account_vars.items()})
         data["discord_bot"].update({key: var.get() for key, var in self.bot_vars.items()})
         data["telegram_user"].update({key: var.get() for key, var in self.tg_vars.items()})
-        data["dota_guide"].update({key: var.get() for key, var in self.dota_vars.items()})
         if self.CORE_PAGES & self._built_pages:
             data.update(self.core_settings_draft())
         return data
@@ -1649,33 +1562,6 @@ class ControlCenterApp(
         self.refresh_skills()
         if "steam" in self._built_pages:
             self._update_steam(force=True)
-        if not self.config_mgr.config["skills"].get("gid", True):
-            from skills import gid
-
-            self._background(lambda: self.runtime.client.call("dota", action="stop")) if hasattr(
-                self.runtime, "client"
-            ) else self._background(gid.stop_service)
-        if previous["dota_guide"] != self.config_mgr.config["dota_guide"] or previous["skills"].get(
-            "gid"
-        ) != self.config_mgr.config["skills"].get("gid"):
-
-            def reload_dota():
-                if hasattr(self.runtime, "client"):
-                    return self.runtime.client.call("dota", action="reload")
-                from skills import gid
-
-                gid.stop_service()
-                cfg = self.config_mgr.snapshot()
-                if (
-                    cfg["dota_guide"]["enabled"]
-                    and cfg["skills"].get("gid", True)
-                    and not self.runtime.settings().get("safe_mode")
-                ):
-                    return gid.start_service(
-                        {**cfg["dota_guide"], "steam_path": cfg["steam"]["install_path"]}
-                    )
-
-            self._background(reload_dota)
         indicator_controller.enabled = self.config_mgr.config["app_settings"]["indicator_enabled"]
         return True
 
@@ -1859,35 +1745,6 @@ class ControlCenterApp(
     def handle_tg_login(self):
         self._auth(login=True)
 
-    def _dota_action(self, action):
-        if action != "stop" and not self.save_all_settings(quiet=True):
-            return
-        if action != "stop" and not self.config_mgr.config["skills"].get("gid", True):
-            self._report_error("Модуль Dota 2 выключен на странице навыков")
-            return
-        settings = self.config_mgr.snapshot()["dota_guide"]
-
-        def operation():
-            if hasattr(self.runtime, "client"):
-                result = self.runtime.client.call("dota", action=action)
-                return f"Dota GSI: {result}"
-            from skills import gid
-
-            if action == "start":
-                port = gid.start_service(settings)
-                return f"GSI слушает порт {port}"
-            if action == "stop":
-                gid.stop_service()
-                return "Dota GSI остановлен"
-            gid.GSI_PORT = int(settings["gsi_port"])
-            if not gid.auto_setup_gsi_config(self.config_mgr.snapshot()["steam"]["install_path"]):
-                raise RuntimeError(
-                    "Не удалось создать GSI-конфиг: проверьте путь Steam и существующий файл. Подробности в журнале."
-                )
-            return "GSI-конфиг создан. Перезапустите Dota 2."
-
-        self._background(operation, self._append_log)
-
     def _pick_model(self, key):
         value = (
             filedialog.askdirectory(parent=self)
@@ -2015,6 +1872,8 @@ class ControlCenterApp(
                 self.refresh_skills()
                 if "skills" in self._built_pages:
                     self._refresh_skill_imports()
+            elif kind == "catalog_changed":
+                self._refresh_apps()
             elif kind == "quick_panel":
                 from quick_panel import show_panel
 
@@ -2148,7 +2007,7 @@ class ControlCenterApp(
 
                 self._background(enforce)
             if not self.config_mgr.is_premium() and self.theme_var.get() in PREMIUM_THEMES:
-                self.apply_theme("Amethyst Modern")
+                self.apply_theme("Graphite")
             if self.current_page == "settings":
                 self.download_label.configure(text=self.runtime.download_status)
             if self.current_page == "steam" and "steam" in self._built_pages:
@@ -2158,24 +2017,6 @@ class ControlCenterApp(
                 ("Выполняется: " + current[:100] if current else "Ожидаю обращение «Крест»")
                 + f" · В очереди: {pending}"
             )
-            from skills import gid
-
-            info = (
-                self.runtime.cached["gid"]
-                if hasattr(self.runtime, "client")
-                else gid.service_status()
-            )
-            if self.current_page == "dota":
-                self.dota_label.configure(
-                    text=(f"GSI: порт {info['port']}" if info["running"] else "GSI выключен")
-                    + f" · Время матча: {info['match_seconds'] // 60}:{info['match_seconds'] % 60:02}"
-                    + "\n"
-                    + (
-                        "Получаю данные из игры"
-                        if info.get("connected")
-                        else info.get("diagnosis", info.get("setup_message", "Ожидаю матч"))
-                    )
-                )
             self.overview_label.configure(
                 text=f"{len(self.runtime.manager.catalog())} навыков готовы  ·  "
                 f"{len(self.runtime.state.snapshot()['active_timers'])} активных таймеров  ·  "
@@ -2233,6 +2074,7 @@ class ControlCenterApp(
 
     def destroy(self):
         # Cancel Tcl timers before their Python callbacks/widgets are destroyed.
+        self._destroyed = True
         try:
             for job in self.tk.call("after", "info"):
                 # Preserve callback ownership: child.destroy() deletes its own Tcl command.

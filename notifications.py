@@ -30,10 +30,16 @@ class NotificationQueue:
         finally:
             connection.close()
 
-    def put(self, text, source=None, priority="normal"):
+    def put(self, text, source=None, priority="normal", notice_kind=""):
         if source is not None:
             text = json.dumps(
-                {"krest_notice": 1, "text": str(text), "source": str(source), "priority": priority},
+                {
+                    "krest_notice": 1,
+                    "text": str(text),
+                    "source": str(source),
+                    "priority": priority,
+                    "kind": notice_kind,
+                },
                 ensure_ascii=False,
             )
         with self._connect() as connection:

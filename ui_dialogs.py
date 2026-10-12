@@ -11,7 +11,7 @@ from themes import THEMES
 
 def _dialog(title, text, choices, parent=None, entry=False, initialvalue="", show=None):
     parent = parent or tk._default_root
-    colours = getattr(parent, "theme", THEMES["Amethyst Modern"])
+    colours = getattr(parent, "theme", THEMES["Graphite"])
     window = tk.Toplevel(parent)
     window.title(title)
     window.configure(bg=colours["bg"])

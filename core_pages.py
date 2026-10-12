@@ -484,7 +484,7 @@ class CorePages:
         card = self.card(
             self.page_bodies["programs"],
             "Ваши программы",
-            "Крест находит ярлыки меню «Пуск» и приложения Windows. Короткое имя позволяет запускать программу привычной фразой.",
+            "Автопоиск при запуске и каждые 10 минут. Игры Steam обновляются раз в минуту. Скажите «Крест, открой яндекс» или «Крест, запусти варф».",
         )
         self.app_tree = self._table(card, {"name": "Программа", "kind": "Источник"}, 7)
         self.app_alias = tk.StringVar()
@@ -498,6 +498,18 @@ class CorePages:
             ],
         )
         self._refresh_apps()
+        vocabulary = self.card(
+            self.page_bodies["programs"],
+            "Словарь игр и программ",
+            "Короткие названия работают только для найденных приложений. При совпадении нескольких названий укажите полное.",
+        )
+        self.vocabulary_tree = self._table(
+            vocabulary, {"name": "Название", "aliases": "Можно сказать"}, 6
+        )
+        ttk.Button(
+            vocabulary, text="Обновить список словаря", command=self._refresh_vocabulary
+        ).pack(anchor="w", pady=8)
+        self._refresh_vocabulary()
         card = self.card(
             self.page_bodies["programs"],
             "Микшер приложений",
@@ -545,6 +557,23 @@ class CorePages:
                 self.status_var.set("Программы не найдены. Автопоиск доступен на Windows.")
 
         self._background(scan_apps, finish)
+
+    def _refresh_vocabulary(self):
+        def load():
+            if hasattr(self.runtime, "client"):
+                return self.runtime.client.call("catalog.names")
+            return self.runtime.manager.name_vocabulary.rows
+
+        def render(rows):
+            if not hasattr(self, "vocabulary_tree") or not self.vocabulary_tree.winfo_exists():
+                return
+            self.vocabulary_tree.delete(*self.vocabulary_tree.get_children())
+            for row in rows:
+                self.vocabulary_tree.insert(
+                    "", "end", values=(row["name"], ", ".join(row["aliases"]) or row["name"])
+                )
+
+        self._background(load, render)
 
     def _alias_app(self):
         selected = self.app_tree.selection()

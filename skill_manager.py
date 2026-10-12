@@ -137,7 +137,7 @@ class SkillManager:
             paths = sorted(root.glob("*.py"))
         with _registry_lock:
             for path in paths:
-                if path.name.startswith("_"):
+                if path.name.startswith("_") or folder == "skills" and path.stem == "gid":
                     continue
                 name = f"{folder}.{path.stem}"
                 previous = [entry for entry in SKILL_REGISTRY if entry.func.__module__ == name]
@@ -163,10 +163,6 @@ class SkillManager:
         self._load("plugins", reload)
 
     def reload(self):
-        # gid owns a running service; keep its live state when reloading pure skills.
-        from skills import gid
-
-        gid.stop_service()
         self.load_skills(reload=True)
         self.load_custom_plugins(reload=True)
         self.imports.load_all()
@@ -195,6 +191,9 @@ class SkillManager:
 
     def match(self, text):
         clean = text.casefold().strip(" ,.!?")
+        vocabulary = getattr(self, "name_vocabulary", None)
+        if vocabulary is not None:
+            clean = vocabulary.resolve(clean).casefold()
         if re.match(r"^(?:не|не надо|не нужно)\s", clean) and clean not in (
             "не нравится",
             "не могу сосредоточиться",

@@ -2,7 +2,7 @@
 
 import re
 
-from speech_tools import normalize_command, split_wake
+from speech_tools import addressed_speech, normalize_command
 
 TRANSPORT_SKILLS = {
     "skills.media." + name for name in ("next_track", "prev_track", "pause_music", "play_music")
@@ -43,11 +43,11 @@ def command_confidence(manager, text, command, addressed, average, recognition, 
 def decode_voice_command(manager, text, settings):
     cfg = settings.get("app_settings", {})
     wake_word = cfg.get("wake_word", "крест")
-    wake, command = split_wake(text, wake_word)
+    wake, command = addressed_speech(text, wake_word)
     near_wake = False
     if not wake and wake_word.casefold() == "крест":
         for variant in ("креси", "крес"):
-            near_wake, command = split_wake(text, variant)
+            near_wake, command = addressed_speech(text, variant)
             if near_wake:
                 break
     aliases = settings.get("command_aliases", {})
@@ -58,9 +58,36 @@ def decode_voice_command(manager, text, settings):
         r"(?:с ключи|сключи|прикручивать|прикручивай) (?:тр[еэ]к|песню)", clean
     ):
         command = "переключи трек"
+    if wake or near_wake:
+        command = isolate_control(manager, command, aliases)
     if near_wake:
         matched = manager.match(normalize_command(command, aliases))
         if not matched or matched[0].id not in SHORT_AUDIO_SKILLS:
             return False, text
         return True, command
     return wake, command
+
+
+def isolate_control(manager, command, aliases):
+    """Remove conversational framing only around an exact short control.
+
+    Never truncate names, reminder text, destructive actions or a negation.
+    Unknown speech continues through the ordinary clarification path.
+    """
+    from command_understanding import conversational_form
+    from speech_dictionary import QUICK_SKILLS
+
+    value = normalize_command(command, aliases)
+    for _ in range(3):
+        value = re.sub(
+            r"^(?:(?:ну|сейчас|пожалуйста|давай|мне|слушай)\s+){1,5}", "", value, flags=re.I
+        )
+        value = conversational_form(value)
+    value = re.sub(r"^(\w+) (?:сейчас |мне )", r"\1 ", value, flags=re.I)
+    candidate = re.split(
+        r"\s+(?:а то|потому что|спасибо|пожалуйста)\b", value, maxsplit=1, flags=re.I
+    )[0]
+    if re.search(r"\b(?:не|нет|отмена|подожди|стой)\b", value, re.I):
+        return command
+    found = manager.match(candidate.strip(" ,.!?"))
+    return candidate if found and found[0].id in QUICK_SKILLS else command

@@ -45,7 +45,7 @@ class SetupWindow(tk.Tk):
         self.geometry("620x440")
         self.minsize(560, 420)
         load_fonts(self)
-        self.theme = THEMES["Amethyst Modern"]
+        self.theme = THEMES["Graphite"]
         apply_style(self, self.theme)
         style_titlebar(self, self.theme)
         frame = tk.Frame(self, bg=self.theme["bg"], padx=28, pady=24)

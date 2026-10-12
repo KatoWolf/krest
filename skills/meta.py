@@ -95,12 +95,10 @@ def get_assistant_status(text: str):
 
     is_muted = getattr(state, "is_muted", False)
     is_sleeping = getattr(state, "is_sleeping", False)
-    dota_active = getattr(state, "dota_guide_active", False)
     start_time = getattr(state, "start_time", time.time())
 
     mute_state = "Включен (без голоса)" if is_muted else "Выключен (с голосом)"
     sleep_state = "В режиме сна" if is_sleeping else "Активен"
-    dota_state = "Включен" if dota_active else "Выключен"
 
     uptime = int(time.time() - start_time)
     mins = uptime // 60
@@ -109,7 +107,6 @@ def get_assistant_status(text: str):
         f"Статус ассистента Крест: "
         f"Тихий режим: {mute_state}. "
         f"Режим сна: {sleep_state}. "
-        f"Dota-гид: {dota_state}. "
         f"Время работы: {mins} минут. "
         f"Загружено навыков: {len(SKILL_REGISTRY)}."
     )

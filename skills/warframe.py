@@ -312,6 +312,22 @@ def guide(state):
 
 
 @skill(
+    keywords=[
+        "отчёт фарма",
+        "отчет фарма",
+        "как идёт фарм",
+        "как идет фарм",
+        "варфрейм отчёт",
+        "варфрейм отчет",
+    ],
+    description="Ход текущего забега, замеченные результаты и реликвии под крестом",
+    category="Warframe",
+)
+def farm_report(state):
+    return run(state, "farm_report")
+
+
+@skill(
     keywords=["запиши маршрут варфрейм"],
     description="Записать до минуты клавиш движения в активном Warframe",
     category="Warframe",
@@ -381,7 +397,7 @@ def study_mark(label, state):
 
 
 @skill(
-    keywords=["отчет по обучению", "чему научилась в варфрейме", "как идет фарм"],
+    keywords=["отчет по обучению", "чему научилась в варфрейме"],
     description="Показать собранные примеры и реальные ограничения обучения Warframe",
     category="Warframe",
 )

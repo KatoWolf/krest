@@ -91,24 +91,6 @@ COLOR_MAIN = "#9b72b0"  # Основная линия
 COLOR_CORE = "#f4effa"  # Ядро
 
 # ==========================================
-# 5. Настройки Dota 2 Гида и GSI Интеграции
-# ==========================================
-_dota_cfg = _user_cfg.get("dota_guide", {})
-DOTA_PROCESS_NAME = _dota_cfg.get("process_name", "dota2.exe")
-DOTA2_PROCESS_NAME = DOTA_PROCESS_NAME  # Псевдоним для совместимости
-
-DOTA_GSI_PORT = _dota_cfg.get("gsi_port", 3000)
-DOTA_GUIDE_ENABLED = _dota_cfg.get("enabled", True)
-
-# Время предупреждения о событиях (за X секунд до спавна)
-WARNING_LEAD_TIME = _dota_cfg.get("warning_lead_time", 30)
-
-# Интервалы ключевых игровых событий (в секундах)
-BOUNTY_RUNE_INTERVAL = 180  # Руны богатства (каждые 3 минуты)
-WISDOM_RUNE_INTERVAL = 420  # Руны мудрости (каждые 7 минут)
-LOTUS_INTERVAL = 180  # Лотусы (каждые 3 минуты)
-
-# ==========================================
 # 6. Настройки API Ключей и Внешних Сервисов
 # ==========================================
 _api_cfg = _user_cfg.get("api_keys", {})
@@ -131,7 +113,6 @@ MODULES = _user_cfg.get(
     {
         "media_skills": True,
         "windows_skills": True,
-        "dota_guide": True,
         "telegram_bot": True,
         "discord_bot": True,
         "steam_integration": True,
