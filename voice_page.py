@@ -44,9 +44,11 @@ class VoicePages:
             ("Выключить", self.runtime.stop_voice),
             ("Слушать команду · F8", self._arm_voice),
             ("Прервать ответ", voice.stop_speaking),
-            ("Играю в наушниках", self._headphone_preset),
         ):
             ttk.Button(row, text=title, command=fn).pack(side="left", padx=(0, 5))
+        ttk.Button(
+            card, text="Играю в наушниках · слышать во время ответа", command=self._headphone_preset
+        ).pack(anchor="w", pady=(4, 10))
         ttk.Checkbutton(
             card,
             text="Включать голос при запуске Крест",
