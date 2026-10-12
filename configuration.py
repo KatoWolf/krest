@@ -138,6 +138,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "auto_mode": True,
         "auto_setup": True,
+        "hero_alerts": True,
     },
     "skills": {
         name: True

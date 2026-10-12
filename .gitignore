@@ -36,6 +36,7 @@ activity_profile.json
 
 jobs.sqlite3*
 memory.sqlite3*
+speech_learning.sqlite3*
 kernel_endpoint.json
 .kernel.lock
 .ui.lock

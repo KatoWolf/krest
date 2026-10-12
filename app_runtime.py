@@ -28,8 +28,11 @@ def check_wake_word(text, wake_word):
 
 
 class AssistantRuntime:
-    def __init__(self, settings, state=None, data_dir=BASE_DIR):
+    def __init__(self, settings, state=None, data_dir=BASE_DIR, config_manager=None):
         self.settings = settings
+        from configuration import ConfigManager
+
+        self.config_manager = config_manager or ConfigManager(Path(data_dir) / "config.json")
         self.state = state or AssistantState(Path(data_dir) / "assistant_state.json")
         self.state.config_getter = settings
         self.state.runtime = self
@@ -51,11 +54,15 @@ class AssistantRuntime:
         self.manager = SkillManager(settings, plugin_dir=Path(data_dir) / "imported_skills")
         from command_understanding import VoiceUnderstanding
 
-        self.understanding = VoiceUnderstanding(self.manager, self.memory)
+        from companion_session import CompanionSession
+
+        self.companion = CompanionSession(self, Path(data_dir))
+        self.understanding = VoiceUnderstanding(self.manager, self.memory, self.companion)
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
         self._request_lock = threading.RLock()
+        self._submitted_at = {}
         self.current_command = ""
         self.notifications = NotificationQueue(Path(data_dir) / "notifications.sqlite3")
         self.stop_event = threading.Event()
@@ -160,6 +167,10 @@ class AssistantRuntime:
                 return True
             try:
                 self.requests.put_nowait((text, source, confidence, job_id))
+                self._submitted_at[job_id] = (
+                    time.monotonic(),
+                    voice.recognition() if source == "voice" else {},
+                )
                 return True
             except queue.Full:
                 self.jobs.transition(job_id, "cancelled", "Очередь заполнена")
@@ -174,6 +185,7 @@ class AssistantRuntime:
                 try:
                     item = self.requests.get_nowait()
                     self.jobs.transition(item[3], "cancelled", "Отменено до начала выполнения")
+                    self._submitted_at.pop(item[3], None)
                     self.requests.task_done()
                     count += 1
                 except queue.Empty:
@@ -185,7 +197,9 @@ class AssistantRuntime:
 
     def execute(self, text, source="text", confidence=None):
         with self._execute_lock:
+            started = time.monotonic()
             ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
+            submitted, recognition = self._submitted_at.pop(ident, (started, {}))
             if not self.jobs.transition(ident, "running"):
                 return CommandResult(True, False, "Задание отменено или уже завершено")
             from execution import ExecutionToken
@@ -200,6 +214,22 @@ class AssistantRuntime:
                     "completed" if result.success else "cancelled" if token.is_set() else "failed"
                 )
                 self.jobs.transition(ident, status, result.text)
+                trace = {
+                    "heard": text,
+                    "skill": result.skill_id,
+                    "success": result.success,
+                    "queue_ms": round((started - submitted) * 1000),
+                    "execution_ms": round((time.monotonic() - started) * 1000),
+                    "time": time.time(),
+                    "source": source,
+                }
+                if source == "voice":
+                    data = recognition or voice.recognition()
+                    trace.update(decoder_ms=data.get("decoder_ms"), pause_ms=data.get("pause_ms"))
+                if result.handled:
+                    with self.companion.lock:
+                        self.companion.last_trace = trace
+                    self.events.put(("command_trace", trace))
                 return result
             except Exception as exc:
                 self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
@@ -265,6 +295,11 @@ class AssistantRuntime:
             if not wake and time.monotonic() > self._active_until:
                 observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
+            if not wake and not self.companion.accepts_followup(
+                normalize_command(command, self.settings().get("command_aliases", {}))
+            ):
+                observed("Фраза вне текущей темы — ожидаю обращения")
+                return CommandResult(False, False, "")
             if confidence is not None and confidence * 100 < cfg.get("speech_confidence", 60):
                 observed("Низкая уверенность — повторите фразу")
                 result = CommandResult(
@@ -277,8 +312,11 @@ class AssistantRuntime:
                 self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
             if not command and wake:
                 observed("Ожидаю команду")
-                voice.speak("Слушаю.")
-                return CommandResult(True, True, "Слушаю.")
+                from companion_behavior import policy
+
+                text = policy(self.settings(), bool(self.performance.game))["listen"]
+                voice.speak(text)
+                return CommandResult(True, True, text)
         else:
             command = command if wake else text
         if self.state.is_sleeping and normalize_command(
@@ -296,6 +334,27 @@ class AssistantRuntime:
             return result
         learning = None
         if source == "voice":
+            import re
+
+            correction = re.fullmatch(r"(?:я сказал|я сказала|я имел в виду) (.+)", command, re.I)
+            if (
+                correction
+                and self.companion.last_voice
+                and time.monotonic() - self.companion.last_voice_at < 60
+            ):
+                from command_understanding import exact_command
+
+                corrected = exact_command(self.manager, correction[1])
+                if corrected:
+                    entry = self.manager.match(corrected)[0]
+                    learning = (
+                        self.companion.last_voice,
+                        {"command": corrected, "skill": entry.id},
+                    )
+                    command = corrected
+            if not learning and command.casefold() not in ("да", "нет", "первое", "второе"):
+                self.companion.last_voice = command
+                self.companion.last_voice_at = time.monotonic()
             interpreted = self.understanding.resolve(command, wake)
             if interpreted.prompt:
                 result = CommandResult(True, False, interpreted.prompt)
@@ -305,7 +364,7 @@ class AssistantRuntime:
                 self.last_result = result
                 self.events.put(("result", result))
                 return result
-            command, learning = interpreted.command, interpreted.learning
+            command, learning = interpreted.command, interpreted.learning or learning
         from skills import gid
 
         if gid.dota_state.waiting_for_user_answer:
@@ -324,6 +383,10 @@ class AssistantRuntime:
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         if result.success and learning:
             self.understanding.remember(learning)
+        if source == "voice":
+            if result.success:
+                self.companion.remember_topic(result.skill_id)
+                self._active_until = self.companion.topic_until
         self.last_result = result
         if result.text and not result.responded:
             if source == "voice" and not result.handled:
@@ -393,6 +456,7 @@ class AssistantRuntime:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
                 self.automation.tick()
+                self.companion.tick()
                 from skills import gid
 
                 self.state.dota_guide_active = gid.dota_state.is_active
@@ -503,7 +567,13 @@ class AssistantRuntime:
         matched = self.manager.match(
             normalize_command(command if wake else text, self.settings().get("command_aliases", {}))
         )
-        return matched and matched[0].func.__name__ in ("run_scenario", "stop_scenario")
+        return matched and matched[0].func.__name__ in (
+            "run_scenario",
+            "stop_scenario",
+            "create_scenario",
+            "save_scenario_draft",
+            "cancel_scenario_draft",
+        )
 
     def start_voice(self):
         if self.stop_event.is_set():

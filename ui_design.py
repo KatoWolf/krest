@@ -27,7 +27,7 @@ def apply_style(root, colours):
         ".",
         background=c["card"],
         foreground=c["text"],
-        font=(UI_FONT, 11),
+        font=(UI_FONT, 12),
         bordercolor=c["border"],
         lightcolor=c["border"],
         darkcolor=c["border"],
@@ -38,7 +38,7 @@ def apply_style(root, colours):
         "*TCombobox*Listbox.foreground": c["text"],
         "*TCombobox*Listbox.selectBackground": c["accent"],
         "*TCombobox*Listbox.selectForeground": contrasting_text(c["accent"]),
-        "*TCombobox*Listbox.font": (UI_FONT, 11),
+        "*TCombobox*Listbox.font": (UI_FONT, 12),
         "*TCombobox*Listbox.relief": "flat",
         "*TCombobox*Listbox.borderWidth": 0,
     }.items():
@@ -46,23 +46,23 @@ def apply_style(root, colours):
     for name, base, hover, fg in [
         ("TButton", c["card_hover"], c["border"], c["text"]),
         ("Accent.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
-        ("Nav.TButton", c["sidebar"], c["card_hover"], c["sub_text"]),
-        ("Selected.Nav.TButton", c["glow"], c["card_hover"], c["text"]),
-        ("Tab.TButton", c["bg"], c["card_hover"], c["sub_text"]),
-        ("Selected.Tab.TButton", c["glow"], c["card_hover"], c["text"]),
+        ("Nav.TButton", c["card_hover"], c["border"], c["text"]),
+        ("Selected.Nav.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
+        ("Tab.TButton", c["card_hover"], c["border"], c["text"]),
+        ("Selected.Tab.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
     ]:
         style.configure(
             name,
             background=base,
             foreground=fg,
             padding=(12, 8) if "Tab" in name else (14, 10),
-            borderwidth=0,
+            borderwidth=1,
             relief="flat",
             focusthickness=0,
             anchor="w" if "Nav" in name else "center",
             font=(
                 UI_FONT,
-                12 if "Nav" in name else 11,
+                12,
                 "bold" if name.startswith("Selected") else "normal",
             ),
         )
@@ -75,9 +75,9 @@ def apply_style(root, colours):
                 ("focus", hover),
             ],
             foreground=[("disabled", c["sub_text"]), ("!disabled", fg)],
-            bordercolor=[("focus", c["accent"]), ("!focus", base)],
-            lightcolor=[("!disabled", base)],
-            darkcolor=[("!disabled", base)],
+            bordercolor=[("focus", c["accent"]), ("!focus", c["border"])],
+            lightcolor=[("!disabled", c["border"])],
+            darkcolor=[("!disabled", c["border"])],
         )
     for name in ("TEntry", "TCombobox", "TSpinbox"):
         style.configure(
@@ -187,6 +187,13 @@ def apply_style(root, colours):
         darkcolor=c["accent"],
         thickness=5,
     )
+    # Class bindings run BEFORE bind_all: stop closed selectors changing values
+    # under the pointer while the user scrolls the page. Popup lists keep their bindings.
+    for widget_class in ("TCombobox", "TSpinbox", "Spinbox"):
+        for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            root.bind_class(
+                widget_class, event, lambda e: getattr(root, "_wheel", lambda _: None)(e) or "break"
+            )
     return style
 
 

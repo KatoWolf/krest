@@ -23,6 +23,15 @@ class VoicePages:
         self.pron_reading = tk.StringVar()
 
     def build_voice_tab(self):
+        info = self.card(
+            self.page_bodies["voice"],
+            "От голоса до действия",
+            "Vosk — время вычислений распознавателя; пауза — ожидание конца фразы. Очередь и выполнение измеряются отдельно, озвучка в них не входит.",
+        )
+        self.voice_trace = self.label(
+            info, "После команды появится измерение задержки", wraplength=680
+        )
+        self.voice_trace.pack(anchor="w", pady=8)
         card = self.card(
             self.page_bodies["voice"],
             "Голос Крест",
@@ -173,6 +182,7 @@ class VoicePages:
             side="left"
         )
         self._refresh_pronunciations()
+        self._build_learning_controls(self.page_bodies["voice"])
 
     def _start_voice(self):
         if self.audio_test_busy:

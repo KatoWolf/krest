@@ -35,7 +35,9 @@ class Kernel:
     def __init__(self, config_path, safe=False):
         self.safe = safe
         self.config = ConfigManager(config_path)
-        self.runtime = AssistantRuntime(self.settings, data_dir=Path(config_path).parent)
+        self.runtime = AssistantRuntime(
+            self.settings, data_dir=Path(config_path).parent, config_manager=self.config
+        )
         self.integrations = IntegrationManager(
             SimpleNamespace(config_mgr=self.config, runtime=self.runtime)
         )
@@ -155,6 +157,7 @@ class Kernel:
                 "game": rt.performance.game,
             },
             "scenario": rt.scenarios.status,
+            "companion": rt.companion.snapshot(),
             "warframe": rt.warframe.status(),
             "downloads": rt.download_status,
             "command": rt.command_status(),
@@ -175,6 +178,8 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "companion":
+            return rt.companion.call(**args)
         if method == "environment":
             return {"executable": sys.executable}
         if method == "ping":
@@ -260,6 +265,13 @@ class Kernel:
             return rt.jobs.by_request(str(args["request_key"]))
         if method == "jobs":
             return rt.jobs.list()
+        if method == "terminal_jobs":
+            prefix = "telegram:" + str(int(args["chat_id"])) + ":"
+            return [
+                row
+                for row in rt.jobs.list(2000)
+                if str(row.get("request_key", "")).startswith(prefix)
+            ][:8]
         if method == "job_cancel":
             return rt.cancel_job(str(args["id"]))
         if method == "state_set":

@@ -383,6 +383,7 @@ def terminal_handler(message):
     aliases = {
         "/status": "статус",
         "/screen": "скриншот",
+        "/history": "история команд",
         "📸 скрин пк": "скриншот",
         "🖥 активное окно": "окно",
     }
@@ -412,6 +413,13 @@ def terminal_handler(message):
         "трейды": check_active_trades,
     }
     try:
+        if text == "история команд":
+            from kernel_client import KernelClient
+            from terminal_jobs import history_text
+
+            rows = KernelClient(settings.filepath).call("terminal_jobs", chat_id=message.chat.id)
+            bot.reply_to(message, redact(history_text(rows), cfg)[:4000])
+            return
         if text == "скриншот":
             from screenshots import capture_screen
 
@@ -474,7 +482,19 @@ def terminal_handler(message):
                 bot.reply_to(message, redact(job["result"], cfg)[:4000] or "Действие завершено.")
                 return
             time.sleep(0.15)
-        bot.reply_to(message, "Действие ещё выполняется. Проверьте журнал ядра перед повтором.")
+        from terminal_jobs import watcher
+
+        watched = watcher.add(
+            key,
+            lambda request_key: client.call("job_result", request_key=request_key),
+            lambda result: bot.reply_to(message, redact("Отчёт: " + result, cfg)[:4000]),
+        )
+        bot.reply_to(
+            message,
+            "Действие ещё выполняется. "
+            + ("Пришлю результат, когда закончу." if watched else "Результат появится в /history.")
+            + " Повторять команду не нужно.",
+        )
     except Exception as exc:
         bot.reply_to(message, "Не удалось выполнить: " + redact(str(exc), cfg)[:2000])
 

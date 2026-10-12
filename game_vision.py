@@ -34,6 +34,9 @@ SCREENS = (
             "conduits defended",
             "defend the conduit",
             "conduits activated",
+            "защищено проводников",
+            "проводников защищено",
+            "найдите демолиста",
         ),
     ),
     (
@@ -141,11 +144,49 @@ def observe_screen():
         from game_visual_memory import signature
 
         feature = signature(image)
-        text = asyncio.run(asyncio.wait_for(_read_image(image), timeout=8))
+
+        async def read():
+            full = image.copy()
+            try:
+                text = await _read_image(full)
+            finally:
+                full.close()
+            result = classify_screen(text)
+            region = "весь экран"
+            if result["screen"] == "unknown":
+                # The objective HUD stays legible at native resolution on large monitors.
+                # Exclude the lower left chat and do not persist raw OCR text.
+                crop = image.crop((0, 0, int(image.width * 0.55), int(image.height * 0.55)))
+                try:
+                    hud = await _read_image(crop)
+                finally:
+                    crop.close()
+                result = classify_screen(hud)
+                if result["screen"] != "unknown":
+                    region = "панель задания"
+                text += " " + hud
+            return {**result, "text_chars": len(text.strip()), "region": region}
+
+        result = asyncio.run(asyncio.wait_for(read(), timeout=10))
         if foreground_game_rect() != bounds:
             raise ValueError("Окно игры изменилось; результат пропущен")
         # Raw text/chat never becomes persistent memory; only a small known screen label does.
-        return {**classify_screen(text), "feature": feature}
+        return {**result, "feature": feature}
+    finally:
+        image.close()
+
+
+def capture_signature():
+    """Explicit screen teaching works independently of installed OCR languages."""
+    from PIL import ImageGrab
+    from game_visual_memory import signature
+
+    bounds = foreground_game_rect()
+    image = ImageGrab.grab(bbox=bounds, all_screens=True)
+    try:
+        if foreground_game_rect() != bounds:
+            raise ValueError("Окно игры изменилось; пример не сохранён")
+        return signature(image)
     finally:
         image.close()
 
@@ -173,6 +214,10 @@ class GameVision:
             "label": "",
             "observed": 0,
             "busy": False,
+            "attempts": 0,
+            "readable": 0,
+            "recognized": 0,
+            "last_error": "",
         }
 
     def snapshot(self):
@@ -207,6 +252,7 @@ class GameVision:
         started = time.monotonic()
         with self.lock:
             self.state["busy"] = True
+            self.state["attempts"] += 1
         try:
             result = self.observe()
             if self.closed.is_set() or not self.allowed():
@@ -223,13 +269,24 @@ class GameVision:
                     result["visual_label"] = self.memory.screens.get(prediction, "")
                 else:
                     self.memory.forget_pending()
+                    prediction = self.memory.predict(feature)
+                    result["visual_guess"] = prediction
+                    result["visual_label"] = self.memory.screens.get(prediction, "")
             with self.lock:
                 status = "Прочитан экран: " + result["label"]
+                self.state["readable"] += int(result.get("text_chars", 0) > 0)
+                self.state["recognized"] += int(code != "unknown")
+                if code == "unknown":
+                    status = (
+                        "Текст читается, но знакомый экран не найден. Откройте кузницу, арсенал или результаты миссии."
+                        if result.get("text_chars", 0)
+                        else "На кадре не найден текст. Проверьте язык OCR Windows и видимость интерфейса игры."
+                    )
                 if code == "unknown" and result["visual_label"]:
                     status = (
                         "По памяти похоже на «" + result["visual_label"] + "»; OCR не подтвердил"
                     )
-                self.state.update(result, status=status, observed=time.time())
+                self.state.update(result, status=status, observed=time.time(), last_error="")
             if code == self.candidate and code != self.confirmed:
                 self.confirmed = code
                 if code != "unknown":
@@ -257,6 +314,7 @@ class GameVision:
             with self.lock:
                 self.state.update(
                     status="Зрение недоступно: " + str(exc)[:250],
+                    last_error=str(exc)[:250] or type(exc).__name__,
                     screen="unknown",
                     label="",
                     visual_guess="unknown",

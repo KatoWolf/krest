@@ -93,13 +93,11 @@ def speak(text):
                     )
                     _audio_thread.start()
             try:
-                from speech_tools import spoken_summary
+                from companion_behavior import spoken_text
 
-                spoken = (
-                    spoken_summary(text)
-                    if _settings().get("app_settings", {}).get("short_voice_answers", True)
-                    else text
-                )
+                runtime = getattr(_state, "runtime", None)
+                gaming = bool(getattr(getattr(runtime, "performance", None), "game", ""))
+                spoken = spoken_text(text, _settings(), gaming)
                 _audio_queue.put_nowait((_generation, spoken))
             except queue.Full:
                 logger.warning("Очередь озвучки заполнена; текст доступен в меню")

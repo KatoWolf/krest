@@ -121,6 +121,7 @@ class IntegrationManager:
             else 0,
             "error": self.errors.get(filename, ""),
             "bridge": self.bridge.get(filename, {}),
+            "last_action": self.bridge.get(filename, {}).get("last_action", {}),
             "health": "error"
             if self.errors.get(filename)
             else "ready"
@@ -147,8 +148,18 @@ class IntegrationManager:
             encoded = json.dumps({**payload, "command": command}, ensure_ascii=False)
             if len(encoded) > 8192:
                 raise ValueError("Команда моста слишком длинная")
-            proc.stdin.write(encoded + "\n")
-            proc.stdin.flush()
+            self.bridge[filename]["last_action"] = {
+                "command": command,
+                "id": str(payload.get("request_id", "")),
+                "status": "pending",
+                "time": time.time(),
+            }
+            try:
+                proc.stdin.write(encoded + "\n")
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                self.bridge[filename]["last_action"]["status"] = "failed"
+                raise
 
     def autostart(self):
         for filename, cfg in self.app.config_mgr.snapshot().get("services", {}).items():
@@ -199,6 +210,27 @@ class IntegrationManager:
             data = value.get("data")
             if isinstance(data, dict):
                 self.bridge[filename].setdefault("data", {}).update(data)
+                receipt = data.get("action", {})
+                previous = self.bridge[filename].get("last_action", {})
+                if (
+                    isinstance(receipt, dict)
+                    and receipt.get("id")
+                    and receipt.get("id") == previous.get("id")
+                ):
+                    self.bridge[filename]["last_action"] = {
+                        **previous,
+                        "text": redact(str(receipt.get("text", ""))[:500], settings),
+                        "status": "confirmed" if receipt.get("ok") else "failed",
+                        "time": time.time(),
+                    }
+                elif previous.get("command") in ("refresh", "channels") and (
+                    "overview" in data or "channels" in data
+                ):
+                    self.bridge[filename]["last_action"] = {
+                        **previous,
+                        "status": "confirmed",
+                        "time": time.time(),
+                    }
         elif kind == "error":
             self.errors[filename] = message
         elif (

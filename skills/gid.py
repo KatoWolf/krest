@@ -227,6 +227,7 @@ def _start_service(settings=None):
             server = HTTPServer(("127.0.0.1", 0), GSIDataHandler)
         GSI_PORT = server.server_port
         _server = server
+        _hero_alert_latches.clear()
         _service_stop.clear()
         _threads = [
             threading.Thread(
@@ -329,12 +330,47 @@ def hero_hint():
     )
 
 
+_hero_alert_latches = set()
+_hero_alert_at = 0
+
+
+def hero_alert(now=None):
+    """Fresh GSI only; hysteresis prevents repeated warnings while health stays low."""
+    global _hero_alert_at
+    now = time.time() if now is None else now
+    if not _setup_settings.get("hero_alerts", True) or not dota_state.is_active:
+        return ""
+    if not 0 <= now - dota_state.last_gsi_update <= 15:
+        return ""
+    hero = dota_state.hero
+    if hero.get("alive") is not True:
+        _hero_alert_latches.clear()
+        return ""
+    for key, threshold, text in (
+        ("health_percent", 25, "Мало здоровья. Проверь возможность отойти."),
+        ("mana_percent", 20, "Мало маны. Побереги её для важной способности."),
+    ):
+        value = hero.get(key)
+        if type(value) not in (int, float) or not 0 <= value <= 100:
+            continue
+        if value >= threshold + 15:
+            _hero_alert_latches.discard(key)
+        if value <= threshold and key not in _hero_alert_latches and now - _hero_alert_at >= 45:
+            _hero_alert_latches.add(key)
+            _hero_alert_at = now
+            return text
+    return ""
+
+
 def dota_timer_loop():
     """Основной защищенный цикл проверки игровых таймингов."""
     while not _service_stop.is_set():
         if not dota_state.is_active:
             _service_stop.wait(0.2)
             continue
+        hint = hero_alert()
+        if hint:
+            voice.speak(hint)
         # Диагностическая проверка связи через 2 минуты
         if not dota_state.match_started and dota_state.is_active:
             if time.time() - dota_state.activation_time > 120 and not dota_state.diagnostic_warned:

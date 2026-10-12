@@ -56,6 +56,7 @@ def connect_project(entrypoint):
             {
                 "api_version": 1,
                 "generated_by": "krest_bot_connector_v1",
+                "entrypoint": script.name,
                 "name": root.name[:80],
                 "permissions": ["notifications", "refresh", "discord_control"],
             },

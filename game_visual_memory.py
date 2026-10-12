@@ -1,6 +1,7 @@
 """Small local visual prototypes taught by OCR, never by their own predictions."""
 
 import math
+import hashlib
 from pathlib import Path
 import threading
 
@@ -78,6 +79,18 @@ class VisualMemory:
                         raise ValueError("Повреждён счётчик проверок")
                 if value["matches"] > value["checks"]:
                     raise ValueError("Повреждён счётчик совпадений")
+                for key in ("user_checks", "user_matches", "manual_examples"):
+                    if type(value.get(key, 0)) is not int or not 0 <= value.get(key, 0) <= 10**9:
+                        raise ValueError("Повреждён счётчик личных проверок")
+                if value.get("user_matches", 0) > value.get("user_checks", 0):
+                    raise ValueError("Повреждён счётчик личных совпадений")
+                for key in ("checked_images", "ocr_checked_images"):
+                    if (
+                        not isinstance(value.get(key, []), list)
+                        or len(value.get(key, [])) > 100
+                        or any(not isinstance(v, str) or len(v) != 64 for v in value.get(key, []))
+                    ):
+                        raise ValueError("Повреждена история проверок")
                 self.data = value
             except (OSError, ValueError, TypeError) as exc:
                 self.error = str(exc)
@@ -109,9 +122,18 @@ class VisualMemory:
             if code not in self.screens:
                 self.pending = None
                 return predicted
-            if self.data["examples"]:
+            digest = hashlib.sha256(bytes(feature["values"])).hexdigest()
+            checked = self.data.setdefault("ocr_checked_images", [])
+            is_new = not any(
+                distance(feature, row) <= 0.008
+                for rows in self.data["examples"].values()
+                for row in rows
+            )
+            if self.data["examples"] and is_new and digest not in checked:
                 self.data["checks"] += 1
                 self.data["matches"] += int(predicted == code)
+                checked.append(digest)
+                del checked[:-100]
             previous = self.pending
             self.pending = (code, feature)
             # Reject blank/loading frames and require two visually consistent OCR labels.
@@ -139,6 +161,70 @@ class VisualMemory:
         with self.lock:
             self.pending = None
 
+    def teach(self, code, feature):
+        """One explicit label bootstraps recognition even when OCR cannot read the HUD."""
+        if code not in self.screens or not valid_signature(feature):
+            raise ValueError("Выберите известный тип экрана и активное окно Warframe")
+        values = feature["values"]
+        mean = sum(values) / len(values)
+        if sum(abs(v - mean) for v in values) / len(values) < 8:
+            raise ValueError("Кадр почти пустой. Дождитесь появления интерфейса игры")
+        with self.lock:
+            if self.error:
+                raise ValueError(self.error)
+            import copy
+
+            data = copy.deepcopy(self.data)
+            rows = data["examples"].setdefault(code, [])
+            if not rows or min(distance(feature, row) for row in rows) > 0.008:
+                rows.append(feature)
+                del rows[:-MAX_PER_SCREEN]
+            data["manual_examples"] = int(data.get("manual_examples", 0)) + 1
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(self.path, data)
+            self.data = data
+        return (
+            "Сохранён пример «"
+            + self.screens[code]
+            + "». Проверьте узнавание при следующем открытии этого экрана."
+        )
+
+    def evaluate(self, code, feature):
+        """Explicit user check is separate from teaching; repeated images don't inflate it."""
+        if code not in self.screens or not valid_signature(feature):
+            raise ValueError("Некорректный экран для проверки")
+        import hashlib
+        import copy
+
+        digest = hashlib.sha256(bytes(feature["values"])).hexdigest()
+        with self.lock:
+            if self.error:
+                raise ValueError(self.error)
+            predicted = self.predict(feature)
+            # Near-identical training samples do not establish generalization.
+            if any(
+                distance(feature, row) <= 0.008
+                for rows in self.data["examples"].values()
+                for row in rows
+            ):
+                return "Кадр почти совпадает с обучающим. Откройте этот экран в другой игровой ситуации; проверка не засчитана."
+            data = copy.deepcopy(self.data)
+            checked = data.setdefault("checked_images", [])
+            if digest in checked:
+                return "Этот кадр уже проверялся. Счётчик не изменён."
+            checked.append(digest)
+            del checked[:-100]
+            data["user_checks"] = int(data.get("user_checks", 0)) + 1
+            data["user_matches"] = int(data.get("user_matches", 0)) + int(predicted == code)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(self.path, data)
+            self.data = data
+            return "Проверка на новом кадре: " + (
+                "узнала правильно — " + self.screens[code]
+                if predicted == code
+                else "не совпало. Добавьте этот пример через «запомни экран». Самостоятельно его не запоминаю."
+            )
+
     def snapshot(self):
         with self.lock:
             return {
@@ -149,6 +235,8 @@ class VisualMemory:
                 "checks": self.data["checks"],
                 "matches": self.data["matches"],
                 "error": self.error,
+                "user_checks": self.data.get("user_checks", 0),
+                "user_matches": self.data.get("user_matches", 0),
             }
 
     def report(self):
@@ -158,6 +246,7 @@ class VisualMemory:
                 "Визуальная память: "
                 + (", ".join(info["screens"]) or "ещё нет повторных примеров"),
                 f"Эталонов: {info['examples']}; совпадений с новым OCR: {info['matches']} из {info['checks']}.",
+                f"Проверок вами на отличающихся кадрах: {info['user_checks']}; верных: {info['user_matches']}.",
                 "Это сверка с OCR, а не доказательство понимания боя. Похожий кадр даёт только предположение.",
                 info["error"],
             ]

@@ -84,6 +84,25 @@ def add_goal(name, state):
 
 
 @skill(
+    patterns=[r"варфрейм прогресс (?P<name>.+) всего (?P<count>.+)"],
+    examples=["варфрейм прогресс реликвии акси всего три"],
+    description="Сохранить подтверждённое вами общее количество по цели; повтор не прибавляет добычу",
+    category="Warframe",
+)
+def confirm_progress(name, count, state):
+    from skills.utils import russian_words_to_number_str
+    import re
+
+    value = russian_words_to_number_str(count.strip())
+    if not re.fullmatch(r"\d{1,9}", value):
+        return {
+            "status": "error",
+            "message": "Назовите целое общее количество, например всего три.",
+        }
+    return run(state, "confirm_progress", name=name, value=int(value))
+
+
+@skill(
     patterns=[r"варфрейм каждый день (?P<name>.+)"],
     examples=["варфрейм каждый день проверить синдикаты"],
     description="Ежедневный игровой чек-лист, сброс 00:00 UTC",
@@ -237,6 +256,35 @@ def vision(state):
 
 
 @skill(
+    patterns=[r"(?:варфрейм )?запомни экран (?P<screen>.+)"],
+    examples=["запомни экран кузница"],
+    description="Один пример активного экрана Warframe для локальной памяти",
+    category="Warframe",
+)
+def teach_screen(screen, state):
+    return run(state, "vision_teach", screen=screen)
+
+
+@skill(
+    patterns=[r"(?:варфрейм )?проверь экран (?P<screen>.+)"],
+    examples=["проверь экран кузница"],
+    description="Проверить узнавание нового кадра без обучения на нём",
+    category="Warframe",
+)
+def check_screen(screen, state):
+    return run(state, "vision_check", screen=screen)
+
+
+@skill(
+    keywords=["проверь зрение варфрейм"],
+    description="Проверить захват игры и чтение интерфейса",
+    category="Warframe",
+)
+def diagnose_vision(state):
+    return run(state, "vision_diagnose")
+
+
+@skill(
     keywords=["открой сводку по миру", "покажи сводку по миру", "разверни сводку"],
     description="Короткая сводка Warframe под игровым крестом",
     category="Warframe",
@@ -306,7 +354,7 @@ def route_stop(state):
 
 @skill(
     keywords=["начни показ аполлон", "начни показ варфрейм", "запиши мое прохождение"],
-    description="Записать показ Аполлона: кадры и клавиши активного Warframe, управление у игрока",
+    description="Записать показ: кадры и клавиши активного Warframe, управление у игрока",
     category="Warframe",
 )
 def study_start(state):

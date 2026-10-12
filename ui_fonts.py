@@ -4,7 +4,7 @@ import ctypes
 import os
 from pathlib import Path
 
-UI_FONT = "Segoe UI" if os.name == "nt" else "Roboto"
+UI_FONT = "Arial"
 _loaded = False
 
 
@@ -44,4 +44,4 @@ def load_fonts(root=None):
             "TkCaptionFont",
             "TkTooltipFont",
         ):
-            font.nametofont(name, root=root).configure(family=UI_FONT, size=11)
+            font.nametofont(name, root=root).configure(family=UI_FONT, size=12)

@@ -12,11 +12,11 @@ import uuid
 from storage import atomic_write_json, read_json
 
 PROFILE = {
-    "id": "lua-apollo-axi",
-    "node": "Аполлон · Луа · Сбой",
-    "target": "Реликвии Акси",
-    "warframe": "Валькирия Прайм",
-    "source": "Профиль выбран пользователем; узел и экипировка в игре не проверены",
+    "id": "unidentified",
+    "node": "Не определён",
+    "target": "Не выбрана",
+    "warframe": "Не определён",
+    "source": "Экипировка и узел не определяются по счётчику нажатий",
     "autonomous": False,
 }
 LABELS = {
@@ -114,10 +114,13 @@ class WindowsStudyPort:
 class MissionStudy:
     """Collect sparse frames, control states and explicit labels, not a learned policy."""
 
-    def __init__(self, root, allowed=lambda: True, port_factory=WindowsStudyPort):
+    def __init__(
+        self, root, allowed=lambda: True, port_factory=WindowsStudyPort, profile_getter=lambda: {}
+    ):
         self.root = Path(root) / "warframe_training"
         self.allowed = allowed
         self.port_factory = port_factory
+        self.profile_getter = profile_getter
         self.lock = threading.RLock()
         self.stop = threading.Event()
         self.thread = None
@@ -239,7 +242,7 @@ class MissionStudy:
             self.data = {
                 "version": 1,
                 "id": ident,
-                "profile": copy.deepcopy(PROFILE),
+                "profile": self.profile(),
                 "started": time.time(),
                 "duration": 0,
                 "state": "recording",
@@ -405,7 +408,7 @@ class MissionStudy:
             )
             return {
                 "active": self.active,
-                "profile": copy.deepcopy(PROFILE),
+                "profile": self.profile(),
                 "message": self.message,
                 "seconds": int(elapsed),
                 "frames": len(self.data["frames"]) if self.data else 0,
@@ -420,9 +423,12 @@ class MissionStudy:
     def panel(self):
         state = self.snapshot()
         return {
-            "title": "Аполлон · запись показа",
+            "title": "Warframe · наблюдения",
             "lines": [
-                "Валькирия Прайм · цель: Акси",
+                "Варфрейм: "
+                + state["profile"]["warframe"]
+                + " · цель: "
+                + state["profile"]["target"],
                 state["message"],
                 f"Время: {state['seconds'] // 60}:{state['seconds'] % 60:02d} · кадров: {state['frames']}",
                 "Метка: " + (state["last_label"] or "ещё нет"),
@@ -438,8 +444,8 @@ class MissionStudy:
         state = self.snapshot()
         return "\n".join(
             [
-                "Профиль: Аполлон · Луа · Сбой. Цель: реликвии Акси. Валькирия Прайм.",
-                PROFILE["source"],
+                self.profile_text(),
+                self.profile()["source"],
                 state["message"],
                 f"Время: {state['seconds'] // 60} мин {state['seconds'] % 60} сек; кадров: {state['frames']}; меток: {state['labels']}.",
                 f"Отметок получения награды со слов игрока: {state['reward_marks']}. Количество реликвий не подтверждено.",
@@ -479,9 +485,9 @@ class MissionStudy:
             not_seen = ", ".join(label for code, label, _ in SCREENS if not screens[code])
             return "\n".join(
                 [
-                    "Аполлон · Луа · Акси · Валькирия Прайм",
+                    self.profile_text(),
                     f"Последние {len(history)} показов (до 100): {minutes} мин · кадров: {frames}",
-                    "Уже работает: распознавание нескольких экранов, запись показов и голосовых меток.",
+                    "Записи показов хранятся отдельно от проверок распознавания экранов.",
                     "Примеры со слов игрока: " + (examples or "ещё не отмечены"),
                     "Замеченные нажатия: "
                     + (actions or "ещё нет данных")
@@ -496,6 +502,24 @@ class MissionStudy:
                     self.history_error,
                 ]
             ).strip()
+
+    def profile(self):
+        values = self.profile_getter()
+        fields = {
+            key: str(values.get("study_" + key, "")).strip()[:100]
+            for key in ("node", "target", "warframe")
+        }
+        return {
+            **PROFILE,
+            **{key: value for key, value in fields.items() if value},
+            "source": "Указано вами; игра это не подтвердила"
+            if any(fields.values())
+            else PROFILE["source"],
+        }
+
+    def profile_text(self):
+        value = self.profile()
+        return f"Узел: {value['node']} · Варфрейм: {value['warframe']} · Цель: {value['target']}"
 
     def finish(self):
         self.stop.set()

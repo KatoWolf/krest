@@ -277,6 +277,10 @@ class RemoteRuntime:
         self.integrations = ServiceProxy(self)
         self.performance = PerformanceProxy(self)
         self.scenarios = ScenarioProxy(self)
+        self.companion = SimpleNamespace(
+            snapshot=lambda: self.cached.get("companion", {}),
+            call=lambda action, **args: self.client.call("companion", action=action, **args),
+        )
         root = client.config_path.parent
         self.center = NotificationCenter(root / "inbox.sqlite3")
         self.jobs = JobStore(root / "jobs.sqlite3", recover=False)

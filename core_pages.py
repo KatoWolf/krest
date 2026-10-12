@@ -41,7 +41,7 @@ class CorePages:
             "events": [self._build_events],
             "programs": [self._build_programs],
             "security": [self._build_security],
-            "scenarios": [self.build_workflows, self._extend_scenarios],
+            "scenarios": [self.build_workflows, self._extend_scenarios, self._build_scenario_voice],
             "inbox": [self._build_inbox],
             "maintenance": [self._build_maintenance, self._extend_files],
             "timers": [self.build_timers_tab, self._extend_task_controls],

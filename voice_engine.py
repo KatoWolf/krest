@@ -519,7 +519,21 @@ def fix_wake_word(text):
     return text
 
 
+_decoder_ms = 0.0
+
+
+def _decode(method, *args):
+    global _decoder_ms
+    started = time.perf_counter()
+    try:
+        return method(*args)
+    finally:
+        _decoder_ms += (time.perf_counter() - started) * 1000
+
+
 def _reset_recognizer():
+    global _decoder_ms
+    _decoder_ms = 0.0
     if rec is not None:
         rec.Reset()
     _endpoint.reset()
@@ -595,7 +609,7 @@ def listen():
                 continue
             if not _endpoint.started:
                 for prefix in _preroll:
-                    rec.AcceptWaveform(prefix)
+                    _decode(rec.AcceptWaveform, prefix)
                 _preroll.clear()
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
             # Never execute a partial hypothesis. Only shorten the end-of-speech
@@ -606,12 +620,12 @@ def listen():
                 and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.4)
             ):
                 finished = True
-            if rec.AcceptWaveform(data):
-                result = json.loads(rec.Result())
+            if _decode(rec.AcceptWaveform, data):
+                result = json.loads(_decode(rec.Result))
                 _segments.append(result.get("text", ""))
                 _words.extend(result.get("result", []))
             if finished:
-                result = json.loads(rec.FinalResult())
+                result = json.loads(_decode(rec.FinalResult))
                 _segments.append(result.get("text", ""))
                 _words.extend(result.get("result", []))
                 text = " ".join(v for v in _segments if v).strip()
@@ -619,12 +633,14 @@ def listen():
                 last_recognition = {
                     "text": text,
                     "confidence": sum(confidences) / len(confidences) if confidences else None,
+                    "decoder_ms": round(_decoder_ms),
+                    "pause_ms": round(_endpoint.silence * 1000),
                 }
                 metrics["recognition_pause_ms"] = round(_endpoint.silence * 1000)
                 _reset_recognizer()
                 return text
             metrics["partial"] = " ".join(
-                [*_segments, json.loads(rec.PartialResult()).get("partial", "")]
+                [*_segments, json.loads(_decode(rec.PartialResult)).get("partial", "")]
             ).strip()
     return ""
 

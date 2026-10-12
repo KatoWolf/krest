@@ -185,8 +185,9 @@ class Understanding:
 
 
 class VoiceUnderstanding:
-    def __init__(self, manager, memory):
+    def __init__(self, manager, memory, companion=None):
         self.manager, self.memory = manager, memory
+        self.companion = companion
         self.pending = None
 
     def resolve(self, text, addressed):
@@ -197,7 +198,7 @@ class VoiceUnderstanding:
             if clean in ("нет", "отмена", "не надо", "неправильно"):
                 return Understanding(prompt="Хорошо, отменила.")
             choice = None
-            if addressed:
+            if addressed or all(row["skill"] in AUTO_SKILLS for row in pending["choices"]):
                 if (
                     clean in ("да", "верно", "правильно", "подтверждаю")
                     and len(pending["choices"]) == 1
@@ -227,13 +228,26 @@ class VoiceUnderstanding:
                 self.pending = pending
                 return Understanding(text)
         exact = exact_command(self.manager, text)
-        if exact:
-            return Understanding(exact)
         if not addressed or NEGATION.search(clean):
-            return Understanding(text)
+            return Understanding(exact or text)
         choices = []
+        if self.companion:
+            saved = self.companion.learning.lookup(self.companion.profile, clean)
+            match = self.manager.match(saved["command"]) if saved else None
+            if (
+                match
+                and match[0].id == saved["skill"]
+                and self.manager.availability(match[0]) == "Доступен"
+            ):
+                choices = [dict(saved, score=1, prefix=False)]
+        if exact and not choices:
+            return Understanding(exact)
         key = "команда: " + clean
-        if len(key) <= 100:
+        if (
+            not choices
+            and len(key) <= 100
+            and (not self.companion or self.companion.profile == self.companion.legacy_profile)
+        ):
             try:
                 saved = json.loads(self.memory.recall(key, "null"))
                 matched = self.manager.match(saved["command"]) if isinstance(saved, dict) else None
@@ -265,12 +279,25 @@ class VoiceUnderstanding:
             if len(labels) == 1
             else f"Первое: «{labels[0]}». Второе: «{labels[1]}». Скажи «Крест, первое» или «Крест, второе»."
         )
+        if self.companion and len(labels) == 1:
+            from companion_behavior import policy
+
+            prompt = policy(self.manager.settings(), bool(self.companion.runtime.performance.game))[
+                "confirm"
+            ].format(command=labels[0]) + (
+                " Скажи «да» или «нет»."
+                if best["skill"] in AUTO_SKILLS
+                else " Скажи «Крест, да» или «нет»."
+            )
         return Understanding(prompt=prompt)
 
     def remember(self, learning):
         if not learning:
             return
         heard, choice = learning
+        if self.companion:
+            self.companion.record_correction(heard, choice)
+            return
         key = "команда: " + heard
         if len(key) <= 100:
             try:

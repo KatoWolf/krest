@@ -18,6 +18,7 @@ from core_pages import CorePages
 from skill_import_pages import SkillImportPages
 from warframe_pages import WarframePages, PAGE_NAMES
 from appearance_pages import AppearancePages
+from experience_pages import ExperiencePages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -41,6 +42,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    ExperiencePages,
     WarframePages,
     CommandCatalogPages,
     AppearancePages,
@@ -66,6 +68,7 @@ class ControlCenterApp(
         ("maintenance", "Нагрузка и файлы"),
         ("api", "Telegram"),
         ("steam", "Steam / CS2"),
+        ("bots", "Центр подключений"),
         ("discord_account", "Discord · мой аккаунт"),
         ("discord_bot", "Discord · серверный бот"),
         ("scripts", "Скрипты и мосты"),
@@ -87,9 +90,9 @@ class ControlCenterApp(
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
         ("inbox", "Уведомления", ("inbox", "logs")),
         (
-            "steam",
+            "bots",
             "Подключения",
-            ("steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
+            ("bots", "steam", "api", "discord_account", "discord_bot", "scripts", "dota"),
         ),
         ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
         ("wf_home", "Warframe", tuple(code for code, _ in PAGE_NAMES)),
@@ -134,7 +137,9 @@ class ControlCenterApp(
         self._timer_rows = None
         self._reminder_rows = None
         self.runtime = remote or AssistantRuntime(
-            self.config_mgr.snapshot, data_dir=self.config_mgr.filepath.parent
+            self.config_mgr.snapshot,
+            data_dir=self.config_mgr.filepath.parent,
+            config_manager=self.config_mgr,
         )
         self.integration = remote.integrations if remote else IntegrationManager(self)
         self.init_voice_page()
@@ -289,7 +294,7 @@ class ControlCenterApp(
             text=text,
             bg=parent.cget("bg"),
             fg=self.theme["sub_text" if muted else "text"],
-            font=(UI_FONT, 20 if large else 11, "bold" if large else "normal"),
+            font=(UI_FONT, 20 if large else 12, "bold" if large else "normal"),
             anchor="w",
             justify="left",
             **kwargs,
@@ -347,9 +352,7 @@ class ControlCenterApp(
         self.brand_mark = BrandMark(brand, self._brand_image, self.theme, self.motion.enabled)
         self.brand_mark.pack(side="left", padx=(0, 10))
         self.label(brand, "КРЕСТ", large=True).pack(side="left")
-        self.label(side, "Голосовое управление ПК", muted=True).pack(
-            anchor="w", padx=4, pady=(0, 16)
-        )
+        self.label(side, "Голосовой помощник", muted=True).pack(anchor="w", padx=4, pady=(0, 16))
         self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
         self.edition_label.pack(side="bottom", anchor="w", pady=(14, 0))
         ttk.Button(
@@ -374,14 +377,6 @@ class ControlCenterApp(
         self.nav_buttons = {}
         self.group_buttons = {}
         for default, title, codes in self.NAV_GROUPS:
-            if default in ("actions", "steam", "settings"):
-                self.label(
-                    self.nav_frame,
-                    {"actions": "КАЖДЫЙ ДЕНЬ", "steam": "ИГРЫ И СИСТЕМА", "settings": "ПАРАМЕТРЫ"}[
-                        default
-                    ],
-                    muted=True,
-                ).pack(anchor="w", padx=14, pady=(12, 6))
             button = ttk.Button(
                 self.nav_frame,
                 text=title,
@@ -389,7 +384,7 @@ class ControlCenterApp(
                 padding=(16, 12),
                 command=lambda k=default: self.switch_page(k),
             )
-            button.pack(fill="x", pady=2)
+            button.pack(fill="x", pady=5)
             self.group_buttons[default] = button
             for key in codes:
                 self.nav_buttons[key] = button
@@ -469,7 +464,7 @@ class ControlCenterApp(
         self.after_idle(lambda: style_titlebar(self, self.theme))
         self.switch_page(self.current_page)
 
-    BOT_PAGES = {"api", "steam", "discord_account", "discord_bot", "scripts"}
+    BOT_PAGES = {"bots", "api", "steam", "discord_account", "discord_bot", "scripts"}
     CORE_PAGES = {
         "timers",
         "scenarios",
@@ -520,7 +515,7 @@ class ControlCenterApp(
         self._locked_pages[code].pack(fill="both", expand=True)
 
     def _wheel(self, event):
-        if isinstance(event.widget, (ttk.Treeview, tk.Text, ttk.Combobox, tk.Listbox)) or (
+        if isinstance(event.widget, (ttk.Treeview, tk.Text, tk.Listbox)) or (
             isinstance(event.widget, str) and "popdown" in event.widget
         ):
             return
@@ -572,6 +567,7 @@ class ControlCenterApp(
             "timers": "Освободите голову. Крест напомнит и выполнит привычные действия.",
             "inbox": "События, которые важно не пропустить.",
             "steam": "Игры, боты и ваши сервисы.",
+            "bots": "Подключения, состояние мостов и результаты действий.",
             "kernel": "Крест работает рядом — даже когда меню закрыто.",
             "wf_home": "Ваш второй пилот. Мир игры, планы и важные моменты.",
             "settings": "Настройте под себя. Остальное Крест подберёт автоматически.",
@@ -723,6 +719,11 @@ class ControlCenterApp(
         self.label(card, textvariable=self.heard_var, muted=True, wraplength=640).pack(
             anchor="w", pady=(4, 6)
         )
+        self.label(card, textvariable=self.understood_var, wraplength=640).pack(
+            anchor="w", pady=(0, 6)
+        )
+        self.home_trace = self.label(card, "", muted=True, wraplength=640)
+        self.home_trace.pack(anchor="w", pady=(0, 10))
         self.command_result = self.label(card, "Попробуйте: «Крест, который час?»", wraplength=660)
         self.command_result.pack(anchor="w", fill="x")
         shortcuts = tk.Frame(page, bg=self.theme["bg"])
@@ -1318,6 +1319,7 @@ class ControlCenterApp(
         for key, caption in (
             ("enabled", "Запускать связь с Dota вместе с Крест"),
             ("auto_setup", "Автоматически готовить файл связи с игрой"),
+            ("hero_alerts", "Подсказывать при низком здоровье или мане"),
         ):
             ttk.Checkbutton(card, text=caption, variable=self.dota_vars[key]).pack(
                 anchor="w", pady=4
@@ -1459,7 +1461,9 @@ class ControlCenterApp(
             key = next(
                 (k for k, v in PERSONALITIES.items() if v == self.personality_var.get()), "friendly"
             )
-            character.set(CHARACTERS[key])
+            from companion_behavior import description
+
+            character.set(CHARACTERS[key] + "\n\n" + description({"profile": {"personality": key}}))
 
         old_trace = getattr(self, "_character_trace", None)
         if old_trace:
@@ -1683,6 +1687,7 @@ class ControlCenterApp(
             return
         if name not in THEMES:
             return
+        positions = {key: canvas.yview()[0] for key, canvas in self.canvases.items()}
         self.theme = THEMES[name]
         self.theme_var.set(name)
         pending_command = self.command_entry.get()
@@ -1720,6 +1725,13 @@ class ControlCenterApp(
                 target.delete(0, "end")
                 target.insert(0, value)
         self._update_reminders()
+
+        def restore_positions():
+            for key, position in positions.items():
+                if key in self.canvases and self.canvases[key].winfo_exists():
+                    self.canvases[key].yview_moveto(position)
+
+        self.after_idle(restore_positions)
 
     def post_ui(self, callback):
         self.ui_queue.put(callback)
@@ -2022,6 +2034,15 @@ class ControlCenterApp(
                     indicator_controller.pulse(min(8, len(value) / 12))
             elif kind == "recognition":
                 self._show_recognition(value)
+            elif kind == "scenario_saved":
+                self._append_log("Сценарий сохранён: " + value)
+                saved = self.config_mgr.snapshot()["scenarios"]
+                if value in saved:
+                    self.scenario_drafts[value] = copy.deepcopy(saved[value])
+                if hasattr(self, "scenario_combo"):
+                    self.scenario_combo.configure(values=list(self.scenario_drafts))
+                if hasattr(self, "event_scenario_combo"):
+                    self.event_scenario_combo.configure(values=list(self.scenario_drafts))
             elif kind == "voice":
                 self.voice_var.set(value)
             elif kind == "error":
@@ -2052,6 +2073,13 @@ class ControlCenterApp(
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
             self._last_refresh = now
+            if self.state() in ("normal", "zoomed") and self.current_page in (
+                "actions",
+                "voice",
+                "scenarios",
+                "bots",
+            ):
+                self._refresh_experience()
             statuses = self.integration.refresh()
             for key, (filename, title) in self.integration.MODULES.items():
                 if filename not in self.service_labels:

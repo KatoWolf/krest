@@ -511,44 +511,114 @@ class WarframePages:
             self.wf_call("add_task", name=row["name"][:200], period="once", notes=row["reward"])
 
     def build_wf_learning(self):
+        from game_vision import SCREENS
+
         page = self.page_bodies["wf_learning"]
         card = self.card(
             page,
-            "Учусь рядом с вами",
-            "Профиль: Аполлон на Луа · реликвии Акси · Валькирия Прайм. Узел и экипировка в игре пока не подтверждаются автоматически.",
+            "Память игровых экранов",
+            "Готовые признаки помогают сразу; личные примеры уточняют узнавание вашего интерфейса.",
         )
         ttk.Checkbutton(
             card,
-            text="Автоматически собирать опыт, пока открыт Warframe",
+            text="Автоматически запоминать подтверждённые экраны",
             variable=self.wf_vars["study_auto"],
             command=lambda: self.save_all_settings(quiet=True),
         ).pack(anchor="w", pady=8)
-        self.label(card, textvariable=self.wf_study_state, wraplength=650).pack(anchor="w", pady=8)
         self.label(
             card,
-            "Запускается вместе с игрой. При сворачивании захват приостанавливается. Кадр раз в 5 секунд, память экранов — по OCR-наблюдениям. Управление остаётся у вас.",
+            "Проверяются только кадры активного Warframe. Сохраняются маленькие цветовые образцы, без скриншотов и текста чата.",
             muted=True,
-            wraplength=650,
+            wraplength=660,
         ).pack(anchor="w", pady=6)
         self.wf_buttons(
             card,
             [
+                (
+                    "Проверить зрение через 5 секунд",
+                    lambda: self.wf_call("vision_diagnose", delay=True),
+                ),
                 ("Отчёт под крестом", lambda: self.wf_call("study_report")),
+            ],
+        )
+        self.label(
+            card,
+            "После кнопки вернитесь в игру. Голосом: «Крест, проверь зрение варфрейм».",
+            muted=True,
+            wraplength=660,
+        ).pack(anchor="w")
+        report = self.card(page, "Что распознаётся сейчас")
+        self.label(report, textvariable=self.wf_learning, wraplength=660).pack(anchor="w", pady=8)
+        teach = self.card(
+            page,
+            "Один пример вместо часов ожидания",
+            "Если OCR не узнаёт экран, покажите его один раз. Для проверки откройте тот же экран в другой игровой ситуации.",
+        )
+        labels = [row[1] for row in SCREENS]
+        self.wf_form(teach, [("screen_label", "Тип экрана", "Кузница", labels)])
+        self.wf_buttons(
+            teach,
+            [
+                (
+                    "Запомнить через 5 секунд",
+                    lambda: self.wf_call(
+                        "vision_teach", screen=self.wf_var("screen_label").get(), delay=True
+                    ),
+                ),
+                (
+                    "Проверить через 5 секунд",
+                    lambda: self.wf_call(
+                        "vision_check", screen=self.wf_var("screen_label").get(), delay=True
+                    ),
+                ),
+            ],
+        )
+        self.label(
+            teach,
+            "В игре: «запомни экран кузница», затем при следующем посещении — «проверь экран кузница». Повтор того же кадра не увеличивает число проверок.",
+            muted=True,
+            wraplength=660,
+        ).pack(anchor="w", pady=6)
+        profile = self.advanced(
+            self.card(page, "Мой профиль и записи"), "Открыть дополнительные настройки"
+        )
+        for key, caption in (
+            ("study_node", "Узел и планета"),
+            ("study_warframe", "Мой варфрейм"),
+            ("study_target", "Цель фарма"),
+        ):
+            self.label(profile, caption, muted=True).pack(anchor="w", pady=(8, 3))
+            ttk.Entry(profile, textvariable=self.wf_vars[key]).pack(fill="x")
+        self.label(
+            profile,
+            "Пустое поле означает «не определено». Указанные вами данные сохраняются общей кнопкой и не считаются распознанными игрой.",
+            muted=True,
+            wraplength=660,
+        ).pack(anchor="w", pady=8)
+        ttk.Checkbutton(
+            profile,
+            text="Дополнительно записывать кадры и клавиши автоматически",
+            variable=self.wf_vars["study_record_auto"],
+            command=lambda: self.save_all_settings(quiet=True),
+        ).pack(anchor="w", pady=6)
+        self.label(profile, textvariable=self.wf_study_state, wraplength=650).pack(
+            anchor="w", pady=6
+        )
+        self.wf_buttons(
+            profile,
+            [
+                ("Начать запись", lambda: self.wf_call("study_start")),
                 ("Остановить запись", lambda: self.wf_call("study_stop")),
                 ("Открыть записи", lambda: self.wf_call("study_folder")),
             ],
         )
-        report = self.card(page, "Что уже умею и что ещё изучаю")
-        self.label(report, textvariable=self.wf_learning, wraplength=660).pack(anchor="w", pady=8)
-        details = self.advanced(
-            self.card(page, "Как устроено обучение"), "Данные и дополнительные команды"
-        )
         self.label(
-            details,
-            "Локальная память сохраняет небольшие образцы знакомых экранов и сверяет предположения с новым OCR. Статистика нажатий помогает описывать привычки; она не доказывает успешный бой.\n\nАвтоматические показы делятся на отрезки по 20 минут. Старые автоматические записи заменяются в пределах 512 МБ; сохраняется статистика последних 100 показов. Ручные показы не удаляются автоматически. Файлы остаются на вашем компьютере, кадры могут содержать видимый игровой чат.\n\nНеобязательно: «варфрейм метка ключ / проводник / демолист / защита / провал / награда / эвакуация». Для отдельного ручного показа — «начни показ аполлон». Отчёт — «чему научилась в варфрейме». Самостоятельное прохождение ещё не обучено.",
+            profile,
+            "Запись показов — материал для разбора, а не готовый автопилот. Автозаписи ограничены 512 МБ; кадры могут содержать игровой чат. Для обычного распознавания эта запись не нужна.",
             muted=True,
-            wraplength=650,
+            wraplength=660,
         ).pack(anchor="w", pady=8)
+        self.wf_text(page, "wf_learning", 4)
 
     def build_wf_goals(self):
         page = self.page_bodies["wf_goals"]

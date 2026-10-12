@@ -53,6 +53,20 @@ def check_kernel(config_path):
             parsed = client.call("command.parse", text=phrase)
             if parsed["skill"] != expected:
                 raise RuntimeError("Разбор команды в отдельном ядре: " + phrase)
+        # Exercise new modules through the packaged child kernel, without a game or account.
+        snapshot = client.call("companion", action="snapshot")
+        if snapshot.get("learning") != []:
+            raise RuntimeError("Новый профиль получил чужие исправления речи")
+        client.call(
+            "companion",
+            action="draft.create",
+            text="создай сценарий Проверка из действий включи не беспокоить затем выключи не беспокоить",
+        )
+        client.call("companion", action="draft.save")
+        if len(cfg.snapshot()["scenarios"].get("Проверка", [])) != 2:
+            raise RuntimeError("Голосовой черновик не сохранился в конфигурации ядра")
+        if client.call("terminal_jobs", chat_id=123):
+            raise RuntimeError("Новый пульт получил постороннюю историю")
         key = uuid.uuid4().hex
         client.call("submit", text="который час", request_key=key)
         deadline = time.monotonic() + 15

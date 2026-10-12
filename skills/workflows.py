@@ -4,6 +4,89 @@ from skill_manager import skill
 
 
 @skill(
+    patterns=[r"(?:создай|составь) (?P<draft>(?:сценарий|режим) .+)"],
+    examples=["создай сценарий Вечер из действий приглуши музыку, включи не беспокоить"],
+    description="Создать черновик сценария голосом без выполнения",
+    category="Сценарии",
+)
+def create_scenario(draft, state):
+    return state.runtime.companion.call("draft.create", text="создай " + draft)
+
+
+@skill(
+    keywords=["сохрани сценарий"],
+    description="Сохранить предварительно прочитанный черновик",
+    category="Сценарии",
+)
+def save_scenario_draft(state):
+    return state.runtime.companion.call("draft.save")
+
+
+@skill(
+    keywords=["отмени черновик"],
+    description="Удалить несохранённый черновик сценария",
+    category="Сценарии",
+)
+def cancel_scenario_draft(state):
+    return state.runtime.companion.call("draft.cancel")
+
+
+@skill(
+    patterns=[
+        r"(?:запомни )?(?:мой|моя|моё|мое) (?P<key>любимый плеер|любимая игра|время напоминаний) (?:это |— |: )?(?P<value>.+)"
+    ],
+    examples=["мой любимый плеер Яндекс Музыка"],
+    description="Запомнить личные предпочтения",
+    category="Память",
+)
+def remember_preference(key, value, state):
+    return state.runtime.companion.call("preference.set", key=key, value=value)
+
+
+@skill(
+    keywords=["открой любимый плеер", "включи любимый плеер"],
+    description="Открыть запомненный плеер из каталога программ",
+    category="Память",
+)
+def favourite_player(state):
+    from app_catalog import launch
+
+    name = state.runtime.memory.recall("любимый плеер")
+    if not name:
+        return "Скажите: мой любимый плеер — и название из каталога программ."
+    return launch(name, state.config_getter())
+
+
+@skill(
+    keywords=["запусти любимую игру", "открой любимую игру"],
+    description="Запустить запомненную игру из Steam",
+    category="Память",
+)
+def favourite_game(state):
+    from skills.webo import launch_steam_game
+
+    name = state.runtime.memory.recall("любимая игра")
+    if not name:
+        return "Скажите: моя любимая игра — и название игры."
+    return launch_steam_game("", game_name=name)
+
+
+@skill(
+    patterns=[r"напоминай в обычное время (?P<task>.+)"],
+    examples=["напоминай в обычное время размяться"],
+    description="Ежедневное напоминание в запомненное время",
+    category="Память",
+)
+def preferred_reminder(task, state):
+    from skills.timers_alarms import daily_reminder
+
+    clock = state.runtime.memory.recall("время напоминаний")
+    if not clock:
+        return "Скажите: моё время напоминаний девять утра."
+    return daily_reminder(clock + " " + task, state)
+
+
+@skill(
     patterns=[r"(?:запусти|включи) сценарий (?P<name>.+)"],
     examples=["запусти сценарий Игра"],
     description="Выполнить сохранённый сценарий",

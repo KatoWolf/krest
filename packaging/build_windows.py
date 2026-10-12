@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.9.3"
+VERSION = "0.10.0"
 
 
 def run_checked(command, **kwargs):

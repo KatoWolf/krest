@@ -73,6 +73,7 @@ class WarframeService:
 
         self.study = MissionStudy(
             self.root,
+            profile_getter=self.cfg,
             allowed=lambda: (
                 self.cfg()["enabled"]
                 and not self.stop.is_set()
@@ -170,8 +171,28 @@ class WarframeService:
             "baro": (world["data"].get("voidTrader") or {}) if world else {},
             "source": world["source"] if world else WORLD_BASE + self.cfg()["platform"],
             "catalogs": copy.deepcopy(self.catalog.info),
-            "learning": self.study.learning_report() + "\n\n" + self.visual_memory.report(),
+            "learning": self.learning_summary(),
+            "learning_details": self.study.learning_report() + "\n\n" + self.visual_memory.report(),
         }
+
+    def learning_summary(self):
+        from game_vision import SCREENS
+
+        vision, memory = self.vision.snapshot(), self.visual_memory.snapshot()
+        return "\n\n".join(
+            [
+                self.study.profile_text(),
+                "Зрение: " + vision["status"],
+                f"Готовых типов экранов: {len(SCREENS)}. В этой сессии узнано кадров: {vision.get('recognized', 0)} из {vision.get('attempts', 0)} попыток.",
+                "Личные примеры: "
+                + (", ".join(memory["screens"]) or "ещё нет")
+                + f" · {memory['examples']} эталонов.",
+                f"Независимые проверки вами: {memory['user_matches']} верных из {memory['user_checks']}. Сверки с OCR: {memory['matches']} из {memory['checks']}.",
+                "При повторном чтении знакомого экрана образец запоминается автоматически. Если текст не читается, скажите «Крест, запомни экран кузница» — одного примера достаточно для начала проверки.",
+                "Распознавание экранов помогает давать подсказки. Управление боем и самостоятельный фарм не обучены.",
+                memory["error"],
+            ]
+        ).strip()
 
     def request(self, action, args):
         if action not in ACTIONS:
@@ -300,9 +321,10 @@ class WarframeService:
                 else:
                     self._on_stop(now)
         self.vision.tick(cfg.get("vision_enabled", True), self.running, now)
-        if not cfg.get("study_auto", True) and self.study.automatic and self.study.active:
+        record_auto = cfg.get("study_auto", True) and cfg.get("study_record_auto", False)
+        if not record_auto and self.study.automatic and self.study.active:
             self.study.finish()
-        if not self.running or not cfg.get("study_auto", False):
+        if not self.running or not record_auto:
             self._study_auto_attempted = False
         elif not self._study_auto_attempted or self.study.next_segment:
             self._study_auto_attempted = True
@@ -324,7 +346,7 @@ class WarframeService:
         if study["active"] and now - self._study_notice_at >= 300:
             self._study_notice_at = now
             self.notice(
-                f"Показ Аполлона: {study['seconds'] // 60} мин, кадров {study['frames']}, меток {study['labels']}. Управление у вас.",
+                f"Наблюдение Warframe: {study['seconds'] // 60} мин, кадров {study['frames']}, меток {study['labels']}. Управление у вас.",
                 "study-progress-" + str(int(now // 300)),
             )
         if now - self._last_local >= 5:
@@ -618,11 +640,79 @@ class WarframeService:
 
         vision = self.vision.snapshot()
         fresh = time.time() - vision.get("observed", 0) < 40
-        return screen_hint(vision.get("screen", "unknown") if fresh else "unknown")
+        code = vision.get("screen", "unknown") if fresh else "unknown"
+        guess = vision.get("visual_guess", "unknown") if fresh else "unknown"
+        if code == "unknown" and guess != "unknown":
+            return (
+                "По личному образцу похоже на «"
+                + vision.get("visual_label", guess)
+                + "», но текст это не подтвердил. "
+                + screen_hint(guess)
+            )
+        hint = screen_hint(code)
+        if code in ("mission_complete", "relic_reward"):
+            goal = next(
+                (row for row in self.store.snapshot()["goals"] if not row.get("done")), None
+            )
+            if goal:
+                hint += f" Твоя цель: {goal['name']} — {goal.get('progress', 0)} из {goal.get('target', 1)}. Подтверди общее количество: «варфрейм прогресс {goal['name']} всего три»."
+        return hint
 
     def _action(self, action, **args):
         state = self.store.snapshot()
         aliases = state["aliases"]
+        if action == "confirm_progress":
+            name = str(args.get("name", "")).strip().casefold()
+            matches = [row for row in state["goals"] if row["name"].strip().casefold() == name]
+            if len(matches) != 1:
+                raise ValueError(
+                    "Нужна одна цель с таким названием. Посмотрите «Мои цели варфрейм»."
+                )
+            row = matches[0]
+            value = int(args["value"])
+            self._action("progress", id=row["id"], value=value)
+            text = (
+                f"{row['name']}: {value} из {row.get('target', 1)}. Количество подтверждено вами."
+            )
+            self.show_panel("Прогресс фарма", [text], seconds=20)
+            return {"text": text}
+        if action in ("vision_teach", "vision_check", "vision_diagnose"):
+            from game_vision import capture_signature, SCREENS
+
+            if not self.cfg()["enabled"] or self.runtime.settings().get("safe_mode"):
+                raise ValueError("Включите помощника Warframe и выйдите из безопасного режима")
+            if args.get("delay"):
+                if self.stop.wait(5):
+                    raise ValueError("Крест завершает работу")
+            if action == "vision_diagnose":
+                if not self.vision.snapshot()["busy"]:
+                    self.vision.scan()
+                return {"text": self.learning_summary()}
+            labels = {label.casefold(): code for code, label, _ in SCREENS}
+            labels.update(
+                {
+                    "награда": "relic_reward",
+                    "сбой": "disruption",
+                    "результаты миссии": "mission_complete",
+                }
+            )
+            label = str(args.get("screen", "")).strip().casefold()
+            code = (
+                label if label in dict((row[0], row[1]) for row in SCREENS) else labels.get(label)
+            )
+            if not code:
+                raise ValueError(
+                    "Назовите экран: кузница, арсенал, навигация, награда, сбой, выживание или результаты миссии"
+                )
+            feature = capture_signature()
+            method = (
+                self.visual_memory.teach
+                if action == "vision_teach"
+                else self.visual_memory.evaluate
+            )
+            text = method(code, feature)
+            self.show_panel("Память экранов", [text], seconds=15)
+            return {"text": text}
         if action.startswith("study_"):
             if action == "study_start":
                 text = self.study.start()
@@ -641,15 +731,9 @@ class WarframeService:
                     "Открыта папка локальных показов. Записи никуда не отправляются автоматически."
                 )
             else:
-                text = (
-                    self.study.report()
-                    + "\n\n"
-                    + self.study.learning_report()
-                    + "\n\n"
-                    + self.visual_memory.report()
-                )
+                text = self.learning_summary()
             if action != "study_folder":
-                self.show_panel("Обучение · Аполлон", self.study.panel()["lines"], seconds=30)
+                self.show_panel("Warframe · наблюдения", self.study.panel()["lines"], seconds=30)
                 with self.lock:
                     self.panel["kind"] = "study"
             return {"text": text}
@@ -1173,6 +1257,10 @@ class WarframeService:
 
 
 ACTIONS = {
+    "confirm_progress",
+    "vision_teach",
+    "vision_check",
+    "vision_diagnose",
     "study_start",
     "study_stop",
     "study_mark",
