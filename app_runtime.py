@@ -51,6 +51,12 @@ class AssistantRuntime:
 
         self.automation = EventAutomation(self)
         self._execute_lock = threading.RLock()
+        self._dialog_lock = threading.RLock()
+        self._lane_locks = {
+            "general": self._execute_lock,
+            "music": threading.RLock(),
+            "discord": threading.RLock(),
+        }
         self.manager = SkillManager(settings, plugin_dir=Path(data_dir) / "imported_skills")
         from command_understanding import VoiceUnderstanding
 
@@ -61,6 +67,12 @@ class AssistantRuntime:
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
+        self._queues = {
+            "general": self.requests,
+            "music": queue.Queue(maxsize=12),
+            "discord": queue.Queue(maxsize=12),
+        }
+        self._running = {}
         self._request_lock = threading.RLock()
         self._submitted_at = {}
         self.current_command = ""
@@ -92,10 +104,13 @@ class AssistantRuntime:
             return imports.preview(args["path"])
         if action not in ("install", "enable", "disable", "remove"):
             raise ValueError("Неизвестное действие импорта")
-        # Do not replace functions while a command is running; the caller can retry.
-        if not self._execute_lock.acquire(blocking=False):
-            raise ValueError("Дождитесь завершения текущей команды и повторите подключение")
-        try:
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            for lock in [self._dialog_lock, *self._lane_locks.values()]:
+                if not lock.acquire(blocking=False):
+                    raise ValueError("Дождитесь завершения текущей команды и повторите подключение")
+                stack.callback(lock.release)
             result = (
                 imports.install(args["path"], args["sha256"], args.get("bindings"))
                 if action == "install"
@@ -103,14 +118,17 @@ class AssistantRuntime:
             )
             self.events.put(("skills_changed", None))
             return result
-        finally:
-            self._execute_lock.release()
 
     def start(self):
         if self._threads:
             return
         self._threads = [
-            threading.Thread(target=self._commands, daemon=True, name="krest-commands"),
+            *[
+                threading.Thread(
+                    target=self._commands, args=(lane,), daemon=True, name="krest-" + lane
+                )
+                for lane in self._queues
+            ],
             threading.Thread(target=self._scheduler, daemon=True, name="krest-scheduler"),
             threading.Thread(target=self._downloads, daemon=True, name="krest-downloads"),
         ]
@@ -159,14 +177,15 @@ class AssistantRuntime:
         with self._request_lock:
             if self.stop_event.is_set():
                 return False
-            if self.requests.full():
+            target = self._queues[self._command_lane(text)]
+            if target.full() or sum(q.qsize() for q in self._queues.values()) >= 30:
                 self.events.put(("error", "Очередь заполнена"))
                 return False
             job_id, fresh = self.jobs.create(text, source, request_key)
             if not fresh:
                 return True
             try:
-                self.requests.put_nowait((text, source, confidence, job_id))
+                target.put_nowait((text, source, confidence, job_id))
                 self._submitted_at[job_id] = (
                     time.monotonic(),
                     voice.recognition() if source == "voice" else {},
@@ -181,63 +200,86 @@ class AssistantRuntime:
         """Cancel only commands that have not started; never interrupt a skill midway."""
         with self._request_lock:
             count = 0
-            while True:
-                try:
-                    item = self.requests.get_nowait()
-                    self.jobs.transition(item[3], "cancelled", "Отменено до начала выполнения")
-                    self._submitted_at.pop(item[3], None)
-                    self.requests.task_done()
-                    count += 1
-                except queue.Empty:
-                    return count
+            for target in self._queues.values():
+                while True:
+                    try:
+                        item = target.get_nowait()
+                        self.jobs.transition(item[3], "cancelled", "Отменено до начала выполнения")
+                        self._submitted_at.pop(item[3], None)
+                        target.task_done()
+                        count += 1
+                    except queue.Empty:
+                        break
+            return count
 
     def command_status(self):
         with self._request_lock:
-            return self.current_command, self.requests.qsize()
+            return " · ".join(self._running.values()), sum(q.qsize() for q in self._queues.values())
+
+    def _command_lane(self, text):
+        from speech_recognition import decode_voice_command
+        from command_understanding import exact_command
+
+        _, body = decode_voice_command(self.manager, text, self.settings())
+        command = exact_command(self.manager, body)
+        found = self.manager.match(command) if command else None
+        if found and found[0].id.startswith("skills.discord_voice."):
+            return "discord"
+        if (
+            found
+            and found[0].id.startswith("skills.media.")
+            and not found[0].func.__name__.startswith("open_")
+        ):
+            return "music"
+        return "general"
 
     def execute(self, text, source="text", confidence=None):
-        with self._execute_lock:
-            started = time.monotonic()
-            ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
-            submitted, recognition = self._submitted_at.pop(ident, (started, {}))
-            if not self.jobs.transition(ident, "running"):
-                return CommandResult(True, False, "Задание отменено или уже завершено")
-            from execution import ExecutionToken
+        started = time.monotonic()
+        ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
+        submitted, recognition = self._submitted_at.pop(ident, (started, {}))
+        self._job_local.recognition = recognition
+        if not self.jobs.transition(ident, "running"):
+            return CommandResult(True, False, "Задание отменено или уже завершено")
+        from execution import ExecutionToken
 
-            token = ExecutionToken(self.stop_event)
-            self._job_local.token = token
-            with self._jobs_lock:
-                self._active_jobs[ident] = token
-            try:
-                result = self._execute(text, source, confidence)
-                status = (
-                    "completed" if result.success else "cancelled" if token.is_set() else "failed"
+        token = ExecutionToken(self.stop_event)
+        self._job_local.token = token
+        with self._jobs_lock:
+            self._active_jobs[ident] = token
+        try:
+            result = self._execute(text, source, confidence)
+            status = "completed" if result.success else "cancelled" if token.is_set() else "failed"
+            self.jobs.transition(ident, status, result.text)
+            trace = {
+                "heard": text,
+                "skill": result.skill_id,
+                "success": result.success,
+                "queue_ms": round((started - submitted) * 1000),
+                "execution_ms": round((time.monotonic() - started) * 1000),
+                "time": time.time(),
+                "source": source,
+            }
+            if source == "voice":
+                data = recognition or voice.recognition()
+                trace.update(
+                    {
+                        key: data.get(key)
+                        for key in ("decoder_ms", "pause_ms", "audio_queue_ms", "capture_ms")
+                    }
                 )
-                self.jobs.transition(ident, status, result.text)
-                trace = {
-                    "heard": text,
-                    "skill": result.skill_id,
-                    "success": result.success,
-                    "queue_ms": round((started - submitted) * 1000),
-                    "execution_ms": round((time.monotonic() - started) * 1000),
-                    "time": time.time(),
-                    "source": source,
-                }
-                if source == "voice":
-                    data = recognition or voice.recognition()
-                    trace.update(decoder_ms=data.get("decoder_ms"), pause_ms=data.get("pause_ms"))
-                if result.handled:
-                    with self.companion.lock:
-                        self.companion.last_trace = trace
-                    self.events.put(("command_trace", trace))
-                return result
-            except Exception as exc:
-                self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
-                raise
-            finally:
-                with self._jobs_lock:
-                    self._active_jobs.pop(ident, None)
-                self._job_local.token = None
+            if result.handled:
+                with self.companion.lock:
+                    self.companion.last_trace = trace
+                self.events.put(("command_trace", trace))
+            return result
+        except Exception as exc:
+            self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
+            raise
+        finally:
+            with self._jobs_lock:
+                self._active_jobs.pop(ident, None)
+            self._job_local.token = None
+            self._job_local.recognition = None
 
     @property
     def command_stop(self):
@@ -265,7 +307,7 @@ class AssistantRuntime:
             self._last_voice_retry = now
             voice.speak("Не расслышала. Повтори, пожалуйста.")
 
-    def _execute(self, text, source="text", confidence=None):
+    def _prepare_command(self, text, source="text", confidence=None):
         cfg = self.settings().get("app_settings", {})
         if source == "voice":
             from speech_recognition import decode_voice_command
@@ -300,6 +342,57 @@ class AssistantRuntime:
             ):
                 observed("Фраза вне текущей темы — ожидаю обращения")
                 return CommandResult(False, False, "")
+            if not wake:
+                from command_understanding import exact_command
+
+                answer = command.casefold().strip(" ,.!?")
+                pending = self.understanding.pending
+                is_answer = bool(
+                    pending
+                    and time.monotonic() < pending["until"]
+                    and answer
+                    in (
+                        "да",
+                        "нет",
+                        "отмена",
+                        "не надо",
+                        "верно",
+                        "правильно",
+                        "подтверждаю",
+                        "первое",
+                        "первый",
+                        "второе",
+                        "второй",
+                        "один",
+                        "два",
+                        "1",
+                        "2",
+                    )
+                )
+                is_context = bool(
+                    self.context.pending
+                    and time.monotonic() - self.context.pending["created"] < 120
+                    and (
+                        answer.isdigit()
+                        or any(
+                            v["label"].casefold() == answer for v in self.context.pending["choices"]
+                        )
+                    )
+                )
+                if not (exact_command(self.manager, command) or is_answer or is_context):
+                    observed("Фоновая речь — ожидаю команду")
+                    return CommandResult(False, False, "")
+            from speech_recognition import command_confidence
+
+            confidence = command_confidence(
+                self.manager,
+                text,
+                command,
+                wake,
+                confidence,
+                getattr(self._job_local, "recognition", None) or {},
+                cfg,
+            )
             if confidence is not None and confidence * 100 < cfg.get("speech_confidence", 60):
                 observed("Низкая уверенность — повторите фразу")
                 result = CommandResult(
@@ -375,11 +468,27 @@ class AssistantRuntime:
         observed("Передано на выполнение")
         normalized = normalize_command(command, self.settings().get("command_aliases", {}))
         followup = self.context.handle(normalized) if source != "scenario" else None
-        result = (
-            CommandResult(True, followup.success, followup.text)
-            if followup is not None
-            else self.manager.execute(command, self.state)
-        )
+        return command, followup, learning, wake, observed
+
+    def _execute(self, text, source="text", confidence=None):
+        # Dialog changes are short and serial; app/network calls run outside.
+        with self._dialog_lock:
+            prepared = self._prepare_command(text, source, confidence)
+        if isinstance(prepared, CommandResult):
+            return prepared
+        command, followup, learning, wake, observed = prepared
+        with self._lane_locks[self._command_lane(command)]:
+            if self.command_stop.is_set():
+                return CommandResult(True, False, "Задание отменено до отправки действия")
+            result = (
+                CommandResult(True, followup.success, followup.text)
+                if followup is not None
+                else self.manager.execute(command, self.state)
+            )
+        with self._dialog_lock:
+            return self._finish_command(result, learning, source, wake, observed)
+
+    def _finish_command(self, result, learning, source, wake, observed):
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         if result.success and learning:
             self.understanding.remember(learning)
@@ -398,19 +507,21 @@ class AssistantRuntime:
         self.events.put(("result", result))
         return result
 
-    def _commands(self):
+    def _commands(self, lane="general"):
+        target = self._queues[lane]
         while not self.stop_event.is_set():
             with self._request_lock:
                 if self.stop_event.is_set():
                     break
                 try:
-                    text, source, confidence, job_id = self.requests.get_nowait()
+                    text, source, confidence, job_id = target.get_nowait()
                 except queue.Empty:
                     text = None
                 if text is not None:
-                    self.current_command = text
+                    self._running[lane] = text
+                    self.current_command = " · ".join(self._running.values())
             if text is None:
-                self.stop_event.wait(0.1)
+                self.stop_event.wait(0.02)
                 continue
             try:
                 self._job_local.current = job_id
@@ -424,8 +535,9 @@ class AssistantRuntime:
             finally:
                 self._job_local.current = None
                 with self._request_lock:
-                    self.current_command = ""
-                self.requests.task_done()
+                    self._running.pop(lane, None)
+                    self.current_command = " · ".join(self._running.values())
+                target.task_done()
 
     def _scheduler(self):
         while not self.stop_event.wait(0.3):
@@ -621,8 +733,14 @@ class AssistantRuntime:
                 voice.enable()
             from speech_dictionary import quick_phrases
 
-            dictionary_settings = self.settings()
-            voice.set_command_dictionary(quick_phrases(self.manager, dictionary_settings))
+            def refresh_dictionary():
+                voice.set_command_dictionary(
+                    quick_phrases(
+                        self.manager, self.settings(), self.companion.snapshot()["learning"]
+                    )
+                )
+
+            refresh_dictionary()
             dictionary_checked = time.monotonic()
             if not voice.telemetry().get("tts_ready"):
                 threading.Thread(
@@ -641,10 +759,7 @@ class AssistantRuntime:
             while not self.stop_event.is_set() and not self._voice_stop.wait(0.03):
                 if time.monotonic() - dictionary_checked >= 5:
                     dictionary_checked = time.monotonic()
-                    latest = self.settings()
-                    if latest != dictionary_settings:
-                        voice.set_command_dictionary(quick_phrases(self.manager, latest))
-                        dictionary_settings = latest
+                    refresh_dictionary()
                 if self._arm_requested.is_set():
                     self._arm_requested.clear()
                     self._active_until = time.monotonic() + self.settings().get(

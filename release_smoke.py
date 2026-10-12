@@ -130,6 +130,9 @@ def check_models(settings):
     if samples.size < 240 or not np.isfinite(samples).all() or not np.any(samples):
         raise RuntimeError("Синтез в сборке не вернул корректный звук")
     print("Vosk (включая русский путь) и синтез Silero проверены без микрофона и динамиков.")
+    from speech_check import check
+
+    check(engine)
 
 
 def check_telegram_worker():
@@ -194,7 +197,10 @@ def check_dependencies():
             for r in results
         ):
             raise RuntimeError("Помощник плеера не вернул результат UI Automation")
-        print("UI Automation: оба помощника завершились без нажатий.", flush=True)
+        from desktop_transport import close
+
+        close()
+        print("UI Automation: повторные запросы к помощнику проверены без нажатий.", flush=True)
     import torch
 
     if torch.tensor([1.0, 2.0]).sum().item() != 3:

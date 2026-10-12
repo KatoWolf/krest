@@ -44,6 +44,7 @@ class VoicePages:
             ("Выключить", self.runtime.stop_voice),
             ("Слушать команду · F8", self._arm_voice),
             ("Прервать ответ", voice.stop_speaking),
+            ("Играю в наушниках", self._headphone_preset),
         ):
             ttk.Button(row, text=title, command=fn).pack(side="left", padx=(0, 5))
         ttk.Checkbutton(
@@ -215,6 +216,30 @@ class VoicePages:
         self.dirty = dirty
         self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
         self._microphone_action("reconnect")
+
+    def _headphone_preset(self):
+        changes = {
+            "voice_headphones": True,
+            "voice_fast_commands": True,
+            "speech_auto_threshold": True,
+            "voice_auto_start": True,
+        }
+        cfg = self.config_mgr.snapshot()
+        cfg["app_settings"].update(changes)
+        try:
+            self.config_mgr.save_config(cfg)
+        except (OSError, ValueError) as exc:
+            self._report_error(str(exc))
+            return
+        dirty = self.dirty
+        for key, value in changes.items():
+            self.settings_vars[key].set(value)
+        self.dirty = dirty
+        self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
+        self.status_var.set(
+            "Режим наушников сохранён: Крест слышит команды и во время своего ответа"
+        )
+        self.runtime.start_voice()
 
     def _microphone_permissions(self):
         import os

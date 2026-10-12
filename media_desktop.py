@@ -1,12 +1,11 @@
-"""Bounded desktop accessibility requests in a short-lived Windows process.
+"""Bounded desktop accessibility requests in reusable, idle-expiring Windows processes.
 
 UI Automation caches apartment-bound COM objects. Keep those out of the GUI,
-kernel workers and WinRT media-session process. No persistent helper is needed.
+kernel workers and WinRT media-session process. Each application family has a separate helper with a bounded lifetime.
 """
 
 import json
 import os
-import subprocess
 import sys
 
 from media_control import MediaError
@@ -17,63 +16,40 @@ PREFIX = "KREST_DESKTOP_RESULT:"
 def request(operation, data=None, action=""):
     if os.name != "nt":
         raise MediaError("Управление кнопками настольных приложений доступно в Windows.")
-    from app_paths import app_command
+    from desktop_transport import request as desktop_request
 
-    # Frozen Windows can decode stdin using the legacy console codepage.
-    # Keep the wire protocol ASCII; JSON restores Cyrillic labels exactly.
-    payload = json.dumps(
-        {"operation": operation, "data": data or {}, "action": action}, ensure_ascii=True
-    )
     try:
-        result = subprocess.run(
-            app_command("--desktop-worker"),
-            input=payload,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=20,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except subprocess.TimeoutExpired as exc:
-        if operation == "discord_voice":
-            raise MediaError(
-                "Discord не ответил за 20 секунд. Проверьте состояние микрофона в Discord перед повтором."
-            ) from exc
-        raise MediaError(
-            "Плеер не ответил за 20 секунд. Помощник доступа остановлен. Проверьте отметку в плеере перед повторной командой."
-        ) from exc
-    except OSError as exc:
-        raise MediaError("Не удалось открыть помощник доступа к приложению: " + str(exc)) from exc
-    for line in reversed(result.stdout.splitlines()):
-        if line.startswith(PREFIX):
-            try:
-                response = json.loads(line[len(PREFIX) :])
-                if response.get("error"):
-                    detail = response["error"]
-                    if operation == "probe" and response.get("traceback"):
-                        detail += "\n" + response["traceback"]
-                    raise MediaError(detail)
-                value = response["result"]
-                if result.returncode or not isinstance(value, dict):
-                    break
-                return value
-            except (ValueError, TypeError, KeyError):
-                break
-    raise MediaError(
-        "Помощник доступа к приложению завершился без результата. Откройте его окно и перезапустите Крест."
-    )
+        response = desktop_request({"operation": operation, "data": data or {}, "action": action})
+    except (OSError, TimeoutError) as exc:
+        raise MediaError(str(exc)) from exc
+    if response.get("error"):
+        raise MediaError(response["error"])
+    value = response.get("result")
+    if not isinstance(value, dict):
+        raise MediaError("Приложение не подтвердило результат команды.")
+    return value
 
 
-def run_worker():
+def run_worker(service=False):
+    if service:
+        from desktop_transport import serve
+        from media_rating import uia_apartment
+
+        with uia_apartment():
+            return serve(_handle)
+    return _handle(sys.stdin.read(32769))
+
+
+def _handle(raw):
     operation = ""
+    request_id = None
     try:
         if os.name != "nt":
             raise MediaError("Доступ к кнопкам требует Windows.")
-        raw = sys.stdin.read(32769)
         if len(raw) > 32768:
             raise MediaError("Слишком большой запрос к плееру.")
         payload = json.loads(raw)
+        request_id = payload.get("request_id")
         operation = payload["operation"]
         data = payload.get("data", {})
         if not isinstance(data, dict):
@@ -116,5 +92,6 @@ def run_worker():
 
             response["traceback"] = traceback.format_exc()
         code = 1
+    response["request_id"] = request_id
     print(PREFIX + json.dumps(response, ensure_ascii=True), flush=True)
     return code

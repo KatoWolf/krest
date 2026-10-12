@@ -76,6 +76,8 @@ class ExperiencePages:
         trace = snapshot.get("trace", {})
         parts = []
         for key, label in (
+            ("capture_ms", "Захват звука"),
+            ("audio_queue_ms", "Буфер звука"),
             ("decoder_ms", "Vosk"),
             ("pause_ms", "Пауза"),
             ("queue_ms", "Очередь"),

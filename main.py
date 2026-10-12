@@ -31,6 +31,7 @@ def main(argv=None):
     parser.add_argument("--release-model-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-import-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--desktop-service", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--service", help=argparse.SUPPRESS)
     parser.add_argument("--external-script", help=argparse.SUPPRESS)
@@ -55,10 +56,10 @@ def main(argv=None):
     parser.add_argument("--status", action="store_true", help="Состояние работающего ядра")
     parser.add_argument("--stop-kernel", action="store_true", help="Завершить ядро и его сервисы")
     args = parser.parse_args(argv)
-    if args.desktop_worker:
+    if args.desktop_worker or args.desktop_service:
         from media_desktop import run_worker
 
-        return run_worker()
+        return run_worker(service=args.desktop_service)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import os
 

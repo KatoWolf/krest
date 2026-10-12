@@ -8,7 +8,7 @@ from skill_manager import skill
 # Keep these alternatives inside full microphone commands, never free text.
 DISCORD = r"(?:дискорд(?:е)?|дис корд(?:е)?|discord|дс(?: горд(?:е)?)?)"
 MICROPHONE = r"(?:мой )?(?:микрофон|микро|мик)"
-DESTINATION = rf"(?: в {DISCORD})?"
+DESTINATION = rf"(?: в {DISCORD}| где с корде| в дс корде)?"
 
 
 def _microphone(action):

@@ -8,10 +8,13 @@ from contextlib import contextmanager, ExitStack
 import os
 import re
 import time
+import threading
 
 import psutil
 from media_control import MediaError
 from desktop_access import expose_window
+
+_apartment = threading.local()
 
 LABELS = {
     "like": {
@@ -94,6 +97,9 @@ def uia_apartment():
     if os.name != "nt":
         yield
         return
+    if getattr(_apartment, "active", False):
+        yield
+        return
     # This context only runs in the isolated helper's main thread.
     import sys
     import types
@@ -133,8 +139,10 @@ def uia_apartment():
                 "Доступ к кнопкам занят другим режимом Windows. Полностью перезапустите Крест, включая ядро в трее."
             ) from exc
         try:
+            _apartment.active = True
             yield
         finally:
+            _apartment.active = False
             if owned:
                 comtypes.CoUninitialize()
 
@@ -201,9 +209,12 @@ def apply_rating(buttons, action, refresh=None, verify=None):
         raise MediaError(
             "Плеер не принял нажатие кнопки. Откройте его окно и повторите команду."
         ) from exc
-    for _ in range(10):
-        time.sleep(0.15)
-        if refresh:
+    for attempt in range(10):
+        if attempt:
+            time.sleep(0.12)
+        # Most players update the existing node. Only re-enumerate on a stale
+        # node or an unchanged state; this avoids whole-window scans per poll.
+        if not is_desired(button) and refresh:
             try:
                 # Electron can replace the button node after a React re-render.
                 button = _rating_button(refresh(), action)
@@ -245,6 +256,19 @@ def _enable_accessibility(handle):
     send.restype = wintypes.LPARAM
     result = ctypes.c_size_t()
     send(handle, 0x003D, 0, -4, 0x0002, 400, ctypes.byref(result))  # WM_GETOBJECT, OBJID_CLIENT
+    # Electron can host the accessible document in a child render window.
+    import win32gui
+
+    children = []
+
+    def visit(child, _):
+        if win32gui.GetClassName(child) == "Chrome_RenderWidgetHostHWND":
+            children.append(child)
+        return True
+
+    win32gui.EnumChildWindows(handle, visit, None)
+    for child in children[:4]:
+        send(child, 0x003D, 0, -4, 0x0002, 200, ctypes.byref(result))
 
 
 def _elements(window):
@@ -312,8 +336,17 @@ def find_player_window(data, stack=None):
     return windows[0]
 
 
-def track_buttons(window, data):
+def track_buttons(window, data, panel=None):
     """Prefer the smallest ancestor that contains track text AND transport controls."""
+    if panel:
+        try:
+            elements = _elements(panel[0])
+            buttons = [e for e in elements if e.element_info.control_type == "Button"]
+            if _has_track(elements, data) and {_label(b) for b in buttons} & PLAYER_ANCHORS:
+                return buttons
+        except Exception:
+            pass
+        panel.clear()
     elements = _elements(window)
     title = normalize_label(data["title"])
     anchors = [e for e in elements if _label(e) == title]
@@ -328,7 +361,7 @@ def track_buttons(window, data):
                 buttons = parent.descendants(control_type="Button")
                 labels = {_label(b) for b in buttons if _available(b)}
                 if labels & PLAYER_ANCHORS and labels & set().union(*LABELS.values()):
-                    candidates.append((len(buttons), buttons))
+                    candidates.append((len(buttons), buttons, parent))
                     break
             except Exception:
                 break
@@ -337,7 +370,7 @@ def track_buttons(window, data):
         smallest = candidates[0][0]
         # Merge equivalent-size panels; ambiguity must reach _rating_button.
         result, seen = [], set()
-        for size, buttons in candidates:
+        for size, buttons, parent in candidates:
             if size != smallest:
                 break
             for button in buttons:
@@ -348,6 +381,8 @@ def track_buttons(window, data):
                 if key not in seen:
                     seen.add(key)
                     result.append(button)
+        if panel is not None and len([c for c in candidates if c[0] == smallest]) == 1:
+            panel.append(candidates[0][2])
         return result
     # Flat accessibility trees have no named player container. Use the actual
     # transport row to filter named controls, never to synthesize click positions.
@@ -381,7 +416,8 @@ def track_buttons(window, data):
 def perform_rating(data, action):
     with uia_apartment(), ExitStack() as stack:
         window = find_player_window(data, stack)
-        refresh = lambda: track_buttons(window, data)
+        panel = []
+        refresh = lambda: track_buttons(window, data, panel)
         # Recheck the panel with the expected title before and after invocation.
         return apply_rating(
             refresh(), action, refresh=refresh, verify=lambda: _rating_button(refresh(), action)

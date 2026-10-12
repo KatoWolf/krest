@@ -29,7 +29,9 @@ class Endpoint:
         self.elapsed = 0
 
     def feed(self, rms, seconds):
-        if rms >= self.threshold:
+        # Once a word starts, retain its quieter consonants/endings. The higher
+        # threshold still guards the beginning against keyboard/background noise.
+        if rms >= self.threshold * (0.7 if self.started else 1.0):
             self.started = True
             self.silence = 0
         elif self.started:
@@ -42,11 +44,21 @@ class Endpoint:
 
 
 def split_wake(text, wake_word):
-    text = re.sub(r"^\s*(?:эй|слушай)[, ]+", "", text, flags=re.I)
+    original = text
+    # Discard only harmless leading fillers. A wake word quoted in narration
+    # ("он сказал крест...") is not an instruction to this assistant.
+    text = re.sub(
+        r"^\s*(?:(?:эй|слушай|ну|эм|э|а|ха|хаха|ахаха)[, .!?-]+){1,8}",
+        "",
+        text,
+        flags=re.I,
+    )
     match = re.match(r"\s*([\w]+)[\s,.:!?-]*(.*)", text, re.S)
     if match and match[1].casefold().replace("ё", "е") == wake_word.casefold().replace("ё", "е"):
-        return True, match[2].strip()
-    return False, text
+        body = match[2].strip()
+        body = re.sub(r"^(?:" + re.escape(wake_word) + r"[\s,.:!?-]+){1,3}", "", body, flags=re.I)
+        return True, body
+    return False, original
 
 
 def alias_body(text, wake_word="крест"):

@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import queue
 
 torch_import_error = ""
 try:
@@ -29,6 +28,7 @@ import hashlib
 import threading
 from collections import deque
 from speech_tools import Endpoint, pcm_levels, verbalize_numbers, AdaptiveNoiseFloor
+from speech_stream import AudioFrames, Continuity
 
 # --- Индикатор и конфигурация ---
 
@@ -102,7 +102,8 @@ if torch is not None:
             pass
 
 # Глобальное состояние
-q = queue.Queue(maxsize=100)
+q = AudioFrames()
+_continuity = Continuity()
 _recognizer_lock = threading.RLock()
 _play_lock = threading.Lock()
 _cancel_speech = threading.Event()
@@ -115,7 +116,9 @@ _audio_cfg = {}
 _audio_cfg_at = 0
 _segments = []
 _words = []
-_preroll = deque(maxlen=3)
+_preroll = deque(maxlen=10)  # 300 ms, independent of USB/Bluetooth callback sizes.
+_partial_elapsed = 0.0
+_partial_stable = 0.0
 is_speaking = False
 stream = None
 last_mic_error_time = 0
@@ -249,12 +252,7 @@ def auto_accentuate_name(name: str = "", pronunciation: str = None) -> str:
 
 
 def clear_audio_queue():
-    while True:
-        try:
-            q.get_nowait()
-            q.task_done()
-        except queue.Empty:
-            break
+    q.clear()
 
 
 def manage_disk_cache(max_files=200, max_bytes=64 * 1024 * 1024):
@@ -426,12 +424,15 @@ def audio_callback(indata, frames, time_info, status):
     if peak > 0:
         _last_nonzero_audio_at = _last_audio_at
     metrics.update(rms=rms, peak=peak)
-    try:
-        q.put_nowait((data, rms, _last_audio_at))
-    except queue.Full:
-        metrics["dropped"] += 1
-    if status and getattr(status, "input_overflow", False):
-        metrics["dropped"] += 1
+    # PortAudio timestamps share a clock with each other, not with monotonic().
+    lag = max(0, getattr(time_info, "currentTime", 0) - getattr(time_info, "inputBufferAdcTime", 0))
+    metrics["capture_ms"] = round(min(10, lag) * 1000)
+    q.put(
+        data,
+        _last_audio_at - max(0, lag - len(data) / (2 * SAMPLE_RATE)),
+        bool(status and getattr(status, "input_overflow", False)),
+    )
+    metrics["dropped"] = q.dropped
 
 
 def start_microphone() -> bool:
@@ -532,8 +533,9 @@ def _decode(method, *args):
 
 
 def _reset_recognizer():
-    global _decoder_ms
+    global _decoder_ms, _partial_elapsed, _partial_stable
     _decoder_ms = 0.0
+    _partial_elapsed = _partial_stable = 0.0
     if rec is not None:
         rec.Reset()
     _endpoint.reset()
@@ -544,7 +546,7 @@ def _reset_recognizer():
 
 
 def listen():
-    global last_recognition, _audio_cfg, _audio_cfg_at
+    global last_recognition, _audio_cfg, _audio_cfg_at, _partial_elapsed, _partial_stable
     if rec is None:
         return ""
     now = time.monotonic()
@@ -585,21 +587,23 @@ def listen():
     with _recognizer_lock:
         if is_speaking and not cfg.get("voice_headphones", False):
             return ""
-        if metrics.get("handled_drops", 0) != metrics["dropped"]:
-            clear_audio_queue()
-            _reset_recognizer()
-            metrics["handled_drops"] = metrics["dropped"]
-            return ""
-        for _ in range(100):
-            try:
-                packet = q.get_nowait()
-                q.task_done()
-            except queue.Empty:
+        for _ in range(32):
+            packets = q.take(1)
+            if not packets:
                 break
+            packet = packets[0]
             data, rms = packet[:2]
-            if len(packet) > 2 and now - packet[2] > 2:
+            age = max(0, time.monotonic() - packet[2])
+            metrics["audio_queue_ms"] = round(age * 1000)
+            if age > 1:
                 # A busy/game-suspended process must not execute stale speech later.
                 _reset_recognizer()
+                _continuity.recovering, _continuity.quiet = True, 0.0
+                continue
+            accept, gap = _continuity.accept(packet[3], rms, _endpoint.threshold, q.seconds)
+            if gap:
+                _reset_recognizer()
+            if not accept:
                 continue
             if cfg.get("speech_auto_threshold", False):
                 _endpoint.threshold = _noise.feed(rms, speaking=_endpoint.started)
@@ -612,12 +616,17 @@ def listen():
                     _decode(rec.AcceptWaveform, prefix)
                 _preroll.clear()
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
+            from speech_tools import split_wake
+
+            addressed, body = split_wake(metrics.get("partial", ""), cfg.get("wake_word", "крест"))
+            quick = (cfg.get("wake_word", "крест") + " " + body) if addressed else body
             # Never execute a partial hypothesis. Only shorten the end-of-speech
             # wait for a complete known transport command; FinalResult still wins.
             if (
                 cfg.get("voice_fast_commands", True)
-                and metrics.get("partial", "").casefold() in _quick_phrases
-                and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.4)
+                and quick.casefold() in _quick_phrases
+                and _partial_stable >= 0.09
+                and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.33)
             ):
                 finished = True
             if _decode(rec.AcceptWaveform, data):
@@ -635,13 +644,23 @@ def listen():
                     "confidence": sum(confidences) / len(confidences) if confidences else None,
                     "decoder_ms": round(_decoder_ms),
                     "pause_ms": round(_endpoint.silence * 1000),
+                    "words": list(_words),
+                    "audio_queue_ms": metrics.get("audio_queue_ms", 0),
+                    "capture_ms": metrics.get("capture_ms", 0),
                 }
                 metrics["recognition_pause_ms"] = round(_endpoint.silence * 1000)
                 _reset_recognizer()
                 return text
-            metrics["partial"] = " ".join(
-                [*_segments, json.loads(_decode(rec.PartialResult)).get("partial", "")]
-            ).strip()
+            _partial_elapsed += q.seconds
+            _partial_stable += q.seconds
+            if _partial_elapsed + 1e-9 >= 0.09:
+                _partial_elapsed = 0.0
+                partial = " ".join(
+                    [*_segments, json.loads(_decode(rec.PartialResult)).get("partial", "")]
+                ).strip()
+                if partial != metrics.get("partial"):
+                    _partial_stable = 0.0
+                    metrics["partial"] = partial
     return ""
 
 
