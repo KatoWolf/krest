@@ -555,6 +555,7 @@ def start_microphone() -> bool:
         last_mic_error_time = time.time()
         logging.getLogger(__name__).info(f"\n--- [MIC ERROR]: Ошибка захвата микрофона: {e} ---")
         metrics.update(connected=False, mic_error=str(e), rms=0, peak=0)
+        clear_audio_queue()
         stream = None
         return False
 
@@ -607,6 +608,9 @@ def listen():
     cfg = _audio_cfg
     metrics["headphones"] = _headphones(cfg)
     if is_speaking and not _headphones(cfg):
+        # A callback already in flight when playback starts may have queued
+        # echo after the initial clear. Do not keep the audio event signalled.
+        clear_audio_queue()
         return ""
     selected = str(cfg.get("microphone", ""))
     try:
@@ -638,6 +642,7 @@ def listen():
     _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
     with _recognizer_lock:
         if is_speaking and not _headphones(cfg):
+            clear_audio_queue()
             return ""
         for _ in range(32):
             packets = q.take(1)
