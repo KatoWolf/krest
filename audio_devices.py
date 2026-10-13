@@ -8,6 +8,22 @@ import warnings
 LOOPBACK_NAMES = ("stereo mix", "стерео микшер", "what u hear", "loopback", "monitor of")
 
 
+def headphones_output(sd):
+    """Recognize an explicitly named default output, never infer from the mic."""
+    try:
+        name = sd.query_devices(kind="output")["name"]
+        if not isinstance(name, str):
+            return ""
+        folded = name.casefold()
+        return (
+            name
+            if any(part in folded for part in ("headphone", "headset", "наушник", "гарнитур"))
+            else ""
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, RuntimeError):
+        return ""
+
+
 def microphone_access():
     """Read Windows privacy state; never change permissions on the user's behalf."""
     if sys.platform != "win32":

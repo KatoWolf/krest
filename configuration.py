@@ -65,6 +65,7 @@ DEFAULT_CONFIG = {
         "speech_auto_threshold": True,
         "voice_fast_commands": True,
         "voice_headphones": False,
+        "voice_headphones_auto": True,
         "speech_confidence": 60,
         "tts_threads": 2,
         "voice_effect": True,

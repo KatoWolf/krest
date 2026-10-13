@@ -116,7 +116,7 @@ _audio_cfg = {}
 _audio_cfg_at = 0
 _segments = []
 _words = []
-_preroll = deque(maxlen=10)  # 300 ms, independent of USB/Bluetooth callback sizes.
+_preroll = deque(maxlen=20)  # Retain a quiet wake word before a louder command (600 ms).
 _partial_elapsed = 0.0
 _partial_stable = 0.0
 is_speaking = False
@@ -399,12 +399,63 @@ def configure(settings_getter):
     with _recognizer_lock:
         clear_audio_queue()
         _reset_recognizer()
+    refresh_output()
+
+
+def refresh_output():
+    from audio_devices import headphones_output
+
+    metrics["headphones_detected"] = headphones_output(sd)
+
+
+def _headphones(cfg):
+    return bool(
+        cfg.get("voice_headphones", False)
+        or (cfg.get("voice_headphones_auto", True) and metrics.get("headphones_detected"))
+    )
 
 
 def set_command_dictionary(phrases):
     global _quick_phrases
     _quick_phrases = frozenset(phrases)
     metrics["dictionary_phrases"] = len(_quick_phrases)
+
+
+def wait_for_audio(timeout=0.03):
+    q.ready.wait(timeout)
+
+
+def _known_control(text, cfg):
+    from speech_tools import addressed_speech
+
+    # Only a complete catalog phrase may bypass the energy-based pause. A
+    # partial hypothesis, negation or quoted command never triggers an action.
+    wake = cfg.get("wake_word", "крест")
+    addressed, body = addressed_speech(text, wake)
+    candidate = wake + " " + body if addressed else text
+    return candidate.casefold() in _quick_phrases
+
+
+def _finish_recognition(reason):
+    global last_recognition
+    result = json.loads(_decode(rec.FinalResult))
+    _segments.append(result.get("text", ""))
+    _words.extend(result.get("result", []))
+    text = " ".join(v for v in _segments if v).strip()
+    confidences = [float(v["conf"]) for v in _words if "conf" in v]
+    last_recognition = {
+        "text": text,
+        "confidence": sum(confidences) / len(confidences) if confidences else None,
+        "decoder_ms": round(_decoder_ms),
+        "pause_ms": round(_endpoint.silence * 1000),
+        "words": list(_words),
+        "audio_queue_ms": metrics.get("audio_queue_ms", 0),
+        "capture_ms": metrics.get("capture_ms", 0),
+        "endpoint": reason,
+    }
+    metrics.update(recognition_pause_ms=last_recognition["pause_ms"], endpoint=reason)
+    _reset_recognizer()
+    return text
 
 
 def interrupt():
@@ -417,7 +468,7 @@ def audio_callback(indata, frames, time_info, status):
     global _last_audio_at, _last_nonzero_audio_at
     _last_audio_at = time.monotonic()
     metrics["connected"] = True
-    if is_speaking and not _audio_cfg.get("voice_headphones", False):
+    if is_speaking and not _headphones(_audio_cfg):
         return
     data = bytes(indata)
     rms, peak = pcm_levels(data)
@@ -554,7 +605,8 @@ def listen():
         _audio_cfg = _settings_getter().get("app_settings", {})
         _audio_cfg_at = now
     cfg = _audio_cfg
-    if is_speaking and not cfg.get("voice_headphones", False):
+    metrics["headphones"] = _headphones(cfg)
+    if is_speaking and not _headphones(cfg):
         return ""
     selected = str(cfg.get("microphone", ""))
     try:
@@ -585,7 +637,7 @@ def listen():
     metrics["threshold"] = _endpoint.threshold
     _endpoint.pause = int(cfg.get("speech_pause_ms", 700)) / 1000
     with _recognizer_lock:
-        if is_speaking and not cfg.get("voice_headphones", False):
+        if is_speaking and not _headphones(cfg):
             return ""
         for _ in range(32):
             packets = q.take(1)
@@ -595,16 +647,31 @@ def listen():
             data, rms = packet[:2]
             age = max(0, time.monotonic() - packet[2])
             metrics["audio_queue_ms"] = round(age * 1000)
-            if age > 1:
+            if age > 2:
                 # A busy/game-suspended process must not execute stale speech later.
                 _reset_recognizer()
                 _continuity.recovering, _continuity.quiet = True, 0.0
+                metrics["recovery"] = "Звук задержался больше двух секунд — ожидаю свежую фразу"
                 continue
             accept, gap = _continuity.accept(packet[3], rms, _endpoint.threshold, q.seconds)
             if gap:
                 _reset_recognizer()
+                metrics["recovery"] = "Пропуск звука — ожидаю паузу перед новой командой"
             if not accept:
+                if not _continuity.recovering:
+                    # Recovery decoding is disposable even when the energy
+                    # gate finds quiet before Vosk does. Never carry its words
+                    # across into the next complete command.
+                    _reset_recognizer()
+                    continue
+                # After a gap, constant fan noise must not leave capture stuck
+                # waiting for digital silence. Consume and DISCARD this phrase;
+                # a Vosk acoustic boundary is also safe to resume from.
+                if _decode(rec.AcceptWaveform, data):
+                    _continuity.recovering, _continuity.quiet = False, 0.0
+                    _reset_recognizer()
                 continue
+            metrics["recovery"] = ""
             if cfg.get("speech_auto_threshold", False):
                 _endpoint.threshold = _noise.feed(rms, speaking=_endpoint.started)
                 metrics["threshold"] = _endpoint.threshold
@@ -616,43 +683,28 @@ def listen():
                     _decode(rec.AcceptWaveform, prefix)
                 _preroll.clear()
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
-            from speech_tools import addressed_speech
-
-            addressed, body = addressed_speech(
-                metrics.get("partial", ""), cfg.get("wake_word", "крест")
-            )
-            quick = (cfg.get("wake_word", "крест") + " " + body) if addressed else body
             # Never execute a partial hypothesis. Only shorten the end-of-speech
             # wait for a complete known transport command; FinalResult still wins.
             if (
                 cfg.get("voice_fast_commands", True)
-                and quick.casefold() in _quick_phrases
+                and _known_control(metrics.get("partial", ""), cfg)
                 and _partial_stable >= 0.09
-                and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.33)
+                and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.27)
             ):
                 finished = True
             if _decode(rec.AcceptWaveform, data):
                 result = json.loads(_decode(rec.Result))
                 _segments.append(result.get("text", ""))
                 _words.extend(result.get("result", []))
+                if cfg.get("voice_fast_commands", True) and _known_control(
+                    " ".join(v for v in _segments if v), cfg
+                ):
+                    # Vosk already found a genuine acoustic boundary. A fan or
+                    # game noise can keep RMS above the threshold indefinitely;
+                    # do not wait another energy pause after the finalized words.
+                    return _finish_recognition("vosk")
             if finished:
-                result = json.loads(_decode(rec.FinalResult))
-                _segments.append(result.get("text", ""))
-                _words.extend(result.get("result", []))
-                text = " ".join(v for v in _segments if v).strip()
-                confidences = [float(v["conf"]) for v in _words if "conf" in v]
-                last_recognition = {
-                    "text": text,
-                    "confidence": sum(confidences) / len(confidences) if confidences else None,
-                    "decoder_ms": round(_decoder_ms),
-                    "pause_ms": round(_endpoint.silence * 1000),
-                    "words": list(_words),
-                    "audio_queue_ms": metrics.get("audio_queue_ms", 0),
-                    "capture_ms": metrics.get("capture_ms", 0),
-                }
-                metrics["recognition_pause_ms"] = round(_endpoint.silence * 1000)
-                _reset_recognizer()
-                return text
+                return _finish_recognition("pause")
             _partial_elapsed += q.seconds
             _partial_stable += q.seconds
             if _partial_elapsed + 1e-9 >= 0.09:
@@ -846,11 +898,7 @@ def speak(text: str, cancelled=lambda: False):
     from speech_tools import speech_chunks
 
     _cancel_speech.clear()
-    is_speaking = True
-    if not _settings_getter().get("app_settings", {}).get("voice_headphones", False):
-        with _recognizer_lock:
-            clear_audio_queue()
-            _reset_recognizer()
+    played = False
     try:
         for part in speech_chunks(prepare_text(text)):
             if cancelled() or _cancel_speech.is_set():
@@ -870,17 +918,34 @@ def speak(text: str, cancelled=lambda: False):
             with _play_lock:
                 if cancelled() or _cancel_speech.is_set():
                     return
+                # Synthesis can take seconds on a busy CPU. Keep listening
+                # until real sound starts, including between long sentences.
+                is_speaking = True
+                played = True
+                if not _headphones(settings):
+                    with _recognizer_lock:
+                        clear_audio_queue()
+                        _reset_recognizer()
                 sd.play(audio_np, 24000)
             sd.wait()
+            _end_playback()
+            played = False
         metrics["tts_error"] = ""
     except Exception as exc:
         metrics["tts_error"] = "Ошибка озвучки: " + str(exc)[:240]
         logging.getLogger(__name__).warning(metrics["tts_error"])
     finally:
-        if not _settings_getter().get("app_settings", {}).get("voice_headphones", False):
-            # Keep the speaker tail out of recognition without cutting off headset input.
-            time.sleep(0.2)
-            with _recognizer_lock:
-                _reset_recognizer()
-                clear_audio_queue()
+        if played:
+            _end_playback()
         is_speaking = False
+
+
+def _end_playback():
+    global is_speaking
+    if not _headphones(_settings_getter().get("app_settings", {})):
+        # Keep actual speaker echo out, but never erase words during synthesis.
+        time.sleep(0.2)
+        with _recognizer_lock:
+            _reset_recognizer()
+            clear_audio_queue()
+    is_speaking = False

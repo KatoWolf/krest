@@ -159,6 +159,9 @@ def enable():
             engine.initialize_models(models)
         _model_signature = signature
         engine.configure(_settings)
+        from audio_scheduling import status
+
+        engine.metrics["scheduler"] = status()
         if was_loaded:
             engine.request_microphone_refresh()
         if engine.rec is None:
@@ -253,9 +256,21 @@ def listen():
     return engine.listen() if engine is not None else ""
 
 
+def wait_for_audio(timeout=0.03):
+    engine = _engine
+    if engine is not None:
+        engine.wait_for_audio(timeout)
+
+
 def set_command_dictionary(phrases):
     if _engine is not None:
         _engine.set_command_dictionary(phrases)
+
+
+def refresh_output():
+    engine = _engine
+    if engine is not None:
+        engine.refresh_output()
 
 
 def is_enabled():

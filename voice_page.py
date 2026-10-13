@@ -77,6 +77,11 @@ class VoicePages:
         ).pack(anchor="w", pady=4)
         ttk.Checkbutton(
             card,
+            text="Автоматически определять наушники по устройству вывода",
+            variable=self.settings_vars["voice_headphones_auto"],
+        ).pack(anchor="w", pady=4)
+        ttk.Checkbutton(
+            card,
             text="Я в наушниках: слышать команды во время ответа",
             variable=self.settings_vars["voice_headphones"],
         ).pack(anchor="w", pady=4)
@@ -432,6 +437,12 @@ class VoicePages:
             text += "\n" + data["mic_error"][:240]
         if data.get("mic_hint"):
             text += "\n" + data["mic_hint"][:240]
+        if data.get("recovery"):
+            text += "\n" + data["recovery"]
+        if data.get("headphones"):
+            text += "\nНаушники: слышу команды во время ответа"
+        if data.get("scheduler") == "windows_audio":
+            text += " · Приоритет аудио Windows"
         if peak >= 32700:
             text += " · Перегрузка: уменьшите усиление"
         if data.get("dropped"):

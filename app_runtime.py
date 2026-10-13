@@ -714,13 +714,25 @@ class AssistantRuntime:
         self._voice_thread.start()
 
     def _voice_loop(self):
+        from audio_scheduling import recognition_priority
+
+        with recognition_priority():
+            self._voice_loop_scheduled()
+
+    def _voice_loop_scheduled(self):
+        failures = 0
         while not self.stop_event.is_set() and not self._voice_stop.is_set():
+            started = time.monotonic()
             failure = self._voice_attempt()
             if not failure:
                 return
-            self.voice_status = failure + " · Повторю подключение через 30 секунд"
+            if time.monotonic() - started > 60:
+                failures = 0
+            delay = (1, 3, 10, 30)[min(failures, 3)]
+            failures += 1
+            self.voice_status = failure + f" · Повторю подключение через {delay} с"
             self.events.put(("voice", self.voice_status))
-            for _ in range(30):
+            for _ in range(delay):
                 if self.stop_event.is_set() or self._voice_stop.wait(1):
                     return
 
@@ -746,22 +758,13 @@ class AssistantRuntime:
                 return
             with self._voice_control:
                 voice.enable()
-            from speech_dictionary import quick_phrases
-
-            def refresh_dictionary():
-                voice.set_command_dictionary(
-                    quick_phrases(
-                        self.manager, self.settings(), self.companion.snapshot()["learning"]
-                    )
-                    | self.manager.name_vocabulary.phrases()
-                    | {
-                        self.settings()["app_settings"]["wake_word"] + " " + p
-                        for p in self.manager.name_vocabulary.phrases()
-                    }
-                )
-
-            refresh_dictionary()
-            dictionary_checked = time.monotonic()
+            # Catalog/SQLite reads must never pause the audio consumer.
+            threading.Thread(
+                target=self._voice_dictionary,
+                args=(tts_stop,),
+                daemon=True,
+                name="krest-voice-dictionary",
+            ).start()
             if not voice.telemetry().get("tts_ready"):
                 threading.Thread(
                     target=self._tts_recovery,
@@ -776,10 +779,8 @@ class AssistantRuntime:
             self.events.put(
                 ("voice", "Микрофон активен" if connected else "Ищу доступный микрофон…")
             )
-            while not self.stop_event.is_set() and not self._voice_stop.wait(0.03):
-                if time.monotonic() - dictionary_checked >= 5:
-                    dictionary_checked = time.monotonic()
-                    refresh_dictionary()
+            while not self.stop_event.is_set() and not self._voice_stop.is_set():
+                voice.wait_for_audio(0.03)
                 if self._arm_requested.is_set():
                     self._arm_requested.clear()
                     self._active_until = time.monotonic() + self.settings().get(
@@ -802,12 +803,11 @@ class AssistantRuntime:
                         )
                     )
                 if text:
-                    if self.settings().get("app_settings", {}).get("voice_headphones", False):
-                        from speech_recognition import decode_voice_command
+                    from speech_recognition import decode_voice_command
 
-                        addressed, _ = decode_voice_command(self.manager, text, self.settings())
-                        if addressed:
-                            voice.stop_speaking()
+                    addressed, _ = decode_voice_command(self.manager, text, self.settings())
+                    if addressed:
+                        voice.stop_speaking()
                     self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
             failure = str(exc)
@@ -819,6 +819,24 @@ class AssistantRuntime:
             self.voice_status = failure or "Микрофон на паузе"
             self.events.put(("voice", self.voice_status))
         return failure
+
+    def _voice_dictionary(self, stopped):
+        from speech_dictionary import quick_phrases
+
+        while not stopped.is_set() and not self.stop_event.is_set():
+            try:
+                cfg = self.settings()
+                names = self.manager.name_vocabulary.phrases()
+                phrases = quick_phrases(self.manager, cfg, self.companion.snapshot()["learning"])
+                phrases |= names | {cfg["app_settings"]["wake_word"] + " " + p for p in names}
+                if stopped.is_set():
+                    return
+                voice.set_command_dictionary(phrases)
+                voice.refresh_output()
+            except Exception:
+                logger.exception("Не удалось обновить голосовой словарь")
+            if stopped.wait(5):
+                return
 
     def _tts_recovery(self, stopped):
         from model_setup import prepare

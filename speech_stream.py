@@ -7,7 +7,7 @@ from speech_tools import pcm_levels
 
 
 class AudioFrames:
-    def __init__(self, rate=16000, milliseconds=30, capacity=32):
+    def __init__(self, rate=16000, milliseconds=30, capacity=80):
         self.size = rate * milliseconds // 1000 * 2
         self.seconds = milliseconds / 1000
         self.capacity = capacity
@@ -16,6 +16,7 @@ class AudioFrames:
         self.tail = b""
         self.generation = 0
         self.dropped = 0
+        self.ready = threading.Event()
 
     def put(self, data, captured, overflow=False):
         with self.lock:
@@ -36,15 +37,21 @@ class AudioFrames:
                 at = captured - (len(data) - (index + 1) * self.size) / (self.size / self.seconds)
                 self.frames.append((frame, pcm_levels(frame)[0], at, self.generation))
             self.tail = data[count * self.size :]
+            if self.frames:
+                self.ready.set()
 
     def take(self, maximum=32):
         with self.lock:
-            return [self.frames.popleft() for _ in range(min(maximum, len(self.frames)))]
+            packets = [self.frames.popleft() for _ in range(min(maximum, len(self.frames)))]
+            if not self.frames:
+                self.ready.clear()
+            return packets
 
     def clear(self):
         with self.lock:
             self.frames.clear()
             self.tail = b""
+            self.ready.clear()
 
 
 class Continuity:

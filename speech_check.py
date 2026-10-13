@@ -70,8 +70,76 @@ def check(engine):
         )
         if not any(row["ok"] for row in rows):
             raise RuntimeError("Сборка не распознала ни одной контрольной команды")
+        check_game_audio(engine, manager)
     finally:
         engine.stream = original_stream
         engine.clear_audio_queue()
         engine._reset_recognizer()
     return rows
+
+
+def check_game_audio(engine, manager):
+    """Real Vosk+Silero, changing noise and a 1.2 s consumer scheduling stall.
+
+    No microphone, game or player is controlled. Only final, addressed commands
+    that pass the runtime confidence rule count as accepted.
+    """
+    import numpy as np
+    from audio_devices import PCMConverter
+    from configuration import DEFAULT_CONFIG
+    from speech_recognition import command_confidence, decode_voice_command
+    from speech_tools import normalize_command
+
+    target = "skills.media.next_track"
+    cfg = DEFAULT_CONFIG["app_settings"]
+    checks = (
+        ("Крест, переключи трек.", 0.0, 1, target),
+        ("Крест, переключи трек.", 0.004, 1, target),
+        ("Крест, переключи трек.", 0.0, 40, target),
+        ("Мы продолжаем играть.", 0.0, 1, ""),
+        ("Переключи трек.", 0.0, 1, ""),
+    )
+    for phrase, noise, batch, expected in checks:
+        samples = engine.synthesize(phrase)
+        audio = np.concatenate([samples * 0.65, np.zeros(24000 * 2)])
+        audio += np.random.default_rng(73).normal(0, noise, audio.shape)
+        # Calibrate in quiet, then change the background while talking.
+        raw = bytes(16000) + PCMConverter(24000).convert(
+            (np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes()
+        )
+        engine.clear_audio_queue()
+        engine._reset_recognizer()
+        engine._noise.reset()
+        engine._continuity.recovering = False
+        accepted, transcripts = [], []
+        for offset in range(0, len(raw), 960 * batch):
+            chunk = raw[offset : offset + 960 * batch]
+            engine.audio_callback(chunk, len(chunk) // 2, None, None)
+            while engine.q.ready.is_set():
+                text = engine.listen()
+                if not text:
+                    continue
+                transcripts.append(text)
+                wake, body = decode_voice_command(manager, text, DEFAULT_CONFIG)
+                found = manager.match(normalize_command(body))
+                data = engine.last_recognition
+                confidence = command_confidence(
+                    manager, text, body, wake, data["confidence"], data, cfg
+                )
+                if wake and found and confidence is not None and confidence >= 0.6:
+                    accepted.append(found[0].id)
+        print(
+            "Game audio check: "
+            + str(
+                {
+                    "phrase": phrase,
+                    "noise": noise,
+                    "batch_ms": batch * 30,
+                    "heard": transcripts,
+                    "accepted": accepted,
+                }
+            ),
+            flush=True,
+        )
+        if accepted != ([expected] if expected else []):
+            raise RuntimeError("Голос в игровом профиле: " + phrase + " → " + str(transcripts))

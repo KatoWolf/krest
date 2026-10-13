@@ -192,6 +192,12 @@ def check_dependencies():
         "PortAudio: устройств ввода найдено " + str(len(input_candidates(sounddevice))), flush=True
     )
     if os.name == "nt":
+        from audio_scheduling import recognition_priority, status
+
+        with recognition_priority() as scheduling:
+            print("Планировщик распознавания: " + scheduling, flush=True)
+        if status() != "standard":
+            raise RuntimeError("Приоритет потока не освобождён после проверки")
         from concurrent.futures import ThreadPoolExecutor
         from media_desktop import request
 
