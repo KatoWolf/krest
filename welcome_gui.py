@@ -422,10 +422,12 @@ class ControlCenterApp(
         )
         self.page_title = tk.StringVar()
         self.page_subtitle = tk.StringVar()
-        title = self.label(header, textvariable=self.page_title)
+        heading = tk.Frame(header, bg=self.theme["bg"])
+        heading.pack(side="left", fill="both", expand=True)
+        title = self.label(heading, textvariable=self.page_title, wraplength=700)
         title.configure(font=(UI_FONT, 24, "bold"))
         title.pack(anchor="w")
-        self.label(header, textvariable=self.page_subtitle, muted=True).pack(
+        self.label(heading, textvariable=self.page_subtitle, muted=True, wraplength=700).pack(
             anchor="w", pady=(6, 0)
         )
         self._subnav_group = None
@@ -649,6 +651,7 @@ class ControlCenterApp(
                 style="Selected.Tab.TButton" if key == code else "Tab.TButton",
             )
         self._layout_subnav()
+        self.after_idle(self._layout_subnav)
         self.current_page = code
         if code in self.BOT_PAGES and not self.config_mgr.is_premium():
             self._show_locked_page(code)
