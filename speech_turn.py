@@ -129,13 +129,15 @@ class VoiceTurn:
 def merge_recognition(first, second, text):
     words = [*first.get("words", []), *second.get("words", [])]
     scores = [w["conf"] for w in words if "conf" in w]
-    if not scores:
-        scores = [r["confidence"] for r in (first, second) if r.get("confidence") is not None]
+    aligned = " ".join(w.get("word", "") for w in words).casefold()
+    complete = aligned == " ".join(text.casefold().split()) and len(scores) == len(words)
+    averages = [r["confidence"] for r in (first, second) if r.get("confidence") is not None]
+    confidence = sum(scores) / len(scores) if complete and scores else min(averages, default=None)
     return dict(
         second,
         text=text,
         words=words,
-        confidence=sum(scores) / len(scores) if scores else None,
+        confidence=confidence,
         decoder_ms=sum(r.get("decoder_ms", 0) or 0 for r in (first, second)),
         endpoint="joined",
     )
