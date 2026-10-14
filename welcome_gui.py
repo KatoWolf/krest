@@ -286,7 +286,7 @@ class ControlCenterApp(
         apply_style(self, self.theme)
 
     def label(self, parent, text="", large=False, muted=False, **kwargs):
-        return tk.Label(
+        label = tk.Label(
             parent,
             text=text,
             bg=parent.cget("bg"),
@@ -296,6 +296,19 @@ class ControlCenterApp(
             justify="left",
             **kwargs,
         )
+        if kwargs.get("wraplength"):
+            maximum = int(kwargs["wraplength"])
+            previous = [0]
+
+            def wrap(event):
+                if event.width < 30 or event.width == previous[0] or not label.winfo_exists():
+                    return
+                previous[0] = event.width
+                available = event.width - max(4, label.winfo_x()) - 6
+                label.configure(wraplength=max(20, min(maximum, available)))
+
+            parent.bind("<Configure>", wrap, add="+")
+        return label
 
     def card(self, parent, title, subtitle=""):
         surface = RoundedCard(parent, self.theme)
@@ -419,6 +432,8 @@ class ControlCenterApp(
         self._subnav_buttons = {}
         self.subnav = tk.Frame(body, bg=self.theme["bg"])
         self.subnav.pack(fill="x", pady=(0, 10))
+        self.subnav.bind("<Configure>", lambda event: self._layout_subnav())
+        self._subnav_columns = None
         footer = tk.Frame(body, bg=self.theme["bg"])
         footer.pack(side="bottom", fill="x", pady=(12, 0))
         self.save_button = ttk.Button(
@@ -608,6 +623,7 @@ class ControlCenterApp(
             for child in self.subnav.winfo_children():
                 child.destroy()
             self._subnav_buttons = {}
+            self._subnav_columns = None
             self._subnav_group = group[0]
             if len(group[2]) > 1:
                 for i, key in enumerate(group[2]):
@@ -617,8 +633,14 @@ class ControlCenterApp(
                 for i in range(4):
                     self.subnav.columnconfigure(i, weight=1, uniform="tabs")
         for key, button in self._subnav_buttons.items():
+            short_names = {
+                "sessions": "Сессии",
+                "kernel": "Ядро",
+                "security": "Доступ и копии",
+                "programs": "Программы",
+            }
             button.configure(
-                text=names[key]
+                text=short_names.get(key, names[key])
                 + (
                     " · Premium"
                     if key in self.BOT_PAGES and not self.config_mgr.is_premium()
@@ -626,6 +648,7 @@ class ControlCenterApp(
                 ),
                 style="Selected.Tab.TButton" if key == code else "Tab.TButton",
             )
+        self._layout_subnav()
         self.current_page = code
         if code in self.BOT_PAGES and not self.config_mgr.is_premium():
             self._show_locked_page(code)
@@ -653,6 +676,23 @@ class ControlCenterApp(
             self.event_scenario_combo.configure(
                 values=list(self.config_mgr.snapshot()["scenarios"])
             )
+
+    def _layout_subnav(self):
+        if not self._subnav_buttons or self.subnav.winfo_width() < 30:
+            return
+        widest = max(button.winfo_reqwidth() for button in self._subnav_buttons.values()) + 6
+        columns = max(1, min(4, self.subnav.winfo_width() // widest))
+        if columns == self._subnav_columns:
+            return
+        self._subnav_columns = columns
+        for column in range(4):
+            self.subnav.columnconfigure(
+                column,
+                weight=1 if column < columns else 0,
+                uniform="tabs" if column < columns else "",
+            )
+        for index, button in enumerate(self._subnav_buttons.values()):
+            button.grid_configure(row=index // columns, column=index % columns)
 
     def _preview_personality(self):
         from types import SimpleNamespace
