@@ -37,6 +37,23 @@ def empty_state():
 def validate_state(data):
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError("Неизвестный формат данных Warframe")
+    credits = data.get("farm_credits", [])
+    if (
+        not isinstance(credits, list)
+        or len(credits) > 300
+        or any(
+            not isinstance(r, dict)
+            or any(not isinstance(r.get(k), str) or len(r[k]) > 200 for k in ("id", "name", "goal"))
+            or type(r.get("quantity")) is not int
+            or not 1 <= r["quantity"] <= 100
+            or any(
+                type(r.get(k)) not in (int, float) or not 0 <= r[k] <= 10**12
+                for k in ("time", "minutes")
+            )
+            for r in credits
+        )
+    ):
+        raise ValueError("Повреждены подтверждения добычи")
     for key, limit in LIMITS.items():
         rows = data.get(key)
         if not isinstance(rows, list) or len(rows) > limit:

@@ -10,6 +10,7 @@ import webbrowser
 
 from steam_service import read_cache
 from discord_bot_pages import DiscordBotPages
+from ui_fonts import UI_FONT
 
 
 class ServicePages(DiscordBotPages):
@@ -94,7 +95,7 @@ class ServicePages(DiscordBotPages):
         ).pack(anchor="w", pady=4)
         if filename not in self.service_restart:
             self.service_restart[filename] = tk.BooleanVar(
-                value=self.service_configs.get(filename, {}).get("auto_restart", False)
+                value=self.service_configs.get(filename, {}).get("auto_restart", True)
             )
             self.service_restart[filename].trace_add("write", self._mark_dirty)
         ttk.Checkbutton(
@@ -419,11 +420,18 @@ class ServicePages(DiscordBotPages):
         card = self.card(
             page,
             "Автоответы · характер Крест",
-            "7 личностей, по 6 вариантов. Общие настройки Telegram User, Discord Bot и личной Discord-сессии. Предпросмотр никому ничего не отправляет.",
+            "7 личностей: по 10 обычных и 4 игровых ответа. Telegram и Discord чередуют фразы без повторов подряд. Предпросмотр ничего не отправляет.",
         )
         ttk.Checkbutton(
             card, text="Отвечать на входящие личные сообщения", variable=self.reply_vars["enabled"]
         ).pack(anchor="w", pady=4)
+        for key, caption in (
+            ("rotate", "Чередовать варианты автоматически"),
+            ("defer_replies", "Ответить после паузы, если пришло новое сообщение"),
+        ):
+            ttk.Checkbutton(card, text=caption, variable=self.reply_vars[key]).pack(
+                anchor="w", pady=4
+            )
         ttk.Checkbutton(
             card,
             text="Отвечать только на срочные сообщения",
@@ -431,7 +439,7 @@ class ServicePages(DiscordBotPages):
         ).pack(anchor="w", pady=4)
         self.label(
             card,
-            "Повторный автоответ — после заданной паузы. Ваш личный ответ приостанавливает автоответы этому контакту на 5 минут. Уведомления о новых сообщениях продолжают приходить.",
+            "В паузе сохраняется последнее входящее от контакта. После неё Крест ответит один раз. Ваш личный ответ отменяет отложенный ответ и даёт 5 минут тишины.",
             muted=True,
             wraplength=660,
         ).pack(anchor="w", pady=8)
@@ -541,7 +549,7 @@ class ServicePages(DiscordBotPages):
         )
         ttk.Checkbutton(
             advanced,
-            text="Сообщать собеседнику, что я играю или работаю",
+            text="Сообщать об игре во всех ботах (или включите учёт у нужного бота)",
             variable=self.reply_vars["share_activity"],
         ).pack(anchor="w", pady=4)
         self.label(
@@ -568,6 +576,56 @@ class ServicePages(DiscordBotPages):
         self.save_button.configure(text="Сохранить •" if dirty else "Сохранить")
         self.status_var.set("Автоответы на паузе на час" if seconds else "Временная пауза снята")
 
+    def build_status_controls(self, parent, variables, service):
+        from bot_activity import STATUS_BANK, GAME_STATUS_BANK
+
+        panel = self.advanced(parent, "Смена статусов · каждые 5 минут")
+        ttk.Checkbutton(
+            panel, text="Чередовать статусы по характеру Крест", variable=variables["rotate_status"]
+        ).pack(anchor="w", pady=6)
+        self.label(
+            panel,
+            "Одна строка — один статус. Пустой список использует 4 статуса текущей личности. Игровой список работает при включённом учёте игры.",
+            muted=True,
+            wraplength=640,
+        ).pack(anchor="w", pady=6)
+        for key, title, bank in (
+            ("statuses", "Обычные статусы", STATUS_BANK),
+            ("game_statuses", "Во время игры", GAME_STATUS_BANK),
+        ):
+            self.label(panel, title).pack(anchor="w", pady=(8, 4))
+            editor = tk.Text(
+                panel,
+                height=4,
+                wrap="word",
+                bg=self.theme["bg"],
+                fg=self.theme["text"],
+                insertbackground=self.theme["text"],
+                relief="flat",
+                padx=10,
+                pady=8,
+                font=(UI_FONT, 11),
+            )
+            editor.pack(fill="x")
+            editor.insert("1.0", variables[key].get())
+            editor.edit_modified(False)
+
+            def changed(event, widget=editor, var=variables[key]):
+                if widget.edit_modified():
+                    var.set(widget.get("1.0", "end-1c"))
+                    widget.edit_modified(False)
+
+            editor.bind("<<Modified>>", changed)
+
+            def fill(widget=editor, rows=bank):
+                personality = self.config_mgr.snapshot()["profile"]["personality"]
+                widget.delete("1.0", "end")
+                widget.insert("1.0", "\n".join(rows[personality]))
+
+            ttk.Button(panel, text="Заполнить фразами моей личности", command=fill).pack(
+                anchor="w", pady=4
+            )
+
     def build_discord_account_tab(self):
         account = self.card(
             self.page_bodies["discord_account"],
@@ -579,12 +637,13 @@ class ServicePages(DiscordBotPages):
             ("enabled", "Разрешить личную сессию"),
             ("auto_reply", "Автоответы в личных сообщениях"),
             ("update_status", "Обновлять мой текстовый статус"),
-            ("follow_activity", "Показывать, когда я играю"),
+            ("follow_activity", "Учитывать игру в статусе и автоответах"),
         ):
             ttk.Checkbutton(account, text=label, variable=self.account_vars[key]).pack(
                 anchor="w", pady=4
             )
         self.field(account, "Текст статуса", self.account_vars["status_text"])
+        self.build_status_controls(account, self.account_vars, "discord_account")
         self.service_controls(account, "discord_account.py")
         self.build_reply_controls(self.page_bodies["discord_account"])
         card = self.card(

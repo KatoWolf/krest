@@ -8,9 +8,20 @@ UI_FONT = "Segoe UI" if os.name == "nt" else "Roboto"
 _loaded = False
 
 
+def enable_dpi_awareness():
+    if os.name == "nt":
+        try:
+            user = ctypes.WinDLL("user32")
+            user.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            user.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except (OSError, AttributeError):
+            pass
+
+
 def load_fonts(root=None):
     global _loaded
     if not _loaded:
+        enable_dpi_awareness()
         paths = list((Path(__file__).resolve().parent / "assets" / "fonts").glob("Roboto-*.ttf"))
         try:
             if os.name == "nt":

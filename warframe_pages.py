@@ -306,6 +306,19 @@ class WarframePages:
         )
         self.wf_status.set(label)
         self.wf_farm_summary.set(status.get("farm", {}).get("summary", "Журнал забегов пока пуст"))
+        runs = status.get("farm", {}).get("runs", [])
+        last = runs[-1] if runs else {}
+        candidates = (
+            last.get("relics_seen", [])
+            if last.get("result") == "mission_complete"
+            and time.time() - last.get("ended", 0) < 3600
+            else []
+        )
+        chooser = getattr(self, "wf_loot_chooser", None)
+        if chooser is not None and chooser.winfo_exists():
+            chooser.configure(values=candidates)
+            if self.wf_var("loot_name").get() not in candidates:
+                self.wf_var("loot_name").set(candidates[0] if candidates else "")
         study = status.get("study", {})
         self.wf_study_state.set(study.get("message", "Ожидаю запуск игры"))
         self.wf_learning.set(data.get("learning", "Нет отчёта обучения"))
@@ -447,7 +460,30 @@ class WarframePages:
             "Показатели подтверждаются двумя кадрами. Журнал сохраняется автоматически, инвентарь и цели — после вашей проверки.",
         )
         self.label(farm, textvariable=self.wf_farm_summary, wraplength=660).pack(anchor="w", pady=8)
-        self.wf_buttons(farm, [("Отчёт под крестом", lambda: self.wf_call("farm_report"))])
+        self.label(farm, "Подтвердите награду последнего забега и количество:", muted=True).pack(
+            anchor="w"
+        )
+        loot = tk.Frame(farm, bg=farm.cget("bg"))
+        loot.pack(fill="x", pady=8)
+        self.wf_loot_chooser = ttk.Combobox(
+            loot, textvariable=self.wf_var("loot_name"), state="readonly", width=24
+        )
+        self.wf_loot_chooser.pack(side="left", padx=(0, 8))
+        ttk.Entry(loot, textvariable=self.wf_var("loot_quantity", "1"), width=5).pack(side="left")
+        self.wf_buttons(
+            farm,
+            [
+                (
+                    "Подтвердить добычу",
+                    lambda: self.wf_call(
+                        "confirm_loot",
+                        name=self.wf_var("loot_name").get(),
+                        quantity=self.wf_var("loot_quantity").get(),
+                    ),
+                ),
+                ("Отчёт под крестом", lambda: self.wf_call("farm_report")),
+            ],
+        )
         quick = self.card(page, "Команды прямо в игре")
         self.label(
             quick,

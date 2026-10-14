@@ -329,6 +329,9 @@ class ControlCenterApp(
         return entry
 
     def build_ui(self):
+        if getattr(self, "_warm_job", None):
+            self.after_cancel(self._warm_job)
+            self._warm_job = None
         self._style()
         self.shell = tk.Frame(self, bg=self.theme["bg"])
         self.shell.pack(fill="both", expand=True)
@@ -439,6 +442,34 @@ class ControlCenterApp(
 
         self.after_idle(lambda: style_titlebar(self, self.theme))
         self.switch_page(self.current_page)
+        first = ["voice", "music", "skills", "inbox", "settings", "bots", "api", "discord_account"]
+        self._warm_pages = first + [
+            code for code, _ in self.NAV if code != "actions" and code not in first
+        ]
+        self._last_interaction = time.monotonic()
+        self._warm_job = self.after(900, self._warm_next_page)
+
+    def _warm_next_page(self):
+        self._warm_job = None
+        if self.closing or getattr(self, "_destroyed", False) or not self._warm_pages:
+            return
+        if (
+            self.state() not in ("normal", "zoomed")
+            or time.monotonic() - self._last_interaction < 0.5
+        ):
+            self._warm_job = self.after(600, self._warm_next_page)
+            return
+        if getattr(self.runtime.performance, "game", ""):
+            self._warm_job = self.after(3000, self._warm_next_page)
+            return
+        code = self._warm_pages.pop(0)
+        if code not in self.BOT_PAGES or self.config_mgr.is_premium():
+            try:
+                self._ensure_page(code)
+            except Exception:
+                self._built_pages.discard(code)
+                logger.exception("Предзагрузка страницы %s", code)
+        self._warm_job = self.after(150, self._warm_next_page)
 
     BOT_PAGES = {"bots", "api", "steam", "discord_account", "discord_bot", "scripts"}
     CORE_PAGES = {
@@ -491,6 +522,7 @@ class ControlCenterApp(
         self._locked_pages[code].pack(fill="both", expand=True)
 
     def _wheel(self, event):
+        self._last_interaction = time.monotonic()
         if isinstance(event.widget, (ttk.Treeview, tk.Text, tk.Listbox)) or (
             isinstance(event.widget, str) and "popdown" in event.widget
         ):
@@ -525,6 +557,7 @@ class ControlCenterApp(
                 canvas.yview_scroll(round(pixels), "units")
 
     def switch_page(self, code):
+        self._last_interaction = time.monotonic()
         names = dict(self.NAV)
         for page in (
             self.pages.get(getattr(self, "current_page", "")),
@@ -577,6 +610,8 @@ class ControlCenterApp(
             return
         self._ensure_page(code)
         self.pages[code].pack(fill="both", expand=True)
+        self.canvases[code]._schedule()
+        self.after_idle(self.canvases[code].redraw)
         self._animate_transition()
         if code.startswith("wf_"):
             self.wf_refresh()
@@ -1239,12 +1274,13 @@ class ControlCenterApp(
                 for key, caption in (
                     ("auto_reply", "Автоответы с моего Telegram-аккаунта"),
                     ("update_bio", "Обновлять описание моего профиля"),
-                    ("follow_activity", "Показывать игру в описании профиля"),
+                    ("follow_activity", "Учитывать игру в статусе и автоответах"),
                 ):
                     ttk.Checkbutton(card, text=caption, variable=self.tg_vars[key]).pack(
                         anchor="w", pady=4
                     )
                 self.field(card, "Описание профиля", self.tg_vars["bio_text"])
+                self.build_status_controls(card, self.tg_vars, "telegram_user")
                 self.label(
                     credentials,
                     "Телефон — полностью, с кодом страны. Код входа придёт способом, выбранным Telegram.",
@@ -1838,6 +1874,7 @@ class ControlCenterApp(
         self.log_text.configure(state="disabled")
 
     def _poll(self):
+        frame_deadline = time.monotonic() + 0.008
         if (
             self.current_page.startswith("wf_")
             and self.state() in ("normal", "zoomed")
@@ -1851,6 +1888,8 @@ class ControlCenterApp(
         ):
             self._refresh_music(quiet=True)
         for _ in range(100):
+            if time.monotonic() >= frame_deadline:
+                break
             try:
                 callback = self.ui_queue.get_nowait()
             except queue.Empty:
@@ -1862,6 +1901,8 @@ class ControlCenterApp(
             if getattr(self, "_destroyed", False):
                 return
         for _ in range(100):
+            if time.monotonic() >= frame_deadline:
+                break
             try:
                 kind, value = self.runtime.events.get_nowait()
             except queue.Empty:
@@ -2024,7 +2065,7 @@ class ControlCenterApp(
             )
         if self.winfo_exists():
             self._poll_job = self.after(
-                150 if self.state() in ("normal", "zoomed") else 600, self._poll
+                40 if self.state() in ("normal", "zoomed") else 600, self._poll
             )
 
     def _real_quit(self):

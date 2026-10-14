@@ -403,3 +403,18 @@ def study_mark(label, state):
 )
 def study_report(state):
     return run(state, "study_report")
+
+
+@skill(
+    patterns=[
+        r"подтверди добычу (?P<name>.+) количество (?P<quantity>\d+|один|одну|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять)"
+    ],
+    examples=["подтверди добычу акси количество один"],
+    description="Учесть подтверждённую добычу последнего завершённого забега без повторного начисления",
+    category="Warframe",
+)
+def confirm_loot(name, quantity, state):
+    from skills.timers_alarms import words_to_number
+
+    count = int(quantity) if quantity.isdigit() else words_to_number(quantity)
+    return run(state, "confirm_loot", name=name, quantity=count)

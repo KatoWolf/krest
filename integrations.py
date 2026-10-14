@@ -42,7 +42,11 @@ def redact(text, settings):
 
 
 class IntegrationManager:
-    BUILTIN_COMMANDS = {"ds_session.py": {"refresh", "channels", "send_message"}}
+    BUILTIN_COMMANDS = {
+        "ds_session.py": {"refresh", "channels", "send_message"},
+        "tg_bridge.py": {"reply"},
+        "discord_account.py": {"reply"},
+    }
     MODULES = {
         "tg_user": ("tg_bridge.py", "Telegram User"),
         "tgt": ("krest_bot.py", "Telegram Terminal"),
@@ -70,6 +74,7 @@ class IntegrationManager:
         self._generation = {}
         self.resources = {}
         self._last_resources = 0
+        self._recovering = set()
         self.MODULES = dict(type(self).MODULES)
         self.reload_registry()
 
@@ -132,6 +137,9 @@ class IntegrationManager:
             "resources": self.resources.get(filename, {}),
             "manifest": self.manifests.get(filename, {}),
             "restarts": len(self.restart_history.get(filename, [])),
+            "diagnostic": self.bridge.get(filename, {}).get(
+                "diagnostic", "Ожидаю проверку соединения"
+            ),
         }
 
     def send(self, filename, command, **payload):
@@ -198,15 +206,34 @@ class IntegrationManager:
                 **self.bridge.get(filename, {}),
                 "text": message,
                 "ready": True,
+                "auth_required": False,
                 "last_event": time.time(),
                 "capabilities": [c for c in caps if c in allowed] if isinstance(caps, list) else [],
             }
+        elif kind == "health":
+            connected = value.get("connected") is True
+            timeout = value.get("timeout", 120)
+            timeout = max(120, min(600, timeout)) if type(timeout) is int else 120
+            self.bridge[filename].update(
+                last_health=time.time(),
+                monitored=True,
+                ready=connected,
+                diagnostic=message,
+                pending=value.get("pending", 0),
+                replies=value.get("replies", 0),
+                health_timeout=timeout,
+            )
+            if connected:
+                self.errors.pop(filename, None)
+        elif kind == "auth_required":
+            self.errors[filename] = message
+            self.bridge[filename].update(ready=False, auth_required=True, diagnostic=message)
         elif kind == "status":
             self.errors.pop(filename, None)
             self.bridge.setdefault(filename, {})["text"] = message
         elif kind == "disconnected":
             self.bridge[filename].update(ready=False, text=message)
-        elif kind == "data" and filename in ("ds_session.py", "discord_account.py"):
+        elif kind == "data" and filename in ("ds_session.py", "discord_account.py", "tg_bridge.py"):
             data = value.get("data")
             if isinstance(data, dict):
                 self.bridge[filename].setdefault("data", {}).update(data)
@@ -246,6 +273,10 @@ class IntegrationManager:
                 source=filename,
                 priority=priority,
                 notice_kind="message" if value.get("notice_kind") == "message" else "",
+                target=value.get("target")
+                if filename in ("tg_bridge.py", "discord_account.py")
+                and not settings.get("services", {}).get(filename, {}).get("path")
+                else None,
             )
 
     def refresh(self):
@@ -260,6 +291,35 @@ class IntegrationManager:
             self._health_lock.release()
 
     def _refresh(self):
+        # Restart only our live child when its advertised health probe stops.
+        # Never reset credentials or restart authentication/rate-limit failures.
+        now_wall = time.time()
+        settings = self.app.config_mgr.snapshot()
+        for filename, proc in list(self.processes.items()):
+            bridge = self.bridge.get(filename, {})
+            cfg = settings.get("services", {}).get(filename, {})
+            if (
+                proc.poll() is None
+                and bridge.get("monitored")
+                and not bridge.get("auth_required")
+                and cfg.get("auto_restart", True)
+                and now_wall - bridge.get("last_health", now_wall)
+                > bridge.get("health_timeout", 120)
+                and filename not in self._recovering
+            ):
+                now = time.monotonic()
+                history = [t for t in self.restart_history.get(filename, []) if now - t < 600]
+                self.restart_history[filename] = history
+                if len(history) < 3:
+                    self._recovering.add(filename)
+                    history.append(now)
+                    bridge["diagnostic"] = "Проверка соединения зависла; перезапускаю сервис"
+                    generation = self._generation.get(filename, 0)
+                    threading.Thread(
+                        target=self._repair_stalled, args=(filename, generation), daemon=True
+                    ).start()
+                else:
+                    bridge["diagnostic"] = "Три восстановления за 10 минут. Проверьте сеть и журнал"
         if self._lock.acquire(blocking=False):
             try:
                 for filename, proc in list(self.processes.items()):
@@ -274,7 +334,12 @@ class IntegrationManager:
                         if proc.stdin:
                             proc.stdin.close()
                         cfg = self.app.config_mgr.snapshot().get("services", {}).get(filename, {})
-                        if code and cfg.get("auto_restart", False) and not self._closed:
+                        if (
+                            code
+                            and cfg.get("auto_restart", True)
+                            and not self._closed
+                            and not self.bridge.get(filename, {}).get("auth_required")
+                        ):
                             now = time.monotonic()
                             history = [
                                 v for v in self.restart_history.get(filename, []) if now - v < 600
@@ -323,13 +388,24 @@ class IntegrationManager:
                 or not self.app.config_mgr.snapshot()
                 .get("services", {})
                 .get(filename, {})
-                .get("auto_restart", False)
+                .get("auto_restart", True)
             ):
                 return
             try:
                 self.start(filename)
             except Exception as exc:
                 self.errors[filename] = redact(str(exc), self.app.config_mgr.snapshot())
+
+    def _repair_stalled(self, filename, generation):
+        try:
+            with self._lock:
+                if self._closed or self._generation.get(filename, 0) != generation:
+                    return
+                self.restart(filename)
+        except Exception as exc:
+            self.errors[filename] = redact(str(exc), self.app.config_mgr.snapshot())
+        finally:
+            self._recovering.discard(filename)
 
     def _capture(self, filename, proc, settings):
         path = self.log_dir / (filename + ".log")

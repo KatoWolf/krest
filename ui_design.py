@@ -125,7 +125,7 @@ def apply_style(root, colours):
             anchor="w" if "Nav" in name else "center",
             font=(
                 UI_FONT,
-                12,
+                13 if "Nav" in name else 12,
                 "bold" if name.startswith("Selected") else "normal",
             ),
         )

@@ -3,6 +3,7 @@
 import copy
 import tkinter as tk
 from tkinter import ttk, filedialog
+from ui_dialogs import messagebox
 import time
 
 ACTIONS = {
@@ -54,6 +55,28 @@ class WorkflowPages:
         self.weekdays = [tk.BooleanVar(value=True) for _ in range(7)]
         self.snooze_delay = tk.StringVar(value="5 минут")
         self._inbox_rows = None
+
+    def _notice_action(self, action):
+        selected = self.inbox_tree.selection()
+        if not selected:
+            self._report_error("Выберите сообщение в списке уведомлений")
+            return
+        ident, text = int(selected[0]), self.notice_reply.get()
+
+        def invoke(what):
+            if hasattr(self.runtime, "client"):
+                return self.runtime.client.call("conversation", action=what, ident=ident, text=text)
+            return self.runtime.conversations.call(what, ident, text)
+
+        def done(message):
+            self.status_var.set(message)
+            if action == "draft":
+                if messagebox.askyesno("Отправить ответ?", message, parent=self):
+                    self._background(lambda: invoke("confirm"), done=self.status_var.set)
+                else:
+                    self._background(lambda: invoke("cancel"), done=self.status_var.set)
+
+        self._background(lambda: invoke(action), done=done)
 
     def build_workflows(self):
         card = self.card(
@@ -324,6 +347,24 @@ class WorkflowPages:
         self.label(card, textvariable=self.notice_details, wraplength=690).pack(anchor="w", pady=10)
         self.inbox_tree.bind("<<TreeviewSelect>>", lambda e: self._notice_details())
         self._inbox_rows = None
+
+        actions = self.card(
+            self.page_bodies["inbox"],
+            "Ответить и вернуться позже",
+            "Выберите уведомление выше. Перед отправкой проверьте адресата и текст.",
+        )
+        self.notice_reply = tk.StringVar()
+        self.field(actions, "Мой ответ", self.notice_reply)
+        row = tk.Frame(actions, bg=self.theme["card"])
+        row.pack(fill="x", pady=8)
+        for caption, action in (
+            ("Подготовить ответ", "draft"),
+            ("Напомнить после игры", "after_game"),
+            ("Тишина на час", "mute"),
+        ):
+            ttk.Button(row, text=caption, command=lambda a=action: self._notice_action(a)).pack(
+                side="left", padx=(0, 6)
+            )
 
     def _refresh_inbox(self):
         rows = self.runtime.center.list(self.notice_unread.get())

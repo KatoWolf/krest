@@ -51,9 +51,18 @@ def lane_for(entry):
     ident, module, name = entry.id, entry.module, entry.func.__name__
     if ident == "skills.workflows.undo_action":
         return "undo"
-    if entry.func.__module__.startswith(("plugins.", "krest_imported_")):
+    if entry.func.__module__.startswith(("plugins.", "krest_imported_", "krest_package_")):
         return "plugins"
     if ident in FILES:
+        return "files"
+    if module == "assistant_tools" and name in {
+        "context_folder",
+        "find_local_file",
+        "choose_local_file",
+        "open_context_file",
+        "reveal_context_file",
+        "extract_context_file",
+    }:
         return "files"
     if ident in WEB:
         return "web"

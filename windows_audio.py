@@ -126,3 +126,34 @@ def set_default_output(device_id):
     if AudioUtilities.GetSpeakers().id != device_id:
         raise ValueError("Windows не подтвердила смену основного устройства")
     return "Устройство воспроизведения изменено"
+
+
+@com_context
+def focus_sessions():
+    from pycaw.pycaw import AudioUtilities
+
+    rows = []
+    for session in AudioUtilities.GetAllSessions():
+        if session.Process:
+            rows.append(
+                {
+                    "id": session.InstanceIdentifier,
+                    "name": session.Process.name(),
+                    "volume": session.SimpleAudioVolume.GetMasterVolume(),
+                }
+            )
+    return rows
+
+
+@com_context
+def focus_set(ident, volume):
+    from pycaw.pycaw import AudioUtilities
+
+    for session in AudioUtilities.GetAllSessions():
+        if session.InstanceIdentifier == ident:
+            control = session.SimpleAudioVolume
+            control.SetMasterVolume(max(0, min(1, float(volume))), None)
+            if abs(control.GetMasterVolume() - volume) > 0.011:
+                raise ValueError("Приложение не подтвердило громкость")
+            return
+    raise ValueError("Аудиосессия закрыта")

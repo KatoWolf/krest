@@ -9,6 +9,9 @@ from dataclasses import asdict
 def configure_output():
     """Frozen Python ignores PYTHONIOENCODING; pipes still need Unicode output."""
     import sys
+    from windows_stdio import prepare_streams
+
+    prepare_streams()
 
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -35,6 +38,8 @@ def main(argv=None):
     parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--service", help=argparse.SUPPRESS)
     parser.add_argument("--external-script", help=argparse.SUPPRESS)
+    parser.add_argument("--extension-worker", help=argparse.SUPPRESS)
+    parser.add_argument("--extension-output", help=argparse.SUPPRESS)
     parser.add_argument("--command", help="Выполнить одну текстовую команду")
     parser.add_argument(
         "--voice-core", action="store_true", help="Запустить голосовой режим в консоли"
@@ -56,6 +61,36 @@ def main(argv=None):
     parser.add_argument("--status", action="store_true", help="Состояние работающего ядра")
     parser.add_argument("--stop-kernel", action="store_true", help="Завершить ядро и его сервисы")
     args = parser.parse_args(argv)
+    background = (
+        args.check
+        or args.command
+        or args.voice_core
+        or args.kernel
+        or args.service
+        or args.external_script
+        or args.extension_worker
+        or args.game_overlay
+        or args.desktop_worker
+        or args.desktop_service
+        or args.status
+        or args.stop_kernel
+        or args.update
+        or args.rollback
+        or args.restore
+        or args.release_import_check
+        or args.release_model_check
+        or args.release_smoke
+    )
+    if not background:
+        import sys
+        from windows_stdio import relaunch_source_gui
+
+        if relaunch_source_gui(sys.argv[1:] if argv is None else argv):
+            return 0
+    if args.extension_worker:
+        from extension_packages import run_worker
+
+        return run_worker(args.extension_worker, args.extension_output)
     if args.desktop_worker or args.desktop_service:
         from media_desktop import run_worker
 

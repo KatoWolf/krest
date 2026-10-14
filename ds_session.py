@@ -23,6 +23,7 @@ class KrestDS(discord.Client):
         self.tasks = set()
         self.presence_task = None
         self.last_presence = None
+        self.reply_task = None
 
     async def setup_hook(self):
         loop = asyncio.get_running_loop()
@@ -49,6 +50,8 @@ class KrestDS(discord.Client):
         self.overview()
         if self.presence_task is None or self.presence_task.done():
             self.presence_task = asyncio.create_task(self.status_rotator())
+        if self.reply_task is None or self.reply_task.done():
+            self.reply_task = asyncio.create_task(self.deferred_replies())
 
     async def on_disconnect(self):
         emit("disconnected", "Discord: восстанавливаю соединение серверного бота")
@@ -164,10 +167,18 @@ class KrestDS(discord.Client):
             )
 
     def local_status(self):
-        try:
-            return read_json(Path(self.manager.filepath).parent / "current_status.json")
-        except (OSError, ValueError):
-            return {}
+        from bot_activity import local_activity
+
+        return local_activity(Path(self.manager.filepath).parent)
+
+    async def deferred_replies(self):
+        while not self.is_closed():
+            for _, message, _ in self.gate.due():
+                try:
+                    await self.on_message(message, deferred=True)
+                except Exception:
+                    emit("status", "Отложенный автоответ бота не подтверждён")
+            await asyncio.sleep(1)
 
     async def status_rotator(self):
         while not self.is_closed():
@@ -187,6 +198,12 @@ class KrestDS(discord.Client):
                     self.last_presence = current
                 except (discord.DiscordException, OSError):
                     emit("status", "Discord: обновление активности будет повторено")
+            emit(
+                "health",
+                self.gate.last_reason,
+                connected=self.is_ready(),
+                pending=len(self.gate.pending),
+            )
             await asyncio.sleep(20)
 
     async def auto_delete_message(self, message, delay):
@@ -196,7 +213,7 @@ class KrestDS(discord.Client):
         except discord.DiscordException:
             pass
 
-    async def on_message(self, message):
+    async def on_message(self, message, deferred=False):
         if (
             message.author == self.user
             or message.author.bot
@@ -204,23 +221,35 @@ class KrestDS(discord.Client):
         ):
             return
         cfg = self.manager.snapshot()
-        if not self.gate.incoming(message.channel.id, message.id):
+        if not deferred and not self.gate.incoming(message.channel.id, message.id):
             return
         important = urgent(message.content)
-        emit(
-            "notification",
-            "Discord Bot: новое сообщение от " + message.author.display_name[:80],
-            priority="high" if important else "normal",
-            notice_kind="message",
-        )
-        if not cfg["discord_bot"]["auto_reply"] or not self.gate.allow(
-            message.channel.id, cfg["auto_replies"], important
-        ):
+        if not deferred:
+            emit(
+                "notification",
+                "Discord Bot: новое сообщение от " + message.author.display_name[:80],
+                priority="high" if important else "normal",
+                notice_kind="message",
+            )
+        from bot_activity import reply_options
+
+        reply_cfg = reply_options(cfg, "discord_bot")
+        if not cfg["discord_bot"]["auto_reply"]:
             return
+        if not self.gate.allow(message.channel.id, reply_cfg, important):
+            self.gate.postpone(message.channel.id, message, reply_cfg, important)
+            return
+        self.gate.pending.pop(str(message.channel.id), None)
+        activity = self.local_status()
         text = render_reply(
             cfg["owner_name"],
-            self.local_status(),
-            cfg["auto_replies"],
+            activity,
+            self.gate.reply_settings(
+                message.channel.id,
+                reply_cfg,
+                cfg["profile"]["personality"],
+                activity.get("is_playing", False),
+            ),
             bool(message.attachments),
             important,
             personality=cfg["profile"]["personality"],
@@ -233,13 +262,20 @@ class KrestDS(discord.Client):
             return
         delay = cfg["auto_replies"]["delete_seconds"]
         self.gate.delivered(message.channel.id)
+        self.gate.advance(
+            message.channel.id,
+            reply_cfg,
+            cfg["profile"]["personality"],
+            activity.get("is_playing", False),
+        )
+        self.gate.last_reason = "Автоответ доставлен"
         if delay:
             task = asyncio.create_task(self.auto_delete_message(sent, delay))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
 
     async def close(self):
-        tasks = list(self.tasks) + ([self.presence_task] if self.presence_task else [])
+        tasks = list(self.tasks) + [t for t in (self.presence_task, self.reply_task) if t]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -261,7 +297,7 @@ def start_ds_bridge(notifications_queue=None):
         client.run(token, log_handler=None)
     except discord.LoginFailure as exc:
         emit(
-            "error",
+            "auth_required",
             "Discord отклонил Bot Token. Токен личного аккаунта вводится в «Discord · мой аккаунт».",
         )
         raise SystemExit(1) from exc

@@ -43,6 +43,18 @@ class AssistantRuntime:
         self._jobs_lock = threading.RLock()
         self.performance = PerformancePolicy(settings, Path(data_dir) / "activity_profile.json")
         self.center = NotificationCenter(Path(data_dir) / "inbox.sqlite3")
+        from conversation_actions import ConversationActions
+
+        self.conversations = ConversationActions(self)
+        from desktop_context import DesktopContext
+
+        self.desktop = DesktopContext(settings, Path(data_dir) / "file_index.sqlite3")
+        from action_verifier import ActionVerifier
+
+        self.verifier = ActionVerifier(self.publish_notice)
+        from audio_focus import AudioFocus
+
+        self.audio_focus = AudioFocus(settings, Path(data_dir) / "audio_restore.json")
         self.context = CommandContext(self.state)
         from action_undo import UndoHistory
         from command_feedback import CommandFeedback
@@ -112,10 +124,16 @@ class AssistantRuntime:
     def skill_import(self, action, **args):
         imports = self.manager.imports
         if action == "list":
-            return imports.list()
+            result = imports.list()
+            result["modules"] += self.manager.packages.list()
+            return result
         if action == "preview":
+            if Path(args["path"]).suffix.casefold() == ".zip":
+                from extension_packages import inspect_package
+
+                return inspect_package(args["path"])
             return imports.preview(args["path"])
-        if action not in ("install", "enable", "disable", "remove"):
+        if action not in ("install", "enable", "disable", "remove", "settings"):
             raise ValueError("Неизвестное действие импорта")
         from contextlib import ExitStack
 
@@ -125,7 +143,11 @@ class AssistantRuntime:
                     raise ValueError("Дождитесь завершения текущей команды и повторите подключение")
                 stack.callback(lock.release)
             result = (
-                imports.install(args["path"], args["sha256"], args.get("bindings"))
+                self.manager.packages.install(args["path"], args["sha256"])
+                if action == "install" and Path(args["path"]).suffix.casefold() == ".zip"
+                else self.manager.packages.change(args["id"][8:], action, args.get("values"))
+                if str(args.get("id", "")).startswith("package-")
+                else imports.install(args["path"], args["sha256"], args.get("bindings"))
                 if action == "install"
                 else imports.change(args["id"], action)
             )
@@ -135,6 +157,7 @@ class AssistantRuntime:
     def start(self):
         if self._threads:
             return
+        self.manager.packages.event("assistant.started", {}, self)
         self._threads = [
             *[
                 threading.Thread(
@@ -143,6 +166,7 @@ class AssistantRuntime:
                 for lane in self._queues
             ],
             threading.Thread(target=self._scheduler, daemon=True, name="krest-scheduler"),
+            threading.Thread(target=self._file_index_worker, daemon=True, name="krest-file-index"),
             threading.Thread(target=self._downloads, daemon=True, name="krest-downloads"),
             threading.Thread(target=self._catalog_worker, daemon=True, name="krest-catalog"),
         ]
@@ -623,6 +647,7 @@ class AssistantRuntime:
         while not self.stop_event.wait(0.3):
             try:
                 for item in self.state.take_due():
+                    self.manager.packages.event("timer.due", {"label": item.get("label", "")}, self)
                     self.publish_notice(
                         f"Время вышло: {item.get('label', 'Напоминание')}.", "Задачи", "high"
                     )
@@ -644,10 +669,23 @@ class AssistantRuntime:
                             envelope.get("source", "Боты"),
                             envelope.get("priority", "normal"),
                             kind=envelope.get("kind", ""),
+                            target=envelope.get("target"),
                         )
                     else:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
+                game = self.performance.game
+                if game != getattr(self, "_package_game", ""):
+                    self.manager.packages.event(
+                        "game.started" if game else "game.stopped",
+                        {"game": game or self._package_game},
+                        self,
+                    )
+                    self._package_game = game
+                self.audio_focus.tick(bool(self.performance.game))
+                if not self.performance.game:
+                    for row in self.center.take_after_game():
+                        self.publish_notice("После игры: " + row["text"], "Напоминание", "high")
                 self.automation.tick()
                 self.companion.tick()
                 status = {
@@ -670,6 +708,12 @@ class AssistantRuntime:
                 logger.exception("Сбой планировщика")
                 self.events.put(("error", str(exc)))
                 self.stop_event.wait(2)
+
+    def _file_index_worker(self):
+        while not self.stop_event.wait(5):
+            self.desktop.scan(self.stop_event)
+            if self.stop_event.wait(900 if self.performance.game else 300):
+                return
 
     def _catalog_worker(self):
         from app_catalog import scan_apps
@@ -699,9 +743,11 @@ class AssistantRuntime:
                                 self.config_manager.save_config(cfg)
                                 self.events.put(("catalog_changed", None))
                 cfg = self.settings()
+                games = cached_catalog(self.state)
+                self.performance.update_games(games)
                 self.manager.name_vocabulary.update(
                     cfg.get("applications", []),
-                    cached_catalog(self.state),
+                    games,
                     cfg.get("application_aliases", {}),
                 )
             except Exception as exc:
@@ -762,10 +808,14 @@ class AssistantRuntime:
                 self.download_status = "Автосортировка выключена"
             self.stop_event.wait(1)
 
-    def publish_notice(self, text, source="Система", priority="normal", speak=True, kind=""):
+    def publish_notice(
+        self, text, source="Система", priority="normal", speak=True, kind="", target=None
+    ):
         if priority not in ("low", "normal", "high"):
             priority = "normal"
-        ident, fresh = self.center.add(text, source, priority, kind=kind)
+        ident, fresh = self.center.add(text, source, priority, kind=kind, target=target)
+        if isinstance(target, dict) and self.center.muted(source, target.get("chat", "")):
+            return ident
         cfg = self.settings().get("notification_settings", {})
         mode = self.notification_mode or cfg.get("mode", "all")
         if (
@@ -1019,6 +1069,8 @@ class AssistantRuntime:
         voice.stop_speaking()
 
     def close(self):
+        self.verifier.closed.set()
+        self.audio_focus.close()
         with self._request_lock:
             self.stop_event.set()
             for ready in self._queue_ready.values():

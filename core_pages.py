@@ -533,6 +533,41 @@ class CorePages:
                 ("Использовать устройство", self._set_output),
             ],
         )
+        panel = self.card(
+            self.page_bodies["programs"],
+            "Автоматический микшер",
+            "Проценты считаются от исходной громкости. Ручные изменения в микшере Windows сохраняются. Микрофон Discord и общий микрофон Windows — разные устройства управления.",
+        )
+        settings = self.config_mgr.snapshot()["audio_focus"]
+        variables = {
+            k: tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=v)
+            for k, v in settings.items()
+        }
+        for key, caption in (
+            ("enabled", "Управлять громкостью выбранных приложений"),
+            ("duck_speech", "Приглушать их на время ответа Крест"),
+        ):
+            ttk.Checkbutton(panel, text=caption, variable=variables[key]).pack(anchor="w", pady=4)
+        for key, caption in (
+            ("applications", "Процессы через запятую"),
+            ("game_percent", "В игре, %"),
+            ("call_percent", "В звонке, %"),
+            ("speech_percent", "Во время речи Крест, %"),
+        ):
+            self.field(panel, caption, variables[key])
+        ttk.Button(
+            panel,
+            text="Сохранить микшер",
+            command=lambda: self._save_section(
+                "audio_focus", {k: v.get() for k, v in variables.items()}
+            ),
+        ).pack(anchor="w", pady=8)
+        self.label(
+            panel,
+            "«Режим звонка», «звонок окончен», «автоматический звук». Игра определяется автоматически; профиль звонка включается командой.",
+            muted=True,
+            wraplength=650,
+        ).pack(anchor="w")
 
     def _refresh_apps(self):
         if "programs" not in self._built_pages:

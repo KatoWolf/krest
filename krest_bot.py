@@ -555,6 +555,27 @@ def run_krest_service(shared_queue=None):
     from bridge_sdk import emit
 
     emit("ready", "Telegram подтвердил токен бота")
+    auth_lost = threading.Event()
+
+    def check_connection():
+        while not auth_lost.wait(45):
+            try:
+                bot.get_me()
+                emit("health", "Telegram Bot API отвечает; пульт доступен", connected=True)
+            except Exception as exc:
+                if getattr(exc, "error_code", None) in (401, 403):
+                    emit("auth_required", "Telegram отклонил токен пульта. Проверьте его в меню.")
+                    auth_lost.set()
+                    bot.stop_polling()
+                    return
+                emit(
+                    "health",
+                    "Telegram временно недоступен; polling восстановит соединение",
+                    connected=False,
+                )
+
+    threading.Thread(target=check_connection, name="TelegramTerminalHealth", daemon=True).start()
+
     for directory in [UPLOADS_DIR]:
         os.makedirs(directory, exist_ok=True)
     global SHARED_QUEUE
@@ -564,7 +585,7 @@ def run_krest_service(shared_queue=None):
 
     print("--- [KREST TG TERMINAL]: STARTED ---")
 
-    while True:
+    while not auth_lost.is_set():
         try:
             bot.infinity_polling(timeout=20, logger_level=None)
         except requests.exceptions.ReadTimeout:

@@ -136,13 +136,17 @@ class WarframeService:
 
     def status(self):
         with self.lock:
+            from farm_progress import summary
+
+            farm = self.farm_journal.snapshot()
+            farm["summary"] = summary(self.farm_journal, self.store)
             return {
                 "running": self.running,
                 "panel": copy.deepcopy(self.panel)
                 if self.panel.get("until", 0) > time.time()
                 else {},
                 "vision": self.vision.snapshot(),
-                "farm": self.farm_journal.snapshot(),
+                "farm": farm,
                 "route": self.routes.snapshot(),
                 "study": self.study.snapshot(),
                 "started": self.started,
@@ -786,9 +790,15 @@ class WarframeService:
             )
             return {"text": hint}
         if action == "farm_report":
-            text = self.farm_journal.summary()
+            from farm_progress import summary
+
+            text = summary(self.farm_journal, self.store)
             self.show_panel("Warframe · отчёт фарма", text.splitlines(), seconds=45)
             return {"text": text}
+        if action == "confirm_loot":
+            from farm_progress import credit
+
+            return {"text": credit(self.farm_journal, self.store, args["name"], args["quantity"])}
         if action == "show_briefing":
             try:
                 world = self.world()
@@ -1285,6 +1295,7 @@ class WarframeService:
 
 ACTIONS = {
     "farm_report",
+    "confirm_loot",
     "confirm_progress",
     "vision_teach",
     "vision_check",

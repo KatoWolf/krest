@@ -74,7 +74,11 @@ def _playback():
                     and not getattr(_state, "is_muted", False)
                     and _settings().get("app_settings", {}).get("voice_enabled", True)
                 ):
-                    _engine.speak(text, cancelled=lambda: generation != _generation)
+                    from contextlib import nullcontext
+
+                    focus = getattr(getattr(_state, "runtime", None), "audio_focus", None)
+                    with focus.speech() if focus is not None else nullcontext():
+                        _engine.speak(text, cancelled=lambda: generation != _generation)
         except Exception:
             logger.exception("Ошибка воспроизведения")
         finally:

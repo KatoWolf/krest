@@ -141,6 +141,13 @@ async def _control(action, preferred="", seconds=10):
         sticky = _last_source if time.monotonic() - _last_used < 120 else ""
         session = choose_session(sessions, current, preferred, sticky)
     playback = session.get_playback_info()
+    before = ""
+    if action in ("next", "prev"):
+        try:
+            info = await asyncio.wait_for(session.try_get_media_properties_async(), timeout=0.12)
+            before = info.title or ""
+        except (TimeoutError, OSError):
+            pass  # Verification must not delay or prevent a playback command.
     methods = {
         "play": ("is_play_enabled", "try_play_async"),
         "pause": ("is_pause_enabled", "try_pause_async"),
@@ -156,6 +163,7 @@ async def _control(action, preferred="", seconds=10):
         return {
             "success": True,
             "message": "Уже на паузе." if action == "pause" else "Музыка уже играет.",
+            "verification": "confirmed",
         }
     if action == "seek":
         if not getattr(playback.controls, "is_playback_position_enabled", False):
@@ -181,7 +189,7 @@ async def _control(action, preferred="", seconds=10):
         raise MediaError("Плеер отклонил команду. Проверьте его состояние.")
     with _selection_lock:
         _last_source, _last_used = session.source_app_user_model_id, time.monotonic()
-    return {
+    result = {
         "success": True,
         "message": {
             "play": "Продолжила воспроизведение.",
@@ -192,6 +200,25 @@ async def _control(action, preferred="", seconds=10):
             "play_pause": "Переключила воспроизведение.",
         }[action],
     }
+    if action in ("next", "prev"):
+        result.update(
+            verification="pending" if before else "unconfirmed",
+            message="Плеер принял переключение трека.",
+            check={
+                "kind": "music",
+                "action": action,
+                "before": before,
+                "source": session.source_app_user_model_id,
+            },
+        )
+        if not before:
+            result.pop("check", None)
+    elif action in ("play", "pause"):
+        confirmed = session.get_playback_info().playback_status == (4 if action == "play" else 5)
+        result["verification"] = "confirmed" if confirmed else "unconfirmed"
+        if not confirmed:
+            result["message"] = "Плеер принял команду, состояние воспроизведения ещё не обновилось."
+    return result
 
 
 def run(coroutine):

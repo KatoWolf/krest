@@ -18,6 +18,7 @@ class PerformancePolicy:
         self.override = None
         self.active = "balanced"
         self.game = ""
+        self.game_folders = {}
         self.metrics = {"cpu": 0, "memory_mb": 0, "processes": 1}
         self.processes = {psutil.Process().pid: psutil.Process()}
         self._last_sample = self._last_detect = 0
@@ -31,6 +32,18 @@ class PerformancePolicy:
             self._last_detect = 0
         self.tick(force=True)
 
+    def update_games(self, games):
+        folders = {}
+        for game in games:
+            if not game.get("installed") or not game.get("library") or not game.get("install_dir"):
+                continue
+            parent = Path(game["library"]) / "steamapps" / "common"
+            path = (parent / game["install_dir"]).resolve()
+            if path.is_relative_to(parent.resolve()):
+                folders[str(path).casefold()] = str(game.get("name", "Игра"))[:100]
+        with self._lock:
+            self.game_folders = folders
+
     def tick(self, force=False):
         with self._lock:
             now = time.monotonic()
@@ -39,15 +52,31 @@ class PerformancePolicy:
             if force or now - self._last_detect >= 10:
                 self._last_detect = now
                 self.game = ""
-                if mode == "auto":
-                    names = {
-                        n.strip().casefold()
-                        for n in cfg.get("game_processes", "cs2.exe,dota2.exe").split(",")
-                        if n.strip()
-                    }
-                    for process in psutil.process_iter(["name"]):
-                        if (process.info["name"] or "").casefold() in names:
-                            self.game = process.info["name"]
+                # Detect games even when the resource profile is manually selected.
+                names = {
+                    n.strip().casefold()
+                    for n in cfg.get("game_processes", "cs2.exe,dota2.exe").split(",")
+                    if n.strip()
+                }
+                for process in psutil.process_iter(["name", "exe"]):
+                    if (process.info["name"] or "").casefold() in names:
+                        self.game = process.info["name"]
+                        break
+                    executable = str(process.info.get("exe") or "").casefold()
+                    if executable and not any(
+                        v in (process.info.get("name") or "").casefold()
+                        for v in ("launcher", "crash", "updater", "uninstall")
+                    ):
+                        matched = next(
+                            (
+                                name
+                                for folder, name in self.game_folders.items()
+                                if executable.startswith(folder + __import__("os").sep)
+                            ),
+                            None,
+                        )
+                        if matched:
+                            self.game = matched
                             break
                 self.active = (
                     "game"

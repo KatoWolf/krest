@@ -64,6 +64,18 @@ def main():
         try:
             data = monitor.refresh(cfg, remote=remote)
             emit("status", f"Игр: {len(data['games'])} · Ошибок: {len(data['errors'])}")
+            emit(
+                "health",
+                "Монитор отвечает. "
+                + (
+                    "Доступ Steam требует внимания: "
+                    + "; ".join(str(v) for v in data["errors"])[:300]
+                    if data["errors"]
+                    else "Каталог обновлён"
+                ),
+                connected=True,
+                timeout=600,
+            )
         except Exception as exc:
             emit("error", f"Проверка Steam не завершена: {type(exc).__name__}")
         if remote:

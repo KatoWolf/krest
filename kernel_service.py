@@ -340,6 +340,8 @@ class Kernel:
                 str(args.get("source", "Меню"))[:80],
                 args.get("priority", "normal"),
             )
+        if method == "conversation":
+            return rt.conversations.call(str(args["action"]), args.get("ident"), str(args.get("text", "")))
         if method.startswith("service."):
             name = method[8:]
             if name == "autostart":

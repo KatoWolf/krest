@@ -24,6 +24,14 @@ DEFAULT_CONFIG = {
     "profile": {"onboarding_completed": False, "personality": "friendly"},
     "license": {"code": ""},
     "media": {"preferred_app": ""},
+    "audio_focus": {
+        "enabled": False,
+        "duck_speech": True,
+        "applications": "YandexMusic.exe,Spotify.exe",
+        "game_percent": 50,
+        "call_percent": 20,
+        "speech_percent": 25,
+    },
     "remote_control": {
         "enabled": False,
         "block_when_locked": True,
@@ -105,6 +113,8 @@ DEFAULT_CONFIG = {
         "variant": 0,
         "urgent_only": False,
         "paused_until": 0,
+        "rotate": True,
+        "defer_replies": True,
     },
     "discord_account": {
         "enabled": False,
@@ -112,6 +122,9 @@ DEFAULT_CONFIG = {
         "update_status": False,
         "follow_activity": False,
         "status_text": "Крест рядом",
+        "rotate_status": True,
+        "statuses": "",
+        "game_statuses": "",
     },
     "discord_bot": {
         "auto_reply": True,
@@ -124,6 +137,9 @@ DEFAULT_CONFIG = {
         "update_bio": False,
         "follow_activity": True,
         "bio_text": "Крест рядом",
+        "rotate_status": True,
+        "statuses": "",
+        "game_statuses": "",
     },
     "discord_presence": {
         "application_id": "",
@@ -135,6 +151,7 @@ DEFAULT_CONFIG = {
     "skills": {
         name: True
         for name in (
+            "assistant_tools",
             "basic",
             "discord_voice",
             "workflows",
@@ -168,6 +185,19 @@ def merge(default, values):
 
 
 def validate(data):
+    audio = data["audio_focus"]
+    if any(type(audio[k]) is not bool for k in ("enabled", "duck_speech")):
+        raise ValueError("Автоматический микшер: нужны переключатели")
+    if not isinstance(audio["applications"], str) or len(audio["applications"]) > 2000:
+        raise ValueError("Укажите имена процессов микшера через запятую")
+    for key in ("game_percent", "call_percent", "speech_percent"):
+        if (
+            isinstance(audio[key], bool)
+            or not str(audio[key]).isdigit()
+            or not 0 <= int(audio[key]) <= 100
+        ):
+            raise ValueError("Громкость профиля: 0–100% от исходной")
+        audio[key] = int(audio[key])
     # Retire particle settings from older installations on load and save.
     data.pop("visual_effects", None)
     data.pop("dota_guide", None)
@@ -253,19 +283,33 @@ def validate(data):
 
     if replies["personality"] not in (*REPLY_BANK, "profile"):
         raise ValueError("Неизвестная личность автоответов")
-    for key, low, high in (("variant", 0, 5), ("paused_until", 0, 4102444800)):
+    for key, low, high in (("variant", 0, 9), ("paused_until", 0, 4102444800)):
         value = replies[key]
         if isinstance(value, bool) or not str(value).isdigit() or not low <= int(value) <= high:
             raise ValueError("Некорректная настройка автоответов: " + key)
         replies[key] = int(value)
     for section, keys in (
-        ("auto_replies", ("enabled", "share_activity", "urgent_only")),
-        ("discord_account", ("enabled", "auto_reply", "update_status", "follow_activity")),
+        ("auto_replies", ("enabled", "share_activity", "urgent_only", "rotate", "defer_replies")),
+        (
+            "discord_account",
+            ("enabled", "auto_reply", "update_status", "follow_activity", "rotate_status"),
+        ),
         ("discord_bot", ("auto_reply", "follow_activity")),
-        ("telegram_user", ("auto_reply", "update_bio", "follow_activity")),
+        ("telegram_user", ("auto_reply", "update_bio", "follow_activity", "rotate_status")),
     ):
         if any(type(data[section][key]) is not bool for key in keys):
             raise ValueError("Настройки автоответов: нужны переключатели")
+    for service in ("telegram_user", "discord_account"):
+        for key in ("statuses", "game_statuses"):
+            value = data[service][key]
+            if (
+                not isinstance(value, str)
+                or len(value.splitlines()) > 100
+                or any(
+                    len(v) > (70 if service == "telegram_user" else 128) for v in value.splitlines()
+                )
+            ):
+                raise ValueError("Статусы: до 100 строк, Telegram до 70, Discord до 128 символов")
     for key, low, high in (("cooldown_seconds", 60, 3600), ("delete_seconds", 0, 3600)):
         value = replies[key]
         if isinstance(value, bool) or not str(value).isdigit() or not low <= int(value) <= high:

@@ -188,7 +188,7 @@ def apply_microphone(window, action):
 
 
 def _result(muted, message):
-    return {"success": True, "muted": muted, "message": message}
+    return {"success": True, "muted": muted, "message": message, "verification": "confirmed"}
 
 
 def perform(action):

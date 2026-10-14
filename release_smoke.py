@@ -53,6 +53,9 @@ def check_kernel(config_path):
             ("крест можешь сейчас пожалуйста переключить трек", "skills.media.next_track"),
             ("крест кто написал", "skills.workflows.missed_messages"),
             ("крест отчёт фарма", "skills.warframe.farm_report"),
+            ("крест найди последний архив", "skills.assistant_tools.find_local_file"),
+            ("крест ответь ему буду через час", "skills.assistant_tools.draft_reply"),
+            ("крест подтверди добычу акси количество один", "skills.warframe.confirm_loot"),
         ):
             parsed = client.call("command.parse", text=phrase)
             if parsed["skill"] != expected:
@@ -242,6 +245,39 @@ def check_dependencies():
     if torch.tensor([1.0, 2.0]).sum().item() != 3:
         raise RuntimeError("PyTorch не выполнил операцию на CPU")
     print("Голосовые и сервисные библиотеки загружены; CPU PyTorch проверен.")
+    check_extension_process()
+
+
+def check_extension_process():
+    """Run a real trusted demo ZIP in a child EXE/Python process."""
+    import tempfile
+    from pathlib import Path
+    from configuration import ConfigManager
+    from skill_manager import SkillManager
+    from app_state import AssistantState
+    from extension_packages import save_template, inspect_package
+    from app_paths import compiled
+
+    if compiled() and __import__("os").name == "nt":
+        import ctypes
+
+        if ctypes.windll.kernel32.GetConsoleWindow():
+            raise RuntimeError("Оконная сборка создала консоль")
+    with tempfile.TemporaryDirectory(prefix="krest-package-check-") as folder:
+        root = Path(folder)
+        config = ConfigManager(root / "config.json")
+        manager = SkillManager(config.snapshot, plugin_dir=root / "imported_skills")
+        path = root / "demo.zip"
+        save_template(path)
+        preview = inspect_package(path)
+        installed = manager.packages.install(path, preview["sha256"])
+        state = AssistantState(root / "state.json")
+        state.config_getter = config.snapshot
+        result = manager.execute("привет от расширения", state)
+        if not result.success or result.text != "Расширение подключено!":
+            raise RuntimeError("Пакет не выполнился в отдельном процессе: " + result.text)
+        manager.packages.change(installed["id"][8:], "remove")
+    print("Пакет ZIP: отдельный процесс, Unicode и результат проверены.", flush=True)
 
 
 def check_menu_surface():

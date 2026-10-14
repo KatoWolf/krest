@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 import sqlite3
 import time
+import json
 
 
 class NotificationCenter:
@@ -15,6 +16,15 @@ class NotificationCenter:
             )
             if "kind" not in {row[1] for row in db.execute("PRAGMA table_info(inbox)")}:
                 db.execute("ALTER TABLE inbox ADD COLUMN kind TEXT NOT NULL DEFAULT ''")
+            for column, declaration in (
+                ("target", "TEXT NOT NULL DEFAULT '{}'"),
+                ("after_game", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if column not in {row[1] for row in db.execute("PRAGMA table_info(inbox)")}:
+                    db.execute(f"ALTER TABLE inbox ADD COLUMN {column} {declaration}")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS chat_mutes(source TEXT, chat TEXT, until REAL, PRIMARY KEY(source,chat))"
+            )
 
     @contextmanager
     def connect(self):
@@ -26,24 +36,29 @@ class NotificationCenter:
         finally:
             db.close()
 
-    def add(self, text, source="Система", priority="normal", now=None, kind=""):
+    def add(self, text, source="Система", priority="normal", now=None, kind="", target=None):
         if priority not in ("low", "normal", "high"):
             raise ValueError("Неизвестный приоритет уведомления")
         now = time.time() if now is None else now
         text, source = str(text)[:4000], str(source)[:80]
+        target = target if isinstance(target, dict) else {}
+        encoded = json.dumps(
+            {k: str(target[k])[:100] for k in ("chat", "sender", "message") if k in target},
+            ensure_ascii=False,
+        )
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT id FROM inbox WHERE source=? AND text=? AND priority=? AND kind=? AND updated>=? AND unread=1 ORDER BY id DESC LIMIT 1",
-                (source, text, priority, kind, now - 60),
+                "SELECT id FROM inbox WHERE source=? AND text=? AND priority=? AND kind=? AND target=? AND updated>=? AND unread=1 ORDER BY id DESC LIMIT 1",
+                (source, text, priority, kind, encoded, now - 60),
             ).fetchone()
             if row:
                 db.execute("UPDATE inbox SET updated=?,count=count+1 WHERE id=?", (now, row["id"]))
                 ident = row["id"]
             else:
                 ident = db.execute(
-                    "INSERT INTO inbox(created,updated,source,text,priority,count,unread,kind) VALUES (?,?,?,?,?,1,1,?)",
-                    (now, now, source, text, priority, kind),
+                    "INSERT INTO inbox(created,updated,source,text,priority,count,unread,kind,target) VALUES (?,?,?,?,?,1,1,?,?)",
+                    (now, now, source, text, priority, kind, encoded),
                 ).lastrowid
             db.execute(
                 "DELETE FROM inbox WHERE id NOT IN (SELECT id FROM inbox ORDER BY updated DESC LIMIT 1000)"
@@ -53,7 +68,7 @@ class NotificationCenter:
     def list(self, unread=False):
         with self.connect() as db:
             return [
-                dict(r)
+                dict(r, target=json.loads(r["target"]))
                 for r in db.execute(
                     "SELECT * FROM inbox "
                     + ("WHERE unread=1 " if unread else "")
@@ -67,6 +82,32 @@ class NotificationCenter:
                 db.execute("UPDATE inbox SET unread=0")
             else:
                 db.execute("UPDATE inbox SET unread=0 WHERE id=?", (ident,))
+
+    def mute(self, source, chat, until):
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO chat_mutes VALUES (?,?,?)", (source, str(chat), until)
+            )
+
+    def muted(self, source, chat):
+        with self.connect() as db:
+            return bool(
+                db.execute(
+                    "SELECT 1 FROM chat_mutes WHERE source=? AND chat=? AND until>?",
+                    (source, str(chat), time.time()),
+                ).fetchone()
+            )
+
+    def after_game(self, ident):
+        with self.connect() as db:
+            db.execute("UPDATE inbox SET after_game=1 WHERE id=?", (ident,))
+
+    def take_after_game(self):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = [dict(r) for r in db.execute("SELECT * FROM inbox WHERE after_game=1")]
+            db.execute("UPDATE inbox SET after_game=0 WHERE after_game=1")
+            return rows
 
 
 def should_speak(priority, mode, gaming, important_only=True):

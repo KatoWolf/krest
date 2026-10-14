@@ -158,6 +158,9 @@ class ExperiencePages:
                     )
                 if detail.get("error"):
                     text += "\n" + detail["error"][:220]
+                if bridge.get("diagnostic"):
+                    text += "\n" + bridge["diagnostic"]
+                    text += f" · ожидают ответа: {bridge.get('pending', 0)}"
                 if widget.cget("text") != text:
                     widget.configure(text=text)
 

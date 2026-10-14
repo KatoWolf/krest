@@ -20,6 +20,8 @@ DEFAULT_REPLIES = {
     "variant": 0,
     "urgent_only": False,
     "paused_until": 0,
+    "rotate": True,
+    "defer_replies": True,
 }
 
 
@@ -49,8 +51,12 @@ def render_reply(
         reason = "сосредоточен на работе"
     selected = cfg["personality"] if cfg["personality"] != "profile" else personality
     bank = REPLY_BANK.get(selected, REPLY_BANK["friendly"])
+    if cfg["share_activity"] and status.get("is_playing"):
+        from reply_bank import GAME_REPLIES
+
+        bank = GAME_REPLIES.get(selected, GAME_REPLIES["friendly"])
     try:
-        variant = max(0, min(5, int(cfg["variant"])))
+        variant = max(0, int(cfg["variant"])) % len(bank)
     except (ValueError, TypeError):
         variant = 0
     body = bank[variant].format(owner=owner, reason=reason)
@@ -80,6 +86,9 @@ class ReplyGate:
         self.automatic_ids = {}
         self.received = {}
         self.blocked_until = 0
+        self.variants = {}
+        self.pending = {}
+        self.last_reason = "Готов к входящим сообщениям"
 
     def incoming(self, contact, ident):
         """Deduplicate gateway retries independently of auto-reply cooldowns."""
@@ -122,17 +131,78 @@ class ReplyGate:
         if len(self.manual) >= 1000:
             self.manual.pop(next(iter(self.manual)))
         self.manual[str(contact)] = self.clock()
+        self.pending.pop(str(contact), None)
 
     def failed(self, contact):
         """A failed send must not count as a delivered auto-reply."""
         self.sent.pop(str(contact), None)
         self.automatic.pop(str(contact), None)
 
+    def reply_settings(self, contact, settings, personality, playing=False):
+        """Advance only after a successful send; never repeat adjacent variants."""
+        from reply_bank import GAME_REPLIES
+
+        cfg = {**DEFAULT_REPLIES, **settings}
+        if not cfg["rotate"]:
+            return cfg
+        selected = cfg["personality"] if cfg["personality"] != "profile" else personality
+        bank = GAME_REPLIES if playing and cfg["share_activity"] else REPLY_BANK
+        count = len(bank.get(selected, bank["friendly"]))
+        key = (str(contact), selected, bank is GAME_REPLIES)
+        cfg["variant"] = (int(cfg["variant"]) + self.variants.get(key, 0)) % count
+        return cfg
+
+    def advance(self, contact, settings, personality, playing=False):
+        selected = settings.get("personality", "profile")
+        selected = personality if selected == "profile" else selected
+        key = (str(contact), selected, bool(playing and settings.get("share_activity")))
+        if len(self.variants) >= 2000 and key not in self.variants:
+            self.variants.pop(next(iter(self.variants)))
+        self.variants[key] = self.variants.get(key, 0) + 1
+
+    def wait_seconds(self, contact, settings=None, important=False):
+        cfg = {**DEFAULT_REPLIES, **(settings or {})}
+        now = self.clock()
+        if not cfg["enabled"] or (cfg["urgent_only"] and not important):
+            self.last_reason = "Автоответы выключены или включён режим только срочных"
+            return None
+        if time.time() < cfg["paused_until"]:
+            self.last_reason = "Общая пауза автоответов"
+            return None
+        key = str(contact)
+        if now - self.manual.get(key, -1e9) < 300:
+            self.last_reason = "Вы уже ответили контакту; пауза 5 минут"
+            return None
+        delay = max(60, cfg["cooldown_seconds"] // 3) if important else cfg["cooldown_seconds"]
+        wait = max(0, self.blocked_until - now, delay - (now - self.sent.get(key, -1e9)))
+        self.last_reason = (
+            f"Следующий ответ через {int(wait) + 1} сек." if wait else "Можно ответить"
+        )
+        return wait
+
+    def postpone(self, contact, payload, settings, important=False):
+        wait = self.wait_seconds(contact, settings, important)
+        if wait is None or not settings.get("defer_replies", True):
+            return False
+        key = str(contact)
+        if len(self.pending) >= 100 and key not in self.pending:
+            self.last_reason = "Очередь автоответов заполнена"
+            return False
+        self.pending[key] = (self.clock() + max(1, wait), payload, important)
+        return True
+
+    def due(self):
+        now = self.clock()
+        result = []
+        for key, (deadline, payload, important) in list(self.pending.items()):
+            if now >= deadline:
+                self.pending.pop(key, None)
+                result.append((key, payload, important))
+        return result
+
     def allow(self, contact, settings=None, important=False):
         cfg = {**DEFAULT_REPLIES, **(settings or {})}
-        if not cfg["enabled"]:
-            return False
-        if time.time() < cfg["paused_until"] or cfg["urgent_only"] and not important:
+        if self.wait_seconds(contact, cfg, important) != 0:
             return False
         now = self.clock()
         key = str(contact)

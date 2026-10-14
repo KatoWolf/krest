@@ -4,15 +4,22 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
+from windows_stdio import prepare_streams
+
+prepare_streams()
+_emit_lock = threading.Lock()
 
 PREFIX = "KREST_EVENT "
 
 
 def emit(kind, text="", **values):
-    print(
-        PREFIX + json.dumps({"type": kind, "text": str(text)[:2000], **values}, ensure_ascii=False),
-        flush=True,
-    )
+    with _emit_lock:
+        print(
+            PREFIX
+            + json.dumps({"type": kind, "text": str(text)[:2000], **values}, ensure_ascii=False),
+            flush=True,
+        )
 
 
 def commands():

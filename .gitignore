@@ -31,6 +31,9 @@ templates.json
 *-premium-code.txt
 
 inbox.sqlite3*
+file_index.sqlite3*
+audio_restore.json
+extensions/
 activity_profile.json
 .krest-sort-history.sqlite3*
 

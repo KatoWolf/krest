@@ -14,6 +14,7 @@ class ScrollViewport(tk.Frame):
         self._layout_job = None
         self._placement = None
         self._closed = False
+        self._redraw_job = None
         self.bind("<Configure>", self._schedule, add="+")
         self.content.bind("<Configure>", self._schedule, add="+")
         self.bind("<Destroy>", self._destroyed, add="+")
@@ -45,6 +46,10 @@ class ScrollViewport(tk.Frame):
             self.content.place_configure(
                 x=0, y=-self.offset, width=placement[1], relwidth=0, height=self.total
             )
+            # Windows can retain stale child text while moving a native window.
+            # Invalidate the visible subtree once per coalesced scroll event.
+            if self._redraw_job is None:
+                self._redraw_job = self.after_idle(self.redraw)
         if self._command:
             self._command(*self.yview())
 
@@ -72,9 +77,31 @@ class ScrollViewport(tk.Frame):
         if event is not None and event.widget is not self:
             return
         self._closed = True
+        if self._redraw_job is not None:
+            self.after_cancel(self._redraw_job)
+            self._redraw_job = None
         if self._layout_job is not None:
             self.after_cancel(self._layout_job)
             self._layout_job = None
+
+    def redraw(self):
+        self._redraw_job = None
+        if self._closed or not self.winfo_ismapped():
+            return
+        import os
+
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            user = ctypes.WinDLL("user32")
+            user.RedrawWindow.argtypes = [
+                wintypes.HWND,
+                ctypes.c_void_p,
+                wintypes.HANDLE,
+                wintypes.UINT,
+            ]
+            user.RedrawWindow(self.winfo_id(), None, None, 0x1 | 0x4 | 0x80 | 0x100)
 
     def destroy(self):
         self._destroyed()

@@ -124,6 +124,9 @@ class SkillManager:
         )
         self.imports = SkillImports(self, root)
         self.imports.load_all()
+        from extension_packages import ExtensionPackages
+
+        self.packages = ExtensionPackages(self, Path(root).parent / "extensions")
 
     def _load(self, folder, reload=False):
         root = self.base_dir / folder
@@ -166,21 +169,28 @@ class SkillManager:
         self.load_skills(reload=True)
         self.load_custom_plugins(reload=True)
         self.imports.load_all()
+        self.packages.load_all()
 
     def catalog(self):
         with _registry_lock:
             prefix = self.imports.prefix if hasattr(self, "imports") else ""
-            return [
+            result = [
                 e
                 for e in SKILL_REGISTRY
                 if not e.func.__module__.startswith("krest_imported_")
                 or e.func.__module__.startswith(prefix)
                 and bool(prefix)
             ]
+            return [
+                e
+                for e in result
+                if not e.func.__module__.startswith("krest_package_")
+                or e.func.__module__.startswith(getattr(self, "package_prefix", "__none__"))
+            ]
 
     def availability(self, entry):
         if self.settings().get("safe_mode", False) and entry.func.__module__.startswith(
-            ("plugins.", "krest_imported_")
+            ("plugins.", "krest_imported_", "krest_package_")
         ):
             return "Сторонние навыки отключены в безопасном режиме"
         if not self.settings().get("skills", {}).get(entry.module, True):
@@ -268,6 +278,9 @@ class SkillManager:
             }
             with use_state(state), voice.capture() as messages:
                 value = entry.func(**kwargs)
+            verifier = getattr(getattr(state, "runtime", None), "verifier", None)
+            if verifier is not None:
+                verifier.record(entry.id, value)
             output = "\n".join(messages)
             if not output and value is not None and not isinstance(value, bool):
                 output = format_result(value) if isinstance(value, (dict, list)) else str(value)
@@ -279,7 +292,15 @@ class SkillManager:
                 detail = format_result(value)
                 if detail not in output:
                     output = (output + "\n" + detail).strip()
-            if success and not messages and output:
+            if (
+                success
+                and not messages
+                and output
+                and not (
+                    isinstance(value, dict)
+                    and value.get("verification") in ("pending", "unconfirmed")
+                )
+            ):
                 from action_replies import action_reply
 
                 output = action_reply(entry.id, output, state)

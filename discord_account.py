@@ -71,7 +71,7 @@ class AccountSession:
         except Exception:
             emit("status", "Автоответ отправлен; удалить его автоматически не удалось")
 
-    async def message(self, session, data):
+    async def message(self, session, data, deferred=False):
         author = data.get("author") or {}
         channel = str(data.get("channel_id", ""))
         if data.get("guild_id") or not channel.isdigit():
@@ -97,22 +97,42 @@ class AccountSession:
             if len(self.dm_channels) >= 1000:
                 self.dm_channels.clear()
             self.dm_channels.add(channel)
-        if not self.gate.incoming(channel, data.get("id")):
+        if not deferred and not self.gate.incoming(channel, data.get("id")):
             return
-        emit(
-            "notification",
-            "Discord: новое сообщение от "
-            + str(author.get("global_name") or author.get("username", "контакта"))[:80],
-            priority="high" if important else "normal",
-            notice_kind="message",
-        )
-        if not opts["auto_reply"] or not self.gate.allow(channel, cfg["auto_replies"], important):
+        if not deferred:
+            emit(
+                "notification",
+                "Discord: новое сообщение от "
+                + str(author.get("global_name") or author.get("username", "контакта"))[:80],
+                priority="high" if important else "normal",
+                notice_kind="message",
+                target={
+                    "chat": channel,
+                    "sender": str(author.get("global_name") or author.get("username", "контакта"))[
+                        :80
+                    ],
+                    "message": str(data.get("id", "")),
+                },
+            )
+        from bot_activity import reply_options, chat_muted
+
+        if chat_muted(Path(self.manager.filepath).parent, "discord_account.py", channel):
+            self.gate.pending.pop(channel, None)
             return
+        reply_cfg = reply_options(cfg, "discord_account")
+        if not opts["auto_reply"]:
+            return
+        if not self.gate.allow(channel, reply_cfg, important):
+            self.gate.postpone(channel, data, reply_cfg, important)
+            return
+        self.gate.pending.pop(channel, None)
         status = self.local_status()
         text = render_reply(
             cfg["owner_name"],
             status,
-            cfg["auto_replies"],
+            self.gate.reply_settings(
+                channel, reply_cfg, cfg["profile"]["personality"], status.get("is_playing", False)
+            ),
             bool(data.get("attachments")),
             important,
             personality=cfg["profile"]["personality"],
@@ -135,6 +155,10 @@ class AccountSession:
             raise
         ident = str(sent.get("id", ""))
         self.gate.delivered(channel, ident)
+        self.gate.advance(
+            channel, reply_cfg, cfg["profile"]["personality"], status.get("is_playing", False)
+        )
+        self.gate.last_reason = "Автоответ доставлен"
         self.own_messages.add(ident)
         if len(self.own_messages) > 1000:
             self.own_messages = {ident}
@@ -145,10 +169,23 @@ class AccountSession:
             task.add_done_callback(self.deletions.discard)
 
     def local_status(self):
-        try:
-            return read_json(Path(self.manager.filepath).parent / "current_status.json")
-        except (OSError, ValueError):
-            return {}
+        from bot_activity import local_activity
+
+        return local_activity(Path(self.manager.filepath).parent)
+
+    async def reply_worker(self, session):
+        while True:
+            for _, data, _ in self.gate.due():
+                try:
+                    await self.message(session, data, deferred=True)
+                except PermissionError:
+                    raise
+                except Exception:
+                    emit(
+                        "status",
+                        "Отложенный автоответ не подтверждён; следующий запрос будет обработан",
+                    )
+            await asyncio.sleep(1)
 
     async def status_loop(self, session, ws):
         while True:
@@ -157,12 +194,11 @@ class AccountSession:
                 await ws.close()
                 return
             if cfg["update_status"]:
-                text = cfg["status_text"]
-                if cfg["follow_activity"]:
-                    state = self.local_status()
-                    text = "В игре · Крест рядом" if state.get("is_playing") else cfg["status_text"]
+                from bot_activity import status_text
+
+                text = status_text(self.config(), "discord_account", self.local_status())
                 if self.last_status is None or (
-                    text != self.last_status and time.monotonic() - self.status_updated > 300
+                    text != self.last_status and time.monotonic() - self.status_updated >= 300
                 ):
                     try:
                         await self.request(
@@ -185,6 +221,13 @@ class AccountSession:
                         continue
                     self.last_status = text
                     self.status_updated = time.monotonic()
+            emit(
+                "health",
+                self.gate.last_reason,
+                connected=not ws.closed,
+                pending=len(self.gate.pending),
+                replies=len(self.gate.sent),
+            )
             await asyncio.sleep(30)
 
     async def consume_messages(self, session, incoming):
@@ -204,6 +247,9 @@ class AccountSession:
 
     async def run(self):
         import aiohttp
+        from account_control import AccountControl
+
+        control = AccountControl()
 
         cfg = self.config()
         token = cfg["api_keys"]["discord_user_token"].strip()
@@ -212,6 +258,20 @@ class AccountSession:
         async with aiohttp.ClientSession(
             headers={"Authorization": token}, timeout=aiohttp.ClientTimeout(total=25)
         ) as session:
+
+            async def manual_reply(chat, text):
+                if str(chat) not in self.dm_channels or str(chat) not in {
+                    key[0] for key in self.gate.received
+                }:
+                    raise ValueError("Нет свежего входящего от этого личного чата")
+                self.gate.outgoing(chat)
+                await self.request(
+                    session,
+                    "POST",
+                    f"/channels/{chat}/messages",
+                    json={"content": text, "allowed_mentions": {"parse": []}},
+                )
+
             identity = await self.request(session, "GET", "/users/@me")
             if identity.get("bot"):
                 raise ValueError("Это токен бота. Используйте вкладку «Discord Bot»")
@@ -264,6 +324,13 @@ class AccountSession:
                             op = event.get("op")
                             if op == 11:
                                 self.acknowledged = True
+                                emit(
+                                    "health",
+                                    self.gate.last_reason,
+                                    connected=True,
+                                    pending=len(self.gate.pending),
+                                    replies=len(self.gate.sent),
+                                )
                             elif op == 1:
                                 await ws.send_json({"op": 1, "d": self.sequence})
                             elif op in (7, 9):
@@ -274,13 +341,22 @@ class AccountSession:
                                     for c in (event.get("d") or {}).get("private_channels", [])
                                     if isinstance(c, dict) and c.get("type") == 1 and c.get("id")
                                 }
+                                control.attach(manual_reply)
                                 emit(
                                     "ready",
                                     "Личный аккаунт Discord подключён: "
                                     + str(identity.get("username", ""))[:80],
+                                    capabilities=["reply"],
                                 )
                                 watch(self.status_loop(session, ws))
                                 watch(self.consume_messages(session, incoming))
+                                watch(self.reply_worker(session))
+                            elif event.get("t") == "CHANNEL_CREATE":
+                                channel = event.get("d") or {}
+                                if channel.get("type") == 1 and channel.get("id"):
+                                    self.dm_channels.add(str(channel["id"]))
+                            elif event.get("t") == "CHANNEL_DELETE":
+                                self.dm_channels.discard(str((event.get("d") or {}).get("id")))
                             elif event.get("t") == "MESSAGE_CREATE":
                                 data = event.get("d") or {}
                                 if not data.get("guild_id"):
@@ -304,6 +380,7 @@ class AccountSession:
                 except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, RuntimeError):
                     emit("disconnected", "Переподключаю личную сессию Discord")
                 finally:
+                    control.detach()
                     for task in tasks:
                         task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
@@ -329,7 +406,7 @@ def main():
     except Exception as exc:
         # Never print token-bearing HTTP objects or tracebacks.
         emit(
-            "error",
+            "auth_required" if isinstance(exc, PermissionError) else "error",
             str(exc)
             if isinstance(exc, (ValueError, PermissionError))
             else "Личная сессия остановлена. Проверьте доступ Discord и настройки.",

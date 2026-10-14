@@ -75,7 +75,15 @@ def launch(name, settings):
         if not path.is_file() or path.suffix.casefold() not in (".lnk", ".exe"):
             raise ValueError("Программа была удалена или путь изменился")
         os.startfile(str(path))
-    return "Запрос на запуск передан Windows: " + item["name"]
+    message = "Запрос на запуск передан Windows: " + item["name"]
+    if item["kind"] == "exe":
+        return {
+            "success": True,
+            "message": message,
+            "verification": "pending",
+            "check": {"kind": "process", "path": item["target"]},
+        }
+    return message
 
 
 def validate_apps(data):

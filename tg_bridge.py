@@ -82,13 +82,9 @@ def get_owner_name() -> str:
 
 
 async def get_local_status() -> dict:
-    if os.path.exists(STATUS_FILE) and os.path.getsize(STATUS_FILE) > 0:
-        try:
-            with open(STATUS_FILE, "r", encoding="utf-8-sig") as f:
-                return json.load(f) or {}
-        except Exception:
-            pass
-    return {}
+    from bot_activity import local_activity
+
+    return local_activity(BASE_DIR)
 
 
 async def status_updater(client):
@@ -99,14 +95,9 @@ async def status_updater(client):
             if not settings["update_bio"]:
                 await asyncio.sleep(30)
                 continue
-            status_data = await get_local_status()
-            is_playing = status_data.get("is_playing", False)
-            game = status_data.get("game", "")
+            from bot_activity import status_text
 
-            if settings["follow_activity"] and is_playing and game:
-                new_bio = f"Занят в {game} 🎮 | КРЕСТ Online"
-            else:
-                new_bio = settings["bio_text"]
+            new_bio = status_text(load_app_config(), "telegram_user", await get_local_status())
 
             if len(new_bio) > 70:
                 new_bio = new_bio[:67] + "..."
@@ -117,6 +108,7 @@ async def status_updater(client):
                 logger.info("Описание Telegram обновлено")
         except FloodWait as e:
             logger.warning(f"FloodWait от Telegram: ждем {e.value} секунд")
+            reply_gate.blocked_until = max(reply_gate.blocked_until, time.monotonic() + e.value)
             await asyncio.sleep(e.value)
         except Exception as e:
             logger.debug(f"Ошибка обновления статуса Bio: {e}")
@@ -138,32 +130,50 @@ async def track_outgoing(client, message):
         reply_gate.outgoing(chat_id)
 
 
-async def auto_reply(client, message):
+async def auto_reply(client, message, deferred=False):
     if not message.from_user:
         return
     chat_id = message.chat.id
-    if not reply_gate.incoming(chat_id, getattr(message, "id", None)):
+    if not deferred and not reply_gate.incoming(chat_id, getattr(message, "id", None)):
         return
     sender_name = message.from_user.first_name or "контакта"
     text = message.text.lower() if message.text else ""
     is_urgent = urgent(text)
     from bridge_sdk import emit
 
-    emit(
-        "notification",
-        "Telegram: новое сообщение от " + str(sender_name)[:80],
-        priority="high" if is_urgent else "normal",
-        notice_kind="message",
-    )
+    if not deferred:
+        emit(
+            "notification",
+            "Telegram: новое сообщение от " + str(sender_name)[:80],
+            priority="high" if is_urgent else "normal",
+            notice_kind="message",
+            target={
+                "chat": str(chat_id),
+                "sender": str(sender_name)[:80],
+                "message": str(getattr(message, "id", "")),
+            },
+        )
     cfg = load_app_config()
-    if not cfg["telegram_user"]["auto_reply"] or not reply_gate.allow(
-        chat_id, cfg["auto_replies"], is_urgent
-    ):
+    from bot_activity import chat_muted
+
+    if chat_muted(BASE_DIR, "tg_bridge.py", chat_id):
+        reply_gate.pending.pop(str(chat_id), None)
         return
+    from bot_activity import reply_options
+
+    reply_cfg = reply_options(cfg, "telegram_user")
+    if not cfg["telegram_user"]["auto_reply"]:
+        return
+    if not reply_gate.allow(chat_id, reply_cfg, is_urgent):
+        reply_gate.postpone(chat_id, message, reply_cfg, is_urgent)
+        return
+    reply_gate.pending.pop(str(chat_id), None)
 
     try:
         try:
-            await client.send_chat_action(message.chat.id, enums.ChatAction.TYPING)
+            await asyncio.wait_for(
+                client.send_chat_action(message.chat.id, enums.ChatAction.TYPING), 1
+            )
         except Exception:
             pass  # Typing is cosmetic; it must never prevent the reply itself.
 
@@ -172,20 +182,31 @@ async def auto_reply(client, message):
         current_hour = datetime.datetime.now().hour
         is_night = 1 <= current_hour < 8
 
-        await asyncio.sleep(random.uniform(1.2, 2.5))
+        # No cosmetic sleep: the send is already rate limited per contact.
 
         from auto_replies import render_reply
         from pyrogram.enums import ParseMode
 
         current_cfg = load_app_config()
-        reply_cfg = current_cfg["auto_replies"]
-        if not reply_cfg["enabled"] or not current_cfg["telegram_user"]["auto_reply"]:
+        reply_cfg = reply_options(current_cfg, "telegram_user")
+        if (
+            not reply_cfg["enabled"]
+            or not current_cfg["telegram_user"]["auto_reply"]
+            or time.time() < reply_cfg["paused_until"]
+            or (reply_cfg["urgent_only"] and not is_urgent)
+            or reply_gate.clock() - reply_gate.manual.get(str(chat_id), -1e9) < 300
+        ):
             reply_gate.failed(chat_id)
             return
         final_text = render_reply(
             current_cfg["owner_name"],
             status_data,
-            reply_cfg,
+            reply_gate.reply_settings(
+                chat_id,
+                reply_cfg,
+                current_cfg["profile"]["personality"],
+                status_data.get("is_playing", False),
+            ),
             bool(message.voice or message.video_note),
             is_urgent,
             is_night,
@@ -194,6 +215,13 @@ async def auto_reply(client, message):
         reply_gate.sending(chat_id, final_text)
         sent_msg = await message.reply(final_text, parse_mode=ParseMode.DISABLED)
         reply_gate.delivered(chat_id, sent_msg.id)
+        reply_gate.advance(
+            chat_id,
+            reply_cfg,
+            current_cfg["profile"]["personality"],
+            status_data.get("is_playing", False),
+        )
+        reply_gate.last_reason = "Автоответ доставлен"
         if reply_cfg["delete_seconds"]:
             asyncio.create_task(auto_delete_message(sent_msg, reply_cfg["delete_seconds"]))
 
@@ -205,6 +233,14 @@ async def auto_reply(client, message):
     except Exception as e:
         reply_gate.failed(chat_id)
         logger.error(f"Ошибка отправки автоответа: {e}")
+
+
+async def reply_worker(client):
+    """One latest message per contact, with no repeating unsolicited sends."""
+    while True:
+        for _, message, _ in reply_gate.due():
+            await auto_reply(client, message, deferred=True)
+        await asyncio.sleep(1)
 
 
 class AuthRetryError(ValueError):
@@ -585,6 +621,9 @@ async def _start_authorized_client(app):
 
 
 def start_tg_bridge(notifications_queue=None):
+    from account_control import AccountControl
+
+    account_control = AccountControl()
     if not PYROGRAM_AVAILABLE:
         logger.error("Pyrogram не найден в системе. Установите pyrogram и tgcrypto.")
         return
@@ -640,6 +679,7 @@ def start_tg_bridge(notifications_queue=None):
 
         async def run_bot():
             updater_task = None
+            replies_task = health_task = None
             auth_watch_task = None
             stop_event = asyncio.Event()
             stop_reason = {"value": "STOPPED"}
@@ -662,7 +702,15 @@ def start_tg_bridge(notifications_queue=None):
 
                 from bridge_sdk import emit
 
-                emit("ready", "Telegram подтвердил авторизацию аккаунта")
+                async def manual_reply(chat, text):
+                    if str(chat) not in {key[0] for key in reply_gate.received}:
+                        raise ValueError("Нет свежего входящего от этого контакта")
+                    reply_gate.outgoing(chat)
+                    await app.send_message(int(chat), text, parse_mode=enums.ParseMode.DISABLED)
+
+                account_control.attach(manual_reply)
+                emit("ready", "Telegram подтвердил авторизацию аккаунта", capabilities=["reply"])
+                emit("health", "Готов к входящим сообщениям", connected=True)
 
                 logger.info(
                     "Юзербот активен на аккаунте: %s (@%s)",
@@ -670,7 +718,49 @@ def start_tg_bridge(notifications_queue=None):
                     me.username or "нет username",
                 )
 
+                async def health():
+                    while True:
+                        await asyncio.sleep(30)
+                        if time.monotonic() < reply_gate.blocked_until:
+                            emit(
+                                "health",
+                                "Telegram запросил паузу; соединение не перезапускаю",
+                                connected=True,
+                                pending=len(reply_gate.pending),
+                            )
+                            continue
+                        try:
+                            await asyncio.wait_for(app.get_me(), 15)
+                            emit(
+                                "health",
+                                reply_gate.last_reason,
+                                connected=True,
+                                pending=len(reply_gate.pending),
+                                replies=len(reply_gate.sent),
+                            )
+                        except FloodWait as exc:
+                            reply_gate.blocked_until = max(
+                                reply_gate.blocked_until, time.monotonic() + exc.value
+                            )
+                            emit(
+                                "health",
+                                "Telegram ограничил проверки; ожидаю разрешённое время",
+                                connected=True,
+                            )
+                        except (AuthKeyUnregistered, SessionRevoked, UserDeactivated, Unauthorized):
+                            emit("auth_required", "Telegram: войдите в аккаунт заново")
+                            stop_reason["value"] = "UNAUTHORIZED"
+                            stop_event.set()
+                            return
+                        except Exception:
+                            emit("disconnected", "Telegram не ответил на проверку; переподключаюсь")
+                            stop_reason["value"] = "ERROR"
+                            stop_event.set()
+                            return
+
                 updater_task = asyncio.create_task(status_updater(app))
+                replies_task = asyncio.create_task(reply_worker(app))
+                health_task = asyncio.create_task(health())
                 auth_watch_task = asyncio.create_task(watch_auth_state())
                 await stop_event.wait()
                 return stop_reason["value"]
@@ -690,7 +780,8 @@ def start_tg_bridge(notifications_queue=None):
                 logger.exception("Ошибка во время работы Telegram юзербота")
                 return "ERROR"
             finally:
-                for task in (updater_task, auth_watch_task):
+                account_control.detach()
+                for task in (updater_task, auth_watch_task, replies_task, health_task):
                     if task and not task.done():
                         task.cancel()
                 try:

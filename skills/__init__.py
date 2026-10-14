@@ -1,6 +1,7 @@
 """Command modules loaded by SkillManager."""
 
 BUILTIN_MODULES = (
+    "assistant_tools",
     "basic",
     "discord_voice",
     "interactive",

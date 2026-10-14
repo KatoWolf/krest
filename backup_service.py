@@ -39,6 +39,7 @@ def create_backup(config, destination):
             service["autostart"] = False
         cfg["event_rules"] = [dict(rule, enabled=False) for rule in cfg.get("event_rules", [])]
         cfg["app_settings"]["downloads_auto_sort"] = False
+        cfg["audio_focus"]["enabled"] = False
         atomic_write_json(staging / "config.json", cfg)
         for filename in FILES - {"config.json"}:
             source = root / filename

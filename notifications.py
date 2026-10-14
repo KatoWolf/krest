@@ -30,7 +30,7 @@ class NotificationQueue:
         finally:
             connection.close()
 
-    def put(self, text, source=None, priority="normal", notice_kind=""):
+    def put(self, text, source=None, priority="normal", notice_kind="", target=None):
         if source is not None:
             text = json.dumps(
                 {
@@ -39,6 +39,7 @@ class NotificationQueue:
                     "source": str(source),
                     "priority": priority,
                     "kind": notice_kind,
+                    "target": target,
                 },
                 ensure_ascii=False,
             )

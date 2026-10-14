@@ -14,13 +14,14 @@ class SkillImportPages:
         card = self.card(
             self.page_bodies["skills"],
             "Добавить свои навыки",
-            "Выберите Python-файл. Крест найдёт команды и подключит их без редактирования программы и перезапуска.",
+            "Python-файл или ZIP-пакет с командами, настройками и событиями. Пакеты выполняются отдельно от ядра; устанавливайте только доверенный код.",
         )
         toolbar = tk.Frame(card, bg=self.theme["card"])
         toolbar.pack(fill="x", pady=(5, 10))
         for title, action in [
-            ("Импортировать .py", self._choose_skill_import),
+            ("Импортировать .py / .zip", self._choose_skill_import),
             ("Скачать шаблон", self._save_skill_template),
+            ("Шаблон пакета", self._save_package_template),
             ("Обновить список", self._refresh_skill_imports),
         ]:
             ttk.Button(toolbar, text=title, command=action).pack(side="left", padx=(0, 8))
@@ -45,12 +46,17 @@ class SkillImportPages:
             ttk.Button(
                 controls, text=title, command=lambda a=action: self._change_skill_import(a)
             ).pack(side="left", padx=(0, 8))
+        ttk.Button(controls, text="Настройки пакета", command=self._package_settings).pack(
+            side="left"
+        )
         self.import_status = tk.StringVar(
             value="Подключённые навыки появятся в общем каталоге и поиске команд."
         )
         self.label(card, textvariable=self.import_status, muted=True, wraplength=750).pack(
             fill="x", pady=5
         )
+        self.package_cards = tk.Frame(self.page_bodies["skills"], bg=self.theme["bg"])
+        self.package_cards.pack(fill="x")
         self._refresh_skill_imports()
 
     def _refresh_skill_imports(self):
@@ -58,6 +64,23 @@ class SkillImportPages:
             if not hasattr(self, "import_tree") or not self.import_tree.winfo_exists():
                 return
             selected = self.import_tree.selection()
+            self._package_modules = {
+                row["id"]: row for row in data["modules"] if row.get("package")
+            }
+            for child in self.package_cards.winfo_children():
+                child.destroy()
+            for row in self._package_modules.values():
+                panel = self.card(
+                    self.package_cards, row["name"], row["error"] or "Команды расширения"
+                )
+                for command in row.get("commands", [])[:6]:
+                    phrase = command["keywords"][0]
+                    ttk.Button(
+                        panel,
+                        text=phrase,
+                        command=lambda text=phrase: self.runtime.submit(text),
+                        state="normal" if row["enabled"] and not row["error"] else "disabled",
+                    ).pack(anchor="w", pady=4)
             self.import_tree.delete(*self.import_tree.get_children())
             for row in data["modules"]:
                 status = row["error"] or ("Включён" if row["enabled"] else "Отключён")
@@ -90,9 +113,72 @@ class SkillImportPages:
             except OSError as exc:
                 self._report_error(str(exc))
 
+    def _save_package_template(self):
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            initialfile="hello-pack.zip",
+            defaultextension=".zip",
+            filetypes=[("Пакет Крест", "*.zip")],
+        )
+        if path:
+            from extension_packages import save_template
+
+            save_template(path)
+            self.import_status.set(
+                "Шаблон ZIP сохранён. Внутри описание команд, настройки и файл entry.py."
+            )
+
+    def _package_settings(self):
+        selected = self.import_tree.selection()
+        record = getattr(self, "_package_modules", {}).get(selected[0]) if selected else None
+        if record is None:
+            self._report_error("Выберите установленный ZIP-пакет")
+            return
+        win = tk.Toplevel(self)
+        win.title(record["name"] + " · настройки")
+        win.configure(bg=self.theme["bg"])
+        style_titlebar(win, self.theme)
+        install_window_icon(win)
+        body = tk.Frame(win, bg=self.theme["card"], padx=20, pady=20)
+        body.pack(fill="both", expand=True)
+        variables = {}
+        for key, schema in record["schema"].items():
+            value = record["settings"][key]
+            var = (
+                tk.BooleanVar(value=value)
+                if schema["type"] == "boolean"
+                else tk.StringVar(value=value)
+            )
+            variables[key] = var
+            if schema["type"] == "boolean":
+                ttk.Checkbutton(body, text=schema.get("label", key), variable=var).pack(anchor="w")
+            else:
+                self.field(body, schema.get("label", key), var)
+        if not variables:
+            self.label(body, "У пакета нет пользовательских настроек.").pack()
+
+        def save():
+            try:
+                values = {
+                    k: int(v.get()) if record["schema"][k]["type"] == "integer" else v.get()
+                    for k, v in variables.items()
+                }
+            except ValueError:
+                self._report_error("Для числовой настройки нужно целое число")
+                return
+            self._background(
+                lambda: self.runtime.skill_import("settings", id=selected[0], values=values),
+                done=lambda _: (win.destroy(), self._refresh_skill_imports()),
+            )
+
+        ttk.Button(body, text="Сохранить настройки", command=save).pack(anchor="w", pady=10)
+        ttk.Button(body, text="Закрыть", command=win.destroy).pack(anchor="w")
+
     def _choose_skill_import(self):
         path = filedialog.askopenfilename(
-            parent=self, title="Выберите файл навыка", filetypes=[("Python", "*.py")]
+            parent=self,
+            title="Выберите файл навыка",
+            filetypes=[("Навыки Крест", "*.py *.zip"), ("Python", "*.py"), ("Пакет", "*.zip")],
         )
         if path:
             self.import_status.set("Проверяю файл без запуска его кода…")
