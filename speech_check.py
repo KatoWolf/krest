@@ -124,7 +124,7 @@ def check_game_audio(engine, manager):
         engine._reset_recognizer()
         engine._noise.reset()
         engine._continuity.recovering = False
-        accepted, transcripts = [], []
+        accepted, transcripts, decisions = [], [], []
         turn = VoiceTurn(manager, CommandFeedback())
 
         def consume(results):
@@ -137,6 +137,15 @@ def check_game_audio(engine, manager):
                 )
                 if plan is not None and not plan.error:
                     confidence = sequence_confidence(plan, data, confidence)
+                decisions.append(
+                    {
+                        "text": text,
+                        "at": round(offset / 32000, 2),
+                        "confidence": confidence,
+                        "endpoint": data.get("endpoint"),
+                        "words": [(w.get("word"), w.get("conf")) for w in data.get("words", [])],
+                    }
+                )
                 if wake and confidence is not None and confidence >= 0.6:
                     if plan is not None and not plan.error:
                         accepted.append("sequence")
@@ -170,4 +179,5 @@ def check_game_audio(engine, manager):
             flush=True,
         )
         if accepted != ([expected] if expected else []):
+            print("Speech decisions: " + str(decisions), flush=True)
             raise RuntimeError("Голос в игровом профиле: " + str(phrase) + " → " + str(transcripts))
