@@ -42,6 +42,13 @@ class ConversationActions:
 
     def call(self, action, ident=None, text=""):
         with self.lock:
+            if action in ("confirm", "cancel") and ident is not None and self.draft:
+                # A voice-created draft may replace the one shown in a still
+                # open desktop dialog. Never confirm a different recipient/text.
+                if self.draft.get("notice") != int(ident) or self.draft["text"] != text.strip():
+                    raise ValueError(
+                        "Черновик изменился. Подготовьте ответ снова и проверьте адресата."
+                    )
             if action == "cancel":
                 self.draft = None
                 return "Черновик ответа удалён."
@@ -70,6 +77,7 @@ class ConversationActions:
                     raise ValueError("Ответ должен содержать от 1 до 2000 символов.")
                 self.draft = dict(
                     id=uuid.uuid4().hex,
+                    notice=row["id"],
                     source=row["source"],
                     chat=target["chat"],
                     text=text.strip(),
