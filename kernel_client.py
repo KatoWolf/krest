@@ -335,6 +335,11 @@ class RemoteRuntime:
     def skill_import(self, action, **args):
         return self.client.call("skill_import", action=action, **args)
 
+    def personal_tools(self, section, action, values=None):
+        return self.client.call(
+            "personal_tools", section=section, action=action, values=values or {}
+        )
+
     @property
     def voice_status(self):
         return self.cached["voice"].get("status", "Микрофон на паузе")

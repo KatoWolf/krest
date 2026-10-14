@@ -53,7 +53,11 @@ class ProductPages:
         frame = tk.Frame(self, bg=self.theme["bg"], padx=60, pady=50)
         self.onboarding = frame
         frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.label(frame, "КРЕСТ / ЗНАКОМСТВО", muted=True).pack(anchor="w", pady=(15, 30))
+        from ui_relic import wordmark, RelicEmblem
+
+        RelicEmblem(frame, self.theme, 144).pack(side="right", anchor="n", padx=(25, 0))
+        wordmark(frame, self.theme, 250).pack(anchor="w", pady=(15, 18))
+        self.label(frame, "РЕЛИКТ / ЗНАКОМСТВО", muted=True).pack(anchor="w", pady=(0, 24))
         self.label(frame, "Привет. Я Крест.", large=True).pack(anchor="w")
         self.label(
             frame,

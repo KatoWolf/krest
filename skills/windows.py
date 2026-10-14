@@ -317,10 +317,16 @@ def kill_frozen_processes(text=""):
     description="Сохранить снимок всех мониторов в папку screenshots",
     category="Windows",
 )
-def take_screenshot(text: str = ""):
+def take_screenshot(text: str = "", state=None):
     from screenshots import capture_screen
 
     path = capture_screen()
+    sessions = getattr(getattr(state, "runtime", None), "game_sessions", None)
+    if sessions and sessions.active:
+        try:
+            sessions.add(path=path)
+        except (OSError, ValueError):
+            return "Скриншот сохранён: " + str(path) + ". В журнал сессии добавить не удалось."
     return "Скриншот сохранён: " + str(path)
 
 

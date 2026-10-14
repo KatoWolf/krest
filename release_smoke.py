@@ -56,6 +56,10 @@ def check_kernel(config_path):
             ("крест найди последний архив", "skills.assistant_tools.find_local_file"),
             ("крест ответь ему буду через час", "skills.assistant_tools.draft_reply"),
             ("крест подтверди добычу акси количество один", "skills.warframe.confirm_loot"),
+            ("крест ээ крест переключи трек", "skills.media.next_track"),
+            ("крест заметка для игры проверить реликвии", "skills.personal_tools.game_note"),
+            ("крест итоги игровой сессии", "skills.personal_tools.game_report"),
+            ("крест покажи историю буфера", "skills.personal_tools.clipboard_history"),
         ):
             parsed = client.call("command.parse", text=phrase)
             if parsed["skill"] != expected:
@@ -64,6 +68,41 @@ def check_kernel(config_path):
             raise RuntimeError("Удалённый Dota-гид остался в сборке")
         if not isinstance(client.call("catalog.names"), list):
             raise RuntimeError("Недоступен словарь приложений")
+        clips = client.call("personal_tools", section="clipboard", action="list")
+        if clips["rows"] or clips["enabled"]:
+            raise RuntimeError("История буфера нового профиля должна быть пустой и выключенной")
+        sessions = client.call("personal_tools", section="sessions", action="list")
+        if sessions["rows"]:
+            raise RuntimeError("Игровой журнал нового профиля должен быть пустым")
+        import os
+
+        if os.name == "nt" and os.getenv("GITHUB_ACTIONS") == "true":
+            # CI has no personal clipboard. Verify 64-bit handles and Unicode
+            # from a worker, matching the real GUI/voice execution path.
+            from concurrent.futures import ThreadPoolExecutor
+            from windows_clipboard import read, write
+
+            def clipboard_roundtrip():
+                text = "Крест · проверка буфера № 42 🎮"
+                write(text)
+                if read()[1] != text:
+                    raise RuntimeError("Windows не сохранила Unicode-текст буфера")
+                client.call("personal_tools", section="clipboard", action="save")
+                rows = client.call("personal_tools", section="clipboard", action="list")["rows"]
+                if len(rows) != 1 or rows[0]["text"] != text:
+                    raise RuntimeError("Ядро не прочитало буфер из другого процесса")
+                client.call(
+                    "personal_tools",
+                    section="clipboard",
+                    action="copy",
+                    values={"id": rows[0]["id"]},
+                )
+                if read()[1] != text:
+                    raise RuntimeError("Ядро не восстановило фрагмент в буфер Windows")
+                client.call("personal_tools", section="clipboard", action="clear")
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(clipboard_roundtrip).result(timeout=20)
         # Exercise new modules through the packaged child kernel, without a game or account.
         snapshot = client.call("companion", action="snapshot")
         if snapshot.get("learning") != []:

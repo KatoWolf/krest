@@ -55,6 +55,10 @@ class AssistantRuntime:
         from audio_focus import AudioFocus
 
         self.audio_focus = AudioFocus(settings, Path(data_dir) / "audio_restore.json")
+        from personal_tools import ClipboardHistory, GameSessions
+
+        self.clipboard = ClipboardHistory(Path(data_dir) / "clipboard.sqlite3", settings)
+        self.game_sessions = GameSessions(Path(data_dir) / "game_sessions.sqlite3")
         self.context = CommandContext(self.state)
         from action_undo import UndoHistory
         from command_feedback import CommandFeedback
@@ -117,6 +121,30 @@ class AssistantRuntime:
     def _speech_event(self, text):
         self.events.put(("speech", text))
 
+    def personal_tools(self, section, action, values=None):
+        values = values or {}
+        if section == "clipboard":
+            if action == "enable":
+                cfg = self.config_manager.snapshot()
+                cfg["clipboard"]["enabled"] = bool(values.get("enabled"))
+                self.config_manager.save_config(cfg)
+                return (
+                    "История включена."
+                    if cfg["clipboard"]["enabled"]
+                    else "Автоматическая история выключена."
+                )
+            return self.clipboard.call(action, **values)
+        if section == "sessions":
+            if action == "list":
+                data = self.game_sessions.snapshot(values.get("id"))
+                data["report"] = self.game_sessions.report(values.get("id"))
+                return data
+            if action == "note":
+                return self.game_sessions.add(values.get("text", ""))
+            if action == "open":
+                return self.game_sessions.open_capture(values["id"])
+        raise ValueError("Неизвестное действие личных инструментов")
+
     @property
     def voice_feedback(self):
         return self.feedback.snapshot()
@@ -167,6 +195,7 @@ class AssistantRuntime:
             ],
             threading.Thread(target=self._scheduler, daemon=True, name="krest-scheduler"),
             threading.Thread(target=self._file_index_worker, daemon=True, name="krest-file-index"),
+            threading.Thread(target=self._clipboard_worker, daemon=True, name="krest-clipboard"),
             threading.Thread(target=self._downloads, daemon=True, name="krest-downloads"),
             threading.Thread(target=self._catalog_worker, daemon=True, name="krest-catalog"),
         ]
@@ -392,7 +421,10 @@ class AssistantRuntime:
                 )
 
         if source == "voice":
-            if not wake and time.monotonic() > self._active_until:
+            window_accepted = (getattr(self._job_local, "recognition", None) or {}).get(
+                "listening_window", False
+            )
+            if not wake and not window_accepted and time.monotonic() > self._active_until:
                 observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
             if not wake:
@@ -675,6 +707,7 @@ class AssistantRuntime:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
                 game = self.performance.game
+                self.game_sessions.tick(game)
                 if game != getattr(self, "_package_game", ""):
                     self.manager.packages.event(
                         "game.started" if game else "game.stopped",
@@ -714,6 +747,10 @@ class AssistantRuntime:
             self.desktop.scan(self.stop_event)
             if self.stop_event.wait(900 if self.performance.game else 300):
                 return
+
+    def _clipboard_worker(self):
+        while not self.stop_event.wait(1):
+            self.clipboard.tick()
 
     def _catalog_worker(self):
         from app_catalog import scan_apps
@@ -962,33 +999,7 @@ class AssistantRuntime:
                     )
                 recognized = turn.push(text, voice.recognition()) if text else turn.flush()
                 for text, recognition, feedback_turn in recognized:
-                    from speech_recognition import decode_voice_command
-
-                    addressed, _ = decode_voice_command(self.manager, text, self.settings())
-                    if addressed:
-                        voice.stop_speaking()
-                    elif time.monotonic() > self._active_until:
-                        # Game chat is not a job. Keep it out of command queues
-                        # and the SQLite job journal before any disk writes.
-                        self.events.put(
-                            (
-                                "recognition",
-                                {
-                                    "heard": text,
-                                    "command": "",
-                                    "confidence": recognition.get("confidence"),
-                                    "status": "Без обращения — команда не выполнена",
-                                },
-                            )
-                        )
-                        continue
-                    self.submit(
-                        text,
-                        "voice",
-                        recognition.get("confidence"),
-                        recognition=recognition,
-                        feedback_turn=feedback_turn,
-                    )
+                    self._dispatch_voice(text, recognition, feedback_turn)
         except Exception as exc:
             failure = str(exc)
             self.events.put(("error", f"Голос: {exc}"))
@@ -999,6 +1010,77 @@ class AssistantRuntime:
             self.voice_status = failure or "Микрофон на паузе"
             self.events.put(("voice", self.voice_status))
         return failure
+
+    def _dispatch_voice(self, text, recognition, feedback_turn=None):
+        """Accept final audio on capture time; a wake word never waits in a job lane."""
+        from speech_recognition import decode_voice_command, command_confidence
+
+        settings = self.settings()
+        cfg = settings.get("app_settings", {})
+        addressed, command = decode_voice_command(self.manager, text, settings)
+        recognition = dict(recognition)
+        recognition.pop("listening_window", None)
+        if addressed:
+            voice.stop_speaking()
+            if not command:
+                score = command_confidence(
+                    self.manager,
+                    text,
+                    command,
+                    True,
+                    recognition.get("confidence"),
+                    recognition,
+                    cfg,
+                )
+                if score is not None and score * 100 < cfg.get("speech_confidence", 60):
+                    if feedback_turn is not None:
+                        self.feedback.update(feedback_turn, "error", "Не расслышала обращение", 3)
+                    self._voice_retry(True)
+                    return False
+                self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
+                turn = feedback_turn if feedback_turn is not None else self.feedback.begin()
+                self.feedback.update(
+                    turn, "listening", "Слушаю команду", cfg.get("active_timeout", 6)
+                )
+                self.events.put(
+                    (
+                        "recognition",
+                        {
+                            "heard": text,
+                            "command": "",
+                            "confidence": score,
+                            "status": "Ожидаю команду",
+                        },
+                    )
+                )
+                from companion_behavior import policy
+
+                voice.speak(policy(settings, bool(self.performance.game))["listen"])
+                return True
+        elif time.monotonic() > self._active_until:
+            # Game chat never enters the job queue or touches its SQLite journal.
+            self.events.put(
+                (
+                    "recognition",
+                    {
+                        "heard": text,
+                        "command": "",
+                        "confidence": recognition.get("confidence"),
+                        "status": "Без обращения — команда не выполнена",
+                    },
+                )
+            )
+            return False
+        else:
+            recognition["listening_window"] = True
+            self._active_until = 0
+        return self.submit(
+            text,
+            "voice",
+            recognition.get("confidence"),
+            recognition=recognition,
+            feedback_turn=feedback_turn,
+        )
 
     def _voice_dictionary(self, stopped):
         from speech_dictionary import quick_phrases
@@ -1083,4 +1165,5 @@ class AssistantRuntime:
         self.stop_voice()
         for thread in self._threads:
             thread.join(timeout=1)
+        self.game_sessions.close()
         self.state.persist()

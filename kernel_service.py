@@ -341,7 +341,13 @@ class Kernel:
                 args.get("priority", "normal"),
             )
         if method == "conversation":
-            return rt.conversations.call(str(args["action"]), args.get("ident"), str(args.get("text", "")))
+            return rt.conversations.call(
+                str(args["action"]), args.get("ident"), str(args.get("text", ""))
+            )
+        if method == "personal_tools":
+            return rt.personal_tools(
+                str(args["section"]), str(args["action"]), args.get("values", {})
+            )
         if method.startswith("service."):
             name = method[8:]
             if name == "autostart":

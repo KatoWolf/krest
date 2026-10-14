@@ -54,7 +54,7 @@ def _button_surface(root, style, name, base, hover, colours):
             "image",
             images[0],
             ("disabled", images[3]),
-            ("pressed", images[1]),
+            ("pressed", images[2]),
             ("active", images[1]),
             ("focus", images[2]),
             border=9,
@@ -113,16 +113,17 @@ def apply_style(root, colours):
         ("Selected.Nav.TButton", c["glow"], c["border"], c["text"]),
         ("Tab.TButton", c["card_hover"], c["border"], c["text"]),
         ("Selected.Tab.TButton", c["accent"], c["accent_hover"], contrasting_text(c["accent"])),
+        ("Tile.TButton", c["card"], c["card_hover"], c["text"]),
     ]:
         style.configure(
             name,
             background=base,
             foreground=fg,
-            padding=(12, 8) if "Tab" in name else (14, 10),
+            padding=(8, 6) if "Tile" in name else (12, 8) if "Tab" in name else (14, 10),
             borderwidth=1,
             relief="flat",
             focusthickness=0,
-            anchor="w" if "Nav" in name else "center",
+            anchor="w" if "Nav" in name or "Tile" in name else "center",
             font=(
                 UI_FONT,
                 13 if "Nav" in name else 12,

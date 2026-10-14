@@ -1,12 +1,34 @@
 """Lightweight theme gallery, without continuous decorative rendering."""
 
 import tkinter as tk
+from tkinter import ttk
 from ui_fonts import UI_FONT
 
 
 class AppearancePages:
     def build_appearance(self):
         page = self.page_bodies["appearance"]
+        from ui_relic import RelicEmblem, wordmark, theme_preview
+
+        identity = self.card(
+            page, "Реликт", "Холодный металл, спокойный фиолетовый и тонкие линии шипов."
+        )
+        RelicEmblem(identity, self.theme, 110).pack(side="right", padx=12)
+        wordmark(identity, self.theme, 220).pack(anchor="w", pady=(10, 16))
+        edge_var = tk.BooleanVar(
+            value=self.config_mgr.snapshot()["accessibility"].get("relic_edges", True)
+        )
+
+        def toggle_edges():
+            cfg = self.config_mgr.snapshot()
+            cfg["accessibility"]["relic_edges"] = edge_var.get()
+            self.config_mgr.save_config(cfg)
+            # Rebuild with the current form state, as a normal theme change does.
+            self.apply_theme(self.theme_var.get())
+
+        ttk.Checkbutton(
+            identity, text="Лозы по краям окна", variable=edge_var, command=toggle_edges
+        ).pack(anchor="w")
         card = self.card(
             page,
             "Оформление",
@@ -26,22 +48,20 @@ class AppearancePages:
                 highlightbackground=palette["border"],
                 highlightthickness=1,
             )
-            cell.grid(row=i // 3, column=i % 3, sticky="ew", padx=(0, 8), pady=(0, 8))
-            grid.columnconfigure(i % 3, weight=1, uniform="themes")
-            bar = tk.Canvas(cell, height=18, bg=palette["sidebar"], highlightthickness=0)
+            cell.grid(row=i // 2, column=i % 2, sticky="ew", padx=(0, 8), pady=(0, 8))
+            grid.columnconfigure(i % 2, weight=1, uniform="themes")
+            bar = theme_preview(cell, palette)
             bar.pack(fill="x")
-            for n, key in enumerate(("accent", "text", "sub_text")):
-                bar.create_oval(3 + n * 25, 2, 17 + n * 25, 16, fill=palette[key], outline="")
             tk.Label(
                 cell,
                 text=name + (" · Premium" if name in PREMIUM_THEMES else ""),
                 bg=palette["sidebar"],
                 fg=palette["text"],
-                font=(UI_FONT, 9, "bold"),
+                font=(UI_FONT, 11, "bold"),
             ).pack(anchor="w", pady=6)
             button = tk.Button(
                 cell,
-                text="Выбрать",
+                text="Выбрана" if self.theme_var.get() == name else "Выбрать",
                 bg=palette["accent"],
                 fg=contrasting_text(palette["accent"]),
                 activebackground=palette["accent_hover"],

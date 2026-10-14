@@ -23,6 +23,8 @@ def check(engine):
         ("Крест, выключи микрофон.", "skills.discord_voice.mute_microphone"),
         ("Крест, включи микрофон.", "skills.discord_voice.unmute_microphone"),
         ("Ха ха ха, Крест, переключи трек.", "skills.media.next_track"),
+        ("Крест, можешь пожалуйста переключить трек.", "skills.media.next_track"),
+        ("Крест, Крест, пауза.", "skills.media.pause_music"),
     )
     rows = []
     try:

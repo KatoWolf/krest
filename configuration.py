@@ -44,13 +44,19 @@ DEFAULT_CONFIG = {
     "event_rules": [],
     "file_policy": {"folders": [], "exclusions": [], "rules": []},
     "briefings": {"morning": "", "evening": ""},
-    "accessibility": {"reduce_motion": False, "font_scale": 100},
+    "accessibility": {"reduce_motion": False, "font_scale": 100, "relic_edges": True},
+    "design_revision": 1,
+    "clipboard": {
+        "enabled": False,
+        "max_items": 100,
+        "ignored_apps": "KeePass.exe,KeePassXC.exe,1Password.exe,Bitwarden.exe",
+    },
     "performance": {
         "mode": "auto",
         "game_processes": "cs2.exe,dota2.exe,Warframe.x64.exe,Warframe.exe",
     },
     "notification_settings": {"mode": "all", "game_important_only": True, "announce_senders": True},
-    "selected_theme": "Graphite",
+    "selected_theme": "Relic",
     "app_settings": {
         "autostart": False,
         "minimize_to_tray": True,
@@ -152,6 +158,7 @@ DEFAULT_CONFIG = {
         name: True
         for name in (
             "assistant_tools",
+            "personal_tools",
             "basic",
             "discord_voice",
             "workflows",
@@ -185,6 +192,15 @@ def merge(default, values):
 
 
 def validate(data):
+    clips = data["clipboard"]
+    if (
+        type(clips["enabled"]) is not bool
+        or type(clips["max_items"]) is not int
+        or not 50 <= clips["max_items"] <= 200
+    ):
+        raise ValueError("История буфера: от 50 до 200 фрагментов")
+    if not isinstance(clips["ignored_apps"], str) or len(clips["ignored_apps"]) > 2000:
+        raise ValueError("Укажите имена исключённых приложений через запятую")
     audio = data["audio_focus"]
     if any(type(audio[k]) is not bool for k in ("enabled", "duck_speech")):
         raise ValueError("Автоматический микшер: нужны переключатели")
@@ -450,6 +466,10 @@ class ConfigManager:
                 raise ValueError("Настройки созданы более новой версией Крест")
             self.future_version = False
             data["schema_version"] = 2
+            if not data.get("design_revision"):
+                if data.get("selected_theme", "Graphite") in ("Graphite", "Amethyst Modern"):
+                    data["selected_theme"] = "Relic"
+                data["design_revision"] = 1
             if "profile" not in data and data.get("owner_name") in (
                 "Игорь",
                 "КатоВульф",

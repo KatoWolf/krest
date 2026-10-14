@@ -19,6 +19,7 @@ from skill_import_pages import SkillImportPages
 from warframe_pages import WarframePages, PAGE_NAMES
 from appearance_pages import AppearancePages
 from experience_pages import ExperiencePages
+from personal_pages import PersonalPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -42,6 +43,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    PersonalPages,
     ExperiencePages,
     WarframePages,
     CommandCatalogPages,
@@ -80,6 +82,8 @@ class ControlCenterApp(
         ("events", "События"),
         ("programs", "Программы и звук"),
         ("security", "Доступ и восстановление"),
+        ("clipboard", "Буфер обмена"),
+        ("sessions", "Игровые сессии"),
     ]
 
     NAV_GROUPS = [
@@ -93,8 +97,8 @@ class ControlCenterApp(
             "Подключения",
             ("bots", "steam", "api", "discord_account", "discord_bot", "scripts"),
         ),
-        ("kernel", "Система", ("kernel", "programs", "maintenance", "security")),
-        ("wf_home", "Warframe", tuple(code for code, _ in PAGE_NAMES)),
+        ("kernel", "Система", ("kernel", "programs", "clipboard", "maintenance", "security")),
+        ("sessions", "Игры", ("sessions",) + tuple(code for code, _ in PAGE_NAMES)),
         ("settings", "Настройки", ("settings", "appearance", "license")),
     ]
 
@@ -103,7 +107,7 @@ class ControlCenterApp(
         set_process_identity()
         super().__init__()
         self._window_icons = install_window_icon(self)
-        self.title("КРЕСТ — центр управления")
+        self.title("KREST OS · Реликт")
         width = min(1180, max(900, self.winfo_screenwidth() - 60))
         height = min(820, max(600, self.winfo_screenheight() - 80))
         self.geometry(f"{width}x{height}")
@@ -337,7 +341,7 @@ class ControlCenterApp(
         self.shell.pack(fill="both", expand=True)
         from PIL import ImageTk
 
-        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=250, padx=16, pady=22)
+        side = tk.Frame(self.shell, bg=self.theme["sidebar"], width=246, padx=14, pady=22)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
         self._brand_image = ImageTk.PhotoImage(load_image(44), master=self)
@@ -347,8 +351,10 @@ class ControlCenterApp(
 
         self.brand_mark = BrandMark(brand, self._brand_image, self.theme, self.motion.enabled)
         self.brand_mark.pack(side="left", padx=(0, 10))
-        self.label(brand, "КРЕСТ", large=True).pack(side="left")
-        self.label(side, "Голосовой помощник", muted=True).pack(anchor="w", padx=4, pady=(0, 16))
+        from ui_relic import wordmark
+
+        wordmark(brand, self.theme, 140).pack(side="left")
+        self.label(side, "РЕЛИКТ / ЛИЧНОЕ ЯДРО", muted=True).pack(anchor="w", padx=4, pady=(0, 18))
         self.edition_label = self.label(side, "ОБЫЧНАЯ ВЕРСИЯ", muted=True)
         self.edition_label.pack(side="bottom", anchor="w", pady=(14, 0))
         ttk.Button(
@@ -369,15 +375,30 @@ class ControlCenterApp(
                 self.nav_frame,
                 text=title,
                 style="Nav.TButton",
-                padding=(16, 12),
+                padding=(16, 11),
                 command=lambda k=default: self.switch_page(k),
             )
-            button.pack(fill="x", pady=5)
+            button.pack(fill="x", pady=4)
             self.group_buttons[default] = button
             for key in codes:
                 self.nav_buttons[key] = button
-        body = tk.Frame(self.shell, bg=self.theme["bg"], padx=28, pady=24)
+        body = tk.Frame(self.shell, bg=self.theme["bg"], padx=24, pady=20)
         body.pack(side="left", fill="both", expand=True)
+        from ui_relic import ThornVine
+
+        self.relic_edges = []
+        if self.config_mgr.snapshot().get("accessibility", {}).get("relic_edges", True):
+            for right in (False, True):
+                vine = ThornVine(body, self.theme, vertical=True, width=18)
+                vine.place(
+                    relx=1 if right else 0,
+                    x=-20 if right else 2,
+                    y=2,
+                    relheight=1,
+                    height=-4,
+                    bordermode="outside",
+                )
+                self.relic_edges.append(vine)
         header = tk.Frame(body, bg=self.theme["bg"])
         header.pack(fill="x", pady=(0, 10))
         ttk.Button(
@@ -579,6 +600,7 @@ class ControlCenterApp(
             "bots": "Подключения, состояние мостов и результаты действий.",
             "kernel": "Крест работает рядом — даже когда меню закрыто.",
             "wf_home": "Ваш второй пилот. Мир игры, планы и важные моменты.",
+            "sessions": "Игровые сессии, заметки и помощник Warframe.",
             "settings": "Настройте под себя. Остальное Крест подберёт автоматически.",
         }
         self.page_subtitle.set(subtitles[group[0]])
@@ -682,125 +704,9 @@ class ControlCenterApp(
         frame()
 
     def build_actions_tab(self):
-        page = self.page_bodies["actions"]
-        surface = RoundedCard(page, self.theme, padding=24)
-        surface.pack(fill="x", pady=(0, 14))
-        card = surface.inner
-        top = tk.Frame(card, bg=self.theme["card"])
-        top.pack(fill="x")
-        text = tk.Frame(top, bg=self.theme["card"])
-        text.pack(side="left", fill="x", expand=True)
-        self.label(text, "ГОЛОСОВОЕ УПРАВЛЕНИЕ", muted=True).pack(anchor="w", pady=(0, 8))
-        self.home_greeting = self.label(
-            text,
-            "Привет, " + self.owner_var.get() + "." if self.owner_var.get() else "Привет. Я Крест.",
-        )
-        self.home_greeting.configure(font=(UI_FONT, 26, "bold"))
-        self.home_greeting.pack(anchor="w")
-        self.label(text, "Назовите меня и скажите, что нужно сделать.", muted=True).pack(
-            anchor="w", pady=(8, 18)
-        )
-        from PIL import ImageTk
+        from relic_dashboard import build
 
-        self._hero_image = ImageTk.PhotoImage(load_image(72), master=self)
-        tk.Label(top, image=self._hero_image, bg=self.theme["card"]).pack(
-            side="right", padx=(20, 6)
-        )
-        self.label(card, textvariable=self.voice_var, wraplength=640).pack(anchor="w", pady=(0, 8))
-        self.home_meter = ttk.Progressbar(card, maximum=100)
-        self.home_meter.pack(fill="x", pady=(0, 8))
-        self.home_mic_detail = self.label(
-            card, "Микрофон подбирается автоматически", muted=True, wraplength=640
-        )
-        self.home_mic_detail.pack(anchor="w", pady=(0, 14))
-        controls = tk.Frame(card, bg=self.theme["card"])
-        controls.pack(fill="x", pady=(0, 12))
-        ttk.Button(
-            controls, text="Возобновить голос", style="Accent.TButton", command=self._start_voice
-        ).pack(side="left")
-        ttk.Button(controls, text="Пауза", command=self.runtime.stop_voice).pack(
-            side="left", padx=8
-        )
-        ttk.Button(controls, text="Проверить звук", command=lambda: self.switch_page("voice")).pack(
-            side="left"
-        )
-        ttk.Button(controls, text="Все команды", command=lambda: self.switch_page("skills")).pack(
-            side="left", padx=8
-        )
-        self.label(card, textvariable=self.heard_var, muted=True, wraplength=640).pack(
-            anchor="w", pady=(4, 6)
-        )
-        self.label(card, textvariable=self.understood_var, wraplength=640).pack(
-            anchor="w", pady=(0, 6)
-        )
-        self.home_trace = self.label(card, "", muted=True, wraplength=640)
-        self.home_trace.pack(anchor="w", pady=(0, 10))
-        self.command_result = self.label(card, "Попробуйте: «Крест, который час?»", wraplength=660)
-        self.command_result.pack(anchor="w", fill="x")
-        shortcuts = tk.Frame(page, bg=self.theme["bg"])
-        shortcuts.pack(fill="x", pady=(0, 14))
-        for i, (title, command) in enumerate(
-            (
-                ("План на сегодня", "план на сегодня"),
-                ("Таймер на 5 минут", "таймер на пять минут"),
-                ("Музыка", None),
-            )
-        ):
-            shortcuts.columnconfigure(i, weight=1, uniform="shortcuts")
-            ttk.Button(
-                shortcuts,
-                text=title,
-                command=(lambda c=command: self.runtime.submit(c))
-                if command
-                else lambda: self.switch_page("music"),
-            ).grid(row=0, column=i, sticky="ew", padx=(0, 8 if i < 2 else 0))
-        summary = self.card(page, "Ваш день")
-        self.overview_label = self.label(
-            summary, "Крест готова к работе", muted=True, wraplength=660
-        )
-        self.overview_label.pack(anchor="w")
-        ttk.Button(
-            summary, textvariable=self.reminder_var, command=lambda: self.switch_page("timers")
-        ).pack(anchor="w", pady=(8, 0))
-        ttk.Button(
-            summary,
-            text="Открыть скриншоты",
-            command=lambda: self.runtime.submit("открой скриншоты"),
-        ).pack(anchor="w", pady=(8, 0))
-        manual = self.advanced(page, "Написать вместо голоса")
-        self.manual_input = manual.master
-        row = tk.Frame(manual, bg=self.theme["card"])
-        row.pack(fill="x", padx=12, pady=12)
-        self.command_entry = ttk.Entry(row, font=(UI_FONT, 12))
-        self.command_entry.pack(side="left", fill="x", expand=True)
-        self.command_entry.bind("<Return>", lambda e: self.execute_command())
-        self.command_entry.bind("<Up>", lambda e: self._repeat_command())
-        self.command_entry.bind("<Down>", lambda e: self._repeat_command(1))
-        ttk.Button(row, text="Выполнить", command=self.execute_command).pack(
-            side="right", padx=(8, 0)
-        )
-        self.label(manual, textvariable=self.queue_var, muted=True, wraplength=660).pack(
-            anchor="w", padx=12
-        )
-        tools = tk.Frame(manual, bg=self.theme["card"])
-        tools.pack(fill="x", padx=12, pady=12)
-        ttk.Button(tools, text="Сохранить команду", command=self._save_favorite).pack(side="left")
-        ttk.Button(tools, text="Очистить очередь", command=self._clear_pending).pack(
-            side="left", padx=8
-        )
-        history = self.advanced(page, "Последние события")
-        self.event_text = tk.Text(
-            history,
-            height=7,
-            bg=self.theme["sidebar"],
-            fg=self.theme["text"],
-            font=(UI_FONT, 10),
-            relief="flat",
-            wrap="word",
-            state="disabled",
-        )
-        self.event_text.pack(fill="both", expand=True)
-        self._render_history()
+        build(self)
 
     def execute_command(self):
         text = self.command_entry.get().strip()
@@ -2063,6 +1969,9 @@ class ControlCenterApp(
                 f"{len(self.runtime.state.snapshot()['active_timers'])} активных таймеров  ·  "
                 f"{len(self.integration.processes)} подключённых сервисов"
             )
+            from relic_dashboard import refresh
+
+            refresh(self)
         if self.winfo_exists():
             self._poll_job = self.after(
                 40 if self.state() in ("normal", "zoomed") else 600, self._poll

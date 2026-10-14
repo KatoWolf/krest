@@ -36,6 +36,10 @@ class CrossOverlayController:
         self.root.geometry(f"50x65+{x}+{y}")
         self.canvas = tk.Canvas(self.root, width=50, height=65, bg=colour, highlightthickness=0)
         self.canvas.pack()
+        from PIL import ImageTk
+        from app_icons import load_image
+
+        self.art = ImageTk.PhotoImage(load_image(48), master=self.root)
 
     def _animate(self):
         self.job = None
@@ -53,8 +57,8 @@ class CrossOverlayController:
         )
         width = 3 if reduced else 3 + math.sin(time.monotonic() * 5)
         colour = getattr(self.parent, "theme", {}).get("accent", "#a78bfa")
-        self.canvas.create_line(25, 9, 25, 55, fill=colour, width=width)
-        self.canvas.create_line(12, 24, 38, 24, fill=colour, width=width)
+        self.canvas.create_oval(4, 5, 46, 59, outline=colour, width=width / 2)
+        self.canvas.create_image(25, 32, image=self.art)
         delay = max(1, int((self.active_until - time.monotonic()) * 1000)) if reduced else 40
         self.job = self.root.after(delay, self._animate)
 
@@ -76,6 +80,7 @@ class CrossOverlayController:
                 self.root.after_cancel(self.job)
             self.root.destroy()
         self.root = self.parent = self.canvas = self.job = None
+        self.art = None
         self.active_until = 0
 
 

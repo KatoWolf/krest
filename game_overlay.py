@@ -138,27 +138,14 @@ def draw_cross(canvas, size, state="idle", level=0, phase=0, reduced=False, labe
     canvas.create_oval(
         cx - radius, cy - radius, cx + radius, cy + radius, outline=color, width=1 + amplitude * 2
     )
-    # Flared arms and a long lower stem, recognisable at 32–96 px.
-    points = [
-        (-0.09, -0.33),
-        (0.09, -0.33),
-        (0.055, -0.12),
-        (0.25, -0.16),
-        (0.25, 0.035),
-        (0.06, 0),
-        (0.105, 0.34),
-        (-0.105, 0.34),
-        (-0.06, 0),
-        (-0.25, 0.035),
-        (-0.25, -0.16),
-        (-0.055, -0.12),
-    ]
-    coords = [value for x, y in points for value in (cx + x * size, cy + y * size)]
-    canvas.create_polygon(*coords, fill="#191527", outline=color, width=2)
-    r = size * (0.055 + amplitude * 0.018)
-    canvas.create_oval(
-        cx - r, cy - size * 0.07 - r, cx + r, cy - size * 0.07 + r, fill=color, outline=""
-    )
+    # Keep the supplied micro silhouette; state is communicated by its halo.
+    from PIL import ImageTk
+    from app_icons import load_image
+
+    if getattr(canvas, "_relic_size", None) != size:
+        canvas._relic_art = ImageTk.PhotoImage(load_image(size), master=canvas)
+        canvas._relic_size = size
+    canvas.create_image(cx, cy, image=canvas._relic_art)
     if labels:
         canvas.create_text(cx, size + 12, text=LABELS[state], fill=color, font=(UI_FONT, 8, "bold"))
 

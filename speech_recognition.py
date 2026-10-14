@@ -55,6 +55,16 @@ def decode_voice_command(manager, text, settings):
     cfg = settings.get("app_settings", {})
     wake_word = cfg.get("wake_word", "крест")
     wake, command = addressed_speech(text, wake_word)
+    if wake:
+        # A restarted address is common in live speech. Remove only repeated
+        # wake words at the start, never words inside notes or other arguments.
+        restart = re.compile(
+            r"^(?:(?:ну|ээ|эм|алло|слушай)[, ]+)*" + re.escape(wake_word) + r"(?:[, ]+|$)", re.I
+        )
+        for _ in range(3):
+            command, count = restart.subn("", command, count=1)
+            if not count:
+                break
     near_wake = False
     if not wake and wake_word.casefold() == "крест":
         for variant in ("креси", "крес"):

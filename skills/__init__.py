@@ -2,6 +2,7 @@
 
 BUILTIN_MODULES = (
     "assistant_tools",
+    "personal_tools",
     "basic",
     "discord_voice",
     "interactive",

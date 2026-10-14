@@ -32,6 +32,8 @@ templates.json
 
 inbox.sqlite3*
 file_index.sqlite3*
+clipboard.sqlite3*
+game_sessions.sqlite3*
 audio_restore.json
 extensions/
 activity_profile.json

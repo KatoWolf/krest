@@ -427,12 +427,14 @@ def wait_for_audio(timeout=0.03):
 
 def _known_control(text, cfg):
     from speech_tools import addressed_speech
+    from command_understanding import conversational_form
 
     # Only a complete catalog phrase may bypass the energy-based pause. A
     # partial hypothesis, negation or quoted command never triggers an action.
     wake = cfg.get("wake_word", "крест")
     addressed, body = addressed_speech(text, wake)
-    candidate = wake + " " + body if addressed else text
+    body = conversational_form(body if addressed else text)
+    candidate = wake + " " + body if addressed else body
     return candidate.casefold() in _quick_phrases
 
 

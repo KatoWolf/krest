@@ -1,4 +1,18 @@
 THEMES = {
+    "Relic": {
+        "bg": "#101016",
+        "sidebar": "#131319",
+        "card": "#1a1922",
+        "card_hover": "#282631",
+        "accent": "#b3a2c5",
+        "accent_hover": "#ccbddb",
+        "text": "#eceaf0",
+        "sub_text": "#aaa4b5",
+        "glow": "#342c40",
+        "success": "#91c9b2",
+        "danger": "#ed92a6",
+        "border": "#46404f",
+    },
     "Graphite": {
         "bg": "#101319",
         "sidebar": "#151a23",
