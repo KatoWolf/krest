@@ -50,6 +50,15 @@ def daily_reminder(phrase, state, weekdays=None):
     category="Timers",
 )
 def named_reminder(phrase, state):
+    try:
+        seconds, label = parse_named_reminder(phrase)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    state.add_timer(seconds, label)
+    return f"Напоминание создано: {label}."
+
+
+def parse_named_reminder(phrase):
     if ":" in phrase:
         delay, label = phrase.split(":", 1)
     else:
@@ -68,13 +77,11 @@ def named_reminder(phrase, state):
                 break
         delay, label = " ".join(tokens[:split]), " ".join(tokens[split:])
     if not label.strip() or len(label) > 500:
-        return {
-            "status": "error",
-            "message": "Укажите, о чём напомнить, например: напомни через пять минут выпить воды",
-        }
+        raise ValueError("Укажите, о чём напомнить, например: напомни через пять минут выпить воды")
     seconds, _ = parse_timer_duration(delay)
-    state.add_timer(seconds, label.strip())
-    return f"Напоминание создано: {label}."
+    if not 0 < seconds <= 365 * 86400:
+        raise ValueError("Укажите срок напоминания от одной секунды до года.")
+    return seconds, label.strip()
 
 
 stopwatch_start_time: Optional[float] = None

@@ -21,6 +21,11 @@ COLORS = {
     "speaking": "#c2a0ff",
     "notice": "#ff9e60",
     "error": "#fa6379",
+    "addressed": "#65efbc",
+    "recognizing": "#7cc8ff",
+    "queued": "#e2c488",
+    "executing": "#ffc56b",
+    "success": "#73ec9b",
 }
 LABELS = {
     "idle": "Наблюдаю",
@@ -30,6 +35,11 @@ LABELS = {
     "speaking": "Отвечаю",
     "notice": "Есть новость",
     "error": "Нужна проверка",
+    "addressed": "Услышала",
+    "recognizing": "Распознаю",
+    "queued": "В очереди",
+    "executing": "Выполняю",
+    "success": "Готово",
 }
 TRANSPARENT = "#010203"
 
@@ -37,6 +47,9 @@ TRANSPARENT = "#010203"
 def indicator_state(data, now=None):
     now = time.time() if now is None else now
     game, voice = data.get("game", {}), data.get("voice", {})
+    feedback = data.get("feedback", {})
+    if feedback.get("until", 0) > now and feedback.get("stage") in COLORS:
+        return feedback["stage"]
     if game.get("route", {}).get("mode") in ("recording", "playing"):
         return "busy"
     if voice.get("speaking"):

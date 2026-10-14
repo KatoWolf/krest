@@ -118,7 +118,7 @@ def dislike_track(text=""):
 
 
 @contextmanager
-def endpoint_volume():
+def endpoint_volume(with_device=False):
     import comtypes
     from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
     from ctypes import cast, POINTER
@@ -127,25 +127,31 @@ def endpoint_volume():
     try:
         speakers = AudioUtilities.GetSpeakers()
         if hasattr(speakers, "EndpointVolume"):
-            yield speakers.EndpointVolume
+            volume = speakers.EndpointVolume
         else:
-            yield cast(
+            volume = cast(
                 speakers.Activate(IAudioEndpointVolume._iid_, comtypes.CLSCTX_ALL, None),
                 POINTER(IAudioEndpointVolume),
             )
+        yield (volume, str(speakers.id)) if with_device else volume
     finally:
         comtypes.CoUninitialize()
 
 
 def _volume(action, value=0):
     try:
-        with endpoint_volume() as volume:
+        with endpoint_volume(with_device=True) as (volume, device):
+            from action_undo import record_volume
+
+            before = (float(volume.GetMasterVolumeLevelScalar()), bool(volume.GetMute()))
             if action in ("mute", "unmute"):
                 volume.SetMute(action == "mute", None)
+                record_volume(before, (before[0], action == "mute"), device)
                 return "Системный звук выключен." if action == "mute" else "Системный звук включён."
             level = value if action == "set" else volume.GetMasterVolumeLevelScalar() * 100 + value
             level = max(0, min(100, level))
             volume.SetMasterVolumeLevelScalar(level / 100, None)
+            record_volume(before, (level / 100, before[1]), device)
             return f"Системная громкость: {round(level)}%."
     except Exception as exc:
         return {

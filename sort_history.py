@@ -67,7 +67,7 @@ class SortHistory:
             row["restored_mtime"],
         )
 
-    def undo_last(self, stop=None):
+    def undo_last(self, stop=None, batch_id=None):
         from downloads import _sort_lock, _CancellableReader
 
         result = {"restored": 0, "errors": []}
@@ -80,9 +80,13 @@ class SortHistory:
             if not process_lock.acquire():
                 raise ValueError("Сортировка этой папки уже выполняется")
             with self.connect() as db:
-                batch = db.execute(
-                    "SELECT batch FROM moves WHERE undone=0 ORDER BY id DESC LIMIT 1"
-                ).fetchone()
+                batch = (
+                    {"batch": batch_id}
+                    if batch_id
+                    else db.execute(
+                        "SELECT batch FROM moves WHERE undone=0 ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                )
                 rows = (
                     []
                     if not batch

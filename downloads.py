@@ -60,6 +60,7 @@ class DownloadSorter:
 
             journal = None if preview else SortHistory(root)
             batch = uuid.uuid4().hex
+            result["batch"] = batch
             seen = set()
             for path in root.iterdir():
                 if stop and stop.is_set():

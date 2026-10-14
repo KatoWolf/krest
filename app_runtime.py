@@ -44,6 +44,12 @@ class AssistantRuntime:
         self.performance = PerformancePolicy(settings, Path(data_dir) / "activity_profile.json")
         self.center = NotificationCenter(Path(data_dir) / "inbox.sqlite3")
         self.context = CommandContext(self.state)
+        from action_undo import UndoHistory
+        from command_feedback import CommandFeedback
+
+        self.undo = UndoHistory(self)
+        self.feedback = CommandFeedback()
+        self._feedback_turns = {}
         self.voice_status = "Микрофон на паузе"
         self.notification_mode = None
         self.scenarios = ScenarioRunner(self)
@@ -99,6 +105,10 @@ class AssistantRuntime:
     def _speech_event(self, text):
         self.events.put(("speech", text))
 
+    @property
+    def voice_feedback(self):
+        return self.feedback.snapshot()
+
     def skill_import(self, action, **args):
         imports = self.manager.imports
         if action == "list":
@@ -143,7 +153,16 @@ class AssistantRuntime:
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
             self.start_voice()
 
-    def submit(self, text, source="text", confidence=None, request_key=None):
+    def submit(
+        self,
+        text,
+        source="text",
+        confidence=None,
+        request_key=None,
+        *,
+        recognition=None,
+        feedback_turn=None,
+    ):
         text = text.strip()
         if not text:
             return False
@@ -178,8 +197,18 @@ class AssistantRuntime:
                 self._queue_ready[lane].set()
                 self._submitted_at[job_id] = (
                     time.monotonic(),
-                    voice.recognition() if source == "voice" else {},
+                    (recognition if recognition is not None else voice.recognition())
+                    if source == "voice"
+                    else {},
                 )
+                if source in ("voice", "text"):
+                    turn = (
+                        feedback_turn
+                        if feedback_turn is not None
+                        else self.feedback.begin("recognizing", text)
+                    )
+                    self._feedback_turns[job_id] = turn
+                    self.feedback.update(turn, "queued", text)
                 return True
             except queue.Full:
                 self.jobs.transition(job_id, "cancelled", "Очередь заполнена")
@@ -196,6 +225,9 @@ class AssistantRuntime:
                         item = target.get_nowait()
                         self.jobs.transition(item[3], "cancelled", "Отменено до начала выполнения")
                         self._submitted_at.pop(item[3], None)
+                        turn = self._feedback_turns.pop(item[3], None)
+                        if turn is not None:
+                            self.feedback.update(turn, "error", "Команда отменена", 3)
                         target.task_done()
                         count += 1
                     except queue.Empty:
@@ -211,6 +243,10 @@ class AssistantRuntime:
         from command_understanding import exact_command
 
         _, body = decode_voice_command(self.manager, text, self.settings())
+        from command_sequence import plan_sequence
+
+        if plan_sequence(self.manager, body) is not None:
+            return "sequence"
         command = exact_command(self.manager, body)
         found = self.manager.match(command) if command else None
         from command_lanes import lane_for
@@ -222,7 +258,13 @@ class AssistantRuntime:
         ident = getattr(self._job_local, "current", None) or self.jobs.create(text, source)[0]
         submitted, recognition = self._submitted_at.pop(ident, (started, {}))
         self._job_local.recognition = recognition
+        turn = self._feedback_turns.pop(ident, None)
+        if turn is None and source in ("voice", "text"):
+            turn = self.feedback.begin("recognizing", text)
+        self._job_local.feedback_turn = turn
+        self.feedback.update(turn, "recognizing", text)
         if not self.jobs.transition(ident, "running"):
+            self.feedback.update(turn, "error", "Задание отменено", 3)
             return CommandResult(True, False, "Задание отменено или уже завершено")
         from execution import ExecutionToken
 
@@ -234,6 +276,12 @@ class AssistantRuntime:
             result = self._execute(text, source, confidence)
             status = "completed" if result.success else "cancelled" if token.is_set() else "failed"
             self.jobs.transition(ident, status, result.text)
+            stage = "success" if result.success else "error"
+            if source == "voice" and self._active_until > time.monotonic() and not result.skill_id:
+                stage = "listening"
+            if not result.handled and not result.text:
+                stage = "idle"
+            self.feedback.update(turn, stage, result.text, 6 if stage == "listening" else 3)
             trace = {
                 "heard": text,
                 "skill": result.skill_id,
@@ -258,12 +306,14 @@ class AssistantRuntime:
             return result
         except Exception as exc:
             self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
+            self.feedback.update(turn, "error", str(exc), 4)
             raise
         finally:
             with self._jobs_lock:
                 self._active_jobs.pop(ident, None)
             self._job_local.token = None
             self._job_local.recognition = None
+            self._job_local.feedback_turn = None
 
     @property
     def command_stop(self):
@@ -323,6 +373,7 @@ class AssistantRuntime:
                 return CommandResult(False, False, "")
             if not wake:
                 from command_understanding import exact_command
+                from command_sequence import plan_sequence
 
                 answer = command.casefold().strip(" ,.!?")
                 pending = self.understanding.pending
@@ -358,7 +409,12 @@ class AssistantRuntime:
                         )
                     )
                 )
-                if not (exact_command(self.manager, command) or is_answer or is_context):
+                if not (
+                    exact_command(self.manager, command)
+                    or plan_sequence(self.manager, command)
+                    or is_answer
+                    or is_context
+                ):
                     observed("Фоновая речь — ожидаю команду")
                     return CommandResult(False, False, "")
             from speech_recognition import command_confidence
@@ -407,6 +463,26 @@ class AssistantRuntime:
             self.events.put(("result", result))
             return result
         learning = None
+        if source in ("voice", "text"):
+            from command_sequence import plan_sequence
+
+            plan = plan_sequence(self.manager, command)
+            if plan is not None:
+                if source == "voice" and not plan.error:
+                    from command_sequence import sequence_confidence
+
+                    score = sequence_confidence(
+                        plan, getattr(self._job_local, "recognition", None) or {}, confidence
+                    )
+                    if score is not None and score * 100 < cfg.get("speech_confidence", 60):
+                        plan.error = (
+                            "Не расслышала одну из команд. Цепочка не запущена; повторите её."
+                        )
+                if plan.error:
+                    result = CommandResult(True, False, plan.error, "sequence")
+                    return self._finish_command(result, None, source, wake, observed)
+                observed("Цепочка проверена; передана на выполнение")
+                return plan, None, None, wake, observed
         if source == "voice":
             import re
 
@@ -441,7 +517,9 @@ class AssistantRuntime:
             command, learning = interpreted.command, interpreted.learning or learning
         observed("Передано на выполнение")
         normalized = normalize_command(command, self.settings().get("command_aliases", {}))
-        followup = self.context.handle(normalized) if source != "scenario" else None
+        # Context actions also mutate timers. Defer them until cancellation has
+        # been checked and the resource lock / undo capture have been acquired.
+        followup = normalized if source != "scenario" else None
         return command, followup, learning, wake, observed
 
     def _execute(self, text, source="text", confidence=None):
@@ -451,16 +529,44 @@ class AssistantRuntime:
         if isinstance(prepared, CommandResult):
             return prepared
         command, followup, learning, wake, observed = prepared
+        from command_sequence import SequencePlan
+
+        if isinstance(command, SequencePlan):
+            result = self._execute_sequence(command)
+        else:
+            result = self._execute_action(command, followup)
+        with self._dialog_lock:
+            return self._finish_command(result, learning, source, wake, observed)
+
+    def _execute_action(self, command, followup=None):
         with self._lane_locks[self._command_lane(command)]:
             if self.command_stop.is_set():
                 return CommandResult(True, False, "Задание отменено до отправки действия")
-            result = (
-                CommandResult(True, followup.success, followup.text)
-                if followup is not None
-                else self.manager.execute(command, self.state)
+            self.feedback.update(
+                getattr(self._job_local, "feedback_turn", None), "executing", command, 300
             )
-        with self._dialog_lock:
-            return self._finish_command(result, learning, source, wake, observed)
+            with self.undo.capture(command):
+                if followup is not None:
+                    with self._dialog_lock:
+                        followup = self.context.handle(followup)
+                return (
+                    CommandResult(True, followup.success, followup.text)
+                    if followup is not None
+                    else self.manager.execute(command, self.state)
+                )
+
+    def _execute_sequence(self, plan):
+        replies = []
+        with voice.defer_output():
+            for i, step in enumerate(plan.steps, 1):
+                result = self._execute_action(step["command"])
+                replies.append(f"{i}. {result.text}")
+                if not result.success:
+                    replies.append(
+                        f"Цепочка остановлена на шаге {i}; следующие команды не выполнялись."
+                    )
+                    return CommandResult(True, False, "\n".join(replies), "sequence")
+        return CommandResult(True, True, "\n".join(replies), "sequence")
 
     def _finish_command(self, result, learning, source, wake, observed):
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
@@ -773,6 +879,9 @@ class AssistantRuntime:
             self.events.put(
                 ("voice", "Микрофон активен" if connected else "Ищу доступный микрофон…")
             )
+            from speech_turn import VoiceTurn
+
+            turn = VoiceTurn(self.manager, self.feedback)
             while not self.stop_event.is_set() and not self._voice_stop.is_set():
                 voice.wait_for_audio(0.03)
                 if self._arm_requested.is_set():
@@ -782,7 +891,12 @@ class AssistantRuntime:
                     ).get("active_timeout", 6)
                     self.events.put(("voice", "Слушаю команду без обращения"))
                 text = voice.listen()
-                now_connected = bool(voice.telemetry().get("connected"))
+                telemetry = voice.telemetry()
+                now_connected = bool(telemetry.get("connected"))
+                if telemetry.get("recovery") or not now_connected:
+                    turn.clear(telemetry.get("recovery") or "Микрофон переподключается")
+                else:
+                    turn.observe(telemetry.get("partial", ""))
                 if now_connected != connected:
                     connected = now_connected
                     self.voice_status = (
@@ -796,7 +910,8 @@ class AssistantRuntime:
                             else "Микрофон отключён, пробую подключиться снова…",
                         )
                     )
-                if text:
+                recognized = turn.push(text, voice.recognition()) if text else turn.flush()
+                for text, recognition, feedback_turn in recognized:
                     from speech_recognition import decode_voice_command
 
                     addressed, _ = decode_voice_command(self.manager, text, self.settings())
@@ -811,13 +926,19 @@ class AssistantRuntime:
                                 {
                                     "heard": text,
                                     "command": "",
-                                    "confidence": voice.recognition().get("confidence"),
+                                    "confidence": recognition.get("confidence"),
                                     "status": "Без обращения — команда не выполнена",
                                 },
                             )
                         )
                         continue
-                    self.submit(text, "voice", voice.recognition().get("confidence"))
+                    self.submit(
+                        text,
+                        "voice",
+                        recognition.get("confidence"),
+                        recognition=recognition,
+                        feedback_turn=feedback_turn,
+                    )
         except Exception as exc:
             failure = str(exc)
             self.events.put(("error", f"Голос: {exc}"))

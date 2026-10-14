@@ -507,6 +507,13 @@ def organize_downloads(text: str = "") -> Dict[str, Any]:
         result = DownloadSorter(state.config_getter().get("file_policy", {})).scan(
             folder, automatic=False, stop=stop
         )
+        from action_undo import record_sort
+
+        record_sort(
+            folder,
+            result,
+            lambda: state.runtime.command_stop if hasattr(state, "runtime") else None,
+        )
         if stop and stop.is_set():
             return dict(
                 result,

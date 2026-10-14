@@ -340,6 +340,10 @@ class RemoteRuntime:
         return self.cached["voice"].get("status", "Микрофон на паузе")
 
     @property
+    def voice_feedback(self):
+        return self.cached["voice"].get("feedback", {})
+
+    @property
     def download_status(self):
         return self.cached["downloads"]
 

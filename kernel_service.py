@@ -145,6 +145,7 @@ class Kernel:
                 "status": rt.voice_status,
                 "listening": bool(rt._voice_thread and rt._voice_thread.is_alive()),
                 "telemetry": voice.telemetry(),
+                "feedback": rt.feedback.snapshot(),
             },
             "performance": {
                 "active": rt.performance.active,
@@ -197,6 +198,7 @@ class Kernel:
                 "voice": voice.telemetry(),
                 "listening": bool(rt._voice_thread and rt._voice_thread.is_alive()),
                 "command": rt.current_command,
+                "feedback": rt.feedback.snapshot(),
                 "reduced": self.settings()["accessibility"]["reduce_motion"],
             }
         if method == "command.parse":

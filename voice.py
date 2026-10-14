@@ -14,6 +14,7 @@ import time
 
 logger = logging.getLogger(__name__)
 _capture = ContextVar("speech_capture", default=None)
+_defer = ContextVar("speech_defer", default=False)
 _engine = None
 _model_signature = None
 _output = None
@@ -52,6 +53,16 @@ def capture():
         _capture.reset(token)
 
 
+@contextmanager
+def defer_output():
+    """Capture per-step replies, then announce one ordered sequence summary."""
+    token = _defer.set(True)
+    try:
+        yield
+    finally:
+        _defer.reset(token)
+
+
 def _playback():
     while True:
         generation, text = _audio_queue.get()
@@ -80,6 +91,8 @@ def speak(text):
     messages = _capture.get()
     if messages is not None:
         messages.append(text)
+    if _defer.get():
+        return
     if _output:
         _output(text)
     else:

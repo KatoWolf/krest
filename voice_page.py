@@ -32,6 +32,16 @@ class VoicePages:
             info, "После команды появится измерение задержки", wraplength=680
         )
         self.voice_trace.pack(anchor="w", pady=8)
+        self.label(
+            info,
+            "Можно сказать: «Крест, переключи трек и поставь таймер на две минуты». "
+            "До пяти действий по порядку; при ошибке цепочка остановится. "
+            "«Крест, верни как было» — отменить последнее поддерживаемое изменение. "
+            "В игровом значке: зелёный — услышала, голубой — распознаёт, "
+            "жёлтый — выполняет, ярко-зелёный — готово, красный — ошибка.",
+            muted=True,
+            wraplength=680,
+        ).pack(anchor="w", pady=8)
         card = self.card(
             self.page_bodies["voice"],
             "Голос Крест",
@@ -416,7 +426,15 @@ class VoicePages:
     def _update_voice_meter(self):
         data = voice.telemetry()
         if self.runtime.voice_status and not self.audio_test_busy:
-            self.voice_var.set(self.runtime.voice_status)
+            from game_overlay import LABELS
+
+            feedback = self.runtime.voice_feedback
+            stage = feedback.get("stage")
+            self.voice_var.set(
+                LABELS[stage] + (" · " + feedback["text"] if feedback.get("text") else "")
+                if stage in LABELS and stage != "idle"
+                else self.runtime.voice_status
+            )
         rms = self.microphone_test.level if self.audio_test_busy else data.get("rms", 0)
         peak = self.microphone_test.peak if self.audio_test_busy else data.get("peak", 0)
         for key in ("mic_meter", "home_meter"):

@@ -89,6 +89,9 @@ def check_game_audio(engine, manager):
     from configuration import DEFAULT_CONFIG
     from speech_recognition import command_confidence, decode_voice_command
     from speech_tools import normalize_command
+    from command_feedback import CommandFeedback
+    from command_sequence import plan_sequence, sequence_confidence
+    from speech_turn import VoiceTurn
 
     target = "skills.media.next_track"
     cfg = DEFAULT_CONFIG["app_settings"]
@@ -99,11 +102,18 @@ def check_game_audio(engine, manager):
         ("Крест, время.", 0.004, 1, "skills.basic.basic"),
         ("Крест, сделай скриншот.", 0.004, 1, "skills.windows.take_screenshot"),
         ("Крест, таймер на две минуты.", 0.004, 1, "skills.timers_alarms.set_timer"),
+        ("Крест, время и поставь таймер на две минуты.", 0.0, 1, "sequence"),
+        (("Крест, переключи.", "Трек."), 0.0, 1, target),
         ("Мы продолжаем играть.", 0.0, 1, ""),
         ("Переключи трек.", 0.0, 1, ""),
     )
     for phrase, noise, batch, expected in checks:
-        samples = engine.synthesize(phrase)
+        if isinstance(phrase, tuple):
+            samples = np.concatenate(
+                [engine.synthesize(phrase[0]), np.zeros(19200), engine.synthesize(phrase[1])]
+            )
+        else:
+            samples = engine.synthesize(phrase)
         audio = np.concatenate([samples * 0.65, np.zeros(24000 * 2)])
         audio += np.random.default_rng(73).normal(0, noise, audio.shape)
         # Calibrate in quiet, then change the background while talking.
@@ -115,22 +125,37 @@ def check_game_audio(engine, manager):
         engine._noise.reset()
         engine._continuity.recovering = False
         accepted, transcripts = [], []
+        turn = VoiceTurn(manager, CommandFeedback())
+
+        def consume(results):
+            for text, data, _ in results:
+                wake, body = decode_voice_command(manager, text, DEFAULT_CONFIG)
+                found = manager.match(normalize_command(body))
+                plan = plan_sequence(manager, body)
+                confidence = command_confidence(
+                    manager, text, body, wake, data["confidence"], data, cfg
+                )
+                if plan is not None and not plan.error:
+                    confidence = sequence_confidence(plan, data, confidence)
+                if wake and confidence is not None and confidence >= 0.6:
+                    if plan is not None and not plan.error:
+                        accepted.append("sequence")
+                    elif found:
+                        accepted.append(found[0].id)
+
         for offset in range(0, len(raw), 960 * batch):
             chunk = raw[offset : offset + 960 * batch]
             engine.audio_callback(chunk, len(chunk) // 2, None, None)
             while engine.q.ready.is_set():
                 text = engine.listen()
+                now = offset / 32000
+                turn.observe(engine.metrics.get("partial", ""), now)
                 if not text:
+                    consume(turn.flush(now))
                     continue
                 transcripts.append(text)
-                wake, body = decode_voice_command(manager, text, DEFAULT_CONFIG)
-                found = manager.match(normalize_command(body))
-                data = engine.last_recognition
-                confidence = command_confidence(
-                    manager, text, body, wake, data["confidence"], data, cfg
-                )
-                if wake and found and confidence is not None and confidence >= 0.6:
-                    accepted.append(found[0].id)
+                consume(turn.push(text, engine.last_recognition, now))
+        consume(turn.flush(len(raw) / 32000 + 6))
         print(
             "Game audio check: "
             + str(
@@ -145,4 +170,4 @@ def check_game_audio(engine, manager):
             flush=True,
         )
         if accepted != ([expected] if expected else []):
-            raise RuntimeError("Голос в игровом профиле: " + phrase + " → " + str(transcripts))
+            raise RuntimeError("Голос в игровом профиле: " + str(phrase) + " → " + str(transcripts))

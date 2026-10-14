@@ -193,6 +193,18 @@ def undo_sort(state):
 
 
 @skill(
+    keywords=["верни как было", "отмени последнее действие", "верни последнее изменение"],
+    description="Отменить последнее поддерживаемое изменение: громкость, таймер, будильник или ручную сортировку",
+    category="System",
+)
+def undo_action(state):
+    runtime = getattr(state, "runtime", None)
+    if runtime is None:
+        return {"status": "error", "message": "История отмены доступна в запущенном ядре Крест."}
+    return runtime.undo.undo()
+
+
+@skill(
     keywords=["предпросмотр сортировки"],
     description="Показать распределение загрузок без перемещения",
     category="System",

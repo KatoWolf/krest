@@ -142,6 +142,9 @@ class AssistantState:
                     setattr(self, key, items)
                 self.last_target = previous_target
                 raise
+            from action_undo import record_state
+
+            record_state(self, previous)
 
     def reminders(self):
         with self._lock:

@@ -15,8 +15,14 @@ QUICK_SKILLS = SHORT_AUDIO_SKILLS | {
 def quick_phrases(manager, settings, learned=()):
     wake = settings.get("app_settings", {}).get("wake_word", "крест").casefold()
     phrases = set()
+    from command_sequence import SAFE
+
     for entry in manager.catalog():
-        if entry.id in QUICK_SKILLS:
+        if (
+            entry.id in QUICK_SKILLS
+            or (entry.id in SAFE or entry.id == "skills.workflows.undo_action")
+            and not entry.patterns
+        ):
             phrases.update(
                 k.casefold() for k in [*entry.keywords, *entry.examples] if len(k.split()) <= 6
             )

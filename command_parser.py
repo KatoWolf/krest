@@ -10,6 +10,21 @@ def parse_command(manager, text, settings):
     if len(text) > 2000:
         raise ValueError("Максимум 2000 символов")
     wake, command = decode_voice_command(manager, text, settings)
+    from command_sequence import plan_sequence
+
+    plan = plan_sequence(manager, command)
+    if plan is not None:
+        return {
+            "input": text,
+            "wake": wake,
+            "normalized": " → ".join(v["command"] for v in plan.steps),
+            "skill": "sequence",
+            "description": f"Последовательно команд: {len(plan.steps)}",
+            "availability": plan.error or "Доступен",
+            "parameters": {},
+            "suggestions": [],
+            "steps": plan.steps,
+        }
     normalized = exact_command(manager, command) or normalize_command(
         command, settings.get("command_aliases", {})
     )
@@ -80,6 +95,11 @@ def open_parser(app, initial_phrase=None):
             + (
                 "\nПохожие команды: " + "; ".join(data["suggestions"])
                 if data["suggestions"]
+                else ""
+            )
+            + (
+                "\nПорядок: " + " → ".join(v["command"] for v in data["steps"])
+                if data.get("steps")
                 else ""
             )
         )

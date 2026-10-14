@@ -76,16 +76,37 @@ def check_kernel(config_path):
         if client.call("terminal_jobs", chat_id=123):
             raise RuntimeError("Новый пульт получил постороннюю историю")
         key = uuid.uuid4().hex
-        client.call("submit", text="который час", request_key=key)
+        client.call("submit", text="таймер на две минуты и время", request_key=key)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             job = next((j for j in client.call("jobs") if j["request_key"] == key), None)
             if job and job["status"] == "completed":
+                break
+            if job and job["status"] == "failed":
+                raise RuntimeError(job["result"])
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("Ядро не выполнило цепочку команд")
+        if len(client.call("snapshot")["state"]["active_timers"]) != 1:
+            raise RuntimeError("Цепочка не создала таймер")
+        parsed = client.call("command.parse", text="время и таймер на две минуты")
+        if parsed["skill"] != "sequence" or len(parsed.get("steps", [])) != 2:
+            raise RuntimeError("Разбор цепочки недоступен в сборке")
+        key = uuid.uuid4().hex
+        client.call("submit", text="верни как было", request_key=key)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            job = next((j for j in client.call("jobs") if j["request_key"] == key), None)
+            if job and job["status"] == "completed":
+                if client.call("snapshot")["state"]["active_timers"]:
+                    raise RuntimeError("Отмена не удалила созданный таймер")
+                if client.call("overlay")["feedback"].get("stage") != "success":
+                    raise RuntimeError("Индикатор не получил результат команды")
                 return
             if job and job["status"] == "failed":
                 raise RuntimeError(job["result"])
             time.sleep(0.1)
-        raise RuntimeError("Ядро не выполнило команду времени")
+        raise RuntimeError("Ядро не выполнило отмену последнего действия")
     finally:
         client.call("shutdown")
         deadline = time.monotonic() + 10

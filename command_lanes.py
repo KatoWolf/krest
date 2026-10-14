@@ -11,6 +11,7 @@ LANES = (
     "warframe",
     "system",
     "plugins",
+    "sequence",
 )
 
 FILES = {
