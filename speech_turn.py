@@ -101,7 +101,7 @@ class VoiceTurn:
                 text=text,
                 recognition=recognition,
                 started=started,
-                until=min(started + 5, now + 1.4),
+                until=min(started + 5, now + 2),
             )
             self.feedback.update(self.turn, "recognizing", "Слушаю продолжение команды")
             self.partial = ""
