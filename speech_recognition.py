@@ -14,19 +14,30 @@ SHORT_AUDIO_SKILLS = TRANSPORT_SKILLS | {
 
 
 def command_confidence(manager, text, command, addressed, average, recognition, cfg):
-    """A weak wake word must not outweigh clearly heard command words.
+    """Score the addressed phrase instead of the preceding conversation.
 
-    Only exact short controls qualify. Keep the confidence of the intent verb;
+    Only exact short controls can discount a weak wake word. Keep the intent verb;
     don't relax confidence for numbers, names or arbitrary task contents.
     """
     if not addressed or recognition.get("text") != text:
         return average
     words = recognition.get("words", [])
     wake = cfg.get("wake_word", "крест").casefold()
-    start = next((i for i, w in enumerate(words) if w.get("word", "").casefold() == wake), None)
+    # Confidence belongs to the addressed phrase, not the conversation before
+    # it. Align Vosk tokens before discarding any scores; incomplete metadata
+    # must keep the original confidence gate.
+    aligned = " ".join(w.get("word", "") for w in words).casefold()
+    aligned_wake, body = addressed_speech(aligned, wake)
+    start = len(words) - len(body.split()) - 1 if aligned_wake else None
+    aligned_ok = aligned == " ".join(text.casefold().split())
     found = manager.match(normalize_command(command))
-    if start is None or not found or found[0].id not in SHORT_AUDIO_SKILLS:
+    if start is None or not aligned_ok:
         return average
+    if any("conf" not in w for w in words[start:]):
+        return average
+    if not found or found[0].id not in SHORT_AUDIO_SKILLS:
+        scores = [float(w["conf"]) for w in words[start:]]
+        return sum(scores) / len(scores) if scores else average
     rest = words[start + 1 :]
     if not rest or any("conf" not in w for w in rest):
         return average

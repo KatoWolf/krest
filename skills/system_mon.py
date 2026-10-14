@@ -4,7 +4,6 @@ import time
 import shutil
 import ctypes
 import logging
-import importlib
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
@@ -186,15 +185,19 @@ def empty_recycle_bin() -> bool:
         return False
 
 
-def clean_directory_files(folder_path: Path, min_age_seconds=86400) -> int:
+def clean_directory_files(folder_path: Path, min_age_seconds=86400, stop=None) -> int:
     folder_path = Path(folder_path)
     if not folder_path.is_dir() or folder_path.is_symlink():
         return 0
     cutoff = time.time() - min_age_seconds
     freed = 0
     for current, dirs, files in os.walk(folder_path, followlinks=False):
+        if stop is not None and stop.is_set():
+            break
         dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
         for name in files:
+            if stop is not None and stop.is_set():
+                return freed
             path = Path(current) / name
             try:
                 info = path.lstat()
@@ -208,23 +211,8 @@ def clean_directory_files(folder_path: Path, min_age_seconds=86400) -> int:
 
 
 def try_get_gpu_info() -> Dict[str, Any]:
-    """Запрашивает статус видеокарты через GPUtil или nvidia-smi."""
+    """Use a bounded subprocess; GPUtil's internal nvidia-smi has no timeout."""
     gpu_data = {}
-    try:
-        gputil = importlib.import_module("GPUtil")
-        gpus = gputil.getGPUs()
-        if gpus:
-            gpu = gpus[0]
-            gpu_data = {
-                "name": gpu.name,
-                "load_percent": int(gpu.load * 100),
-                "temperature": int(gpu.temperature),
-                "memory_used_mb": int(gpu.memoryUsed),
-                "memory_total_mb": int(gpu.memoryTotal),
-            }
-            return gpu_data
-    except Exception:
-        pass
 
     # Резервный запрос через nvidia-smi CLI
     try:
@@ -250,7 +238,10 @@ def get_all_disks_status() -> List[Dict[str, Any]]:
     """Собирает данные по всем подключенным дискам в системе."""
     disks = []
     for partition in psutil.disk_partitions(all=False):
-        if os.name == "nt" and "cdrom" in partition.opts:
+        if os.name == "nt" and (
+            any(kind in partition.opts for kind in ("cdrom", "remote"))
+            or partition.mountpoint.startswith("\\\\")
+        ):
             continue
         try:
             usage = psutil.disk_usage(partition.mountpoint)
@@ -345,29 +336,32 @@ def get_system_status(text: str = "") -> Dict[str, Any]:
     description="Очистка временных файлов Windows старше суток",
     category="System",
 )
-def clean_temp_files(text: str = "") -> Dict[str, Any]:
+def clean_temp_files(text: str = "", state=None) -> Dict[str, Any]:
     """Быстрая молчаливая очистка всех временных каталогов."""
     total_freed_bytes = 0
+    stop = getattr(getattr(state, "runtime", None), "command_stop", None)
 
     # 1. Пользовательская папка %TEMP%
     user_temp = os.environ.get("TEMP")
     if user_temp:
-        total_freed_bytes += clean_directory_files(Path(user_temp))
+        total_freed_bytes += clean_directory_files(Path(user_temp), stop=stop)
 
     # 2. Системная папка Windows Temp
     win_root = os.environ.get("SystemRoot", "C:\\Windows")
     win_temp = Path(win_root) / "Temp"
-    total_freed_bytes += clean_directory_files(win_temp)
+    total_freed_bytes += clean_directory_files(win_temp, stop=stop)
 
     # 3. Дополнительные дампы и кэши
     crash_dumps = Path(win_root) / "CrashDumps"
     if crash_dumps.exists():
-        total_freed_bytes += clean_directory_files(crash_dumps)
+        total_freed_bytes += clean_directory_files(crash_dumps, stop=stop)
 
     # 4. Очистка Корзины
     bin_cleared = False  # Recycle bin has a separate explicit command.
 
     freed_mb = round(total_freed_bytes / (1024 * 1024), 2)
+    if stop is not None and stop.is_set():
+        return {"status": "error", "message": f"Очистка остановлена. Освобождено {freed_mb} МБ."}
     logger.info(f"Очистка завершена. Освобождено {freed_mb} МБ. Корзина очищена: {bin_cleared}")
 
     return {

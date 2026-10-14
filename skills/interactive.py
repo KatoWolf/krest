@@ -224,6 +224,7 @@ def roll_dice(text: str):
         r"число от (?P<start>.+?) до (?P<end>.+)",
     ],
     description="Генерация случайного числа в диапазоне (поддерживает цифры и слова, например: от пяти до двадцати)",
+    examples=["назови число от пяти до двадцати"],
     category="Развлечения",
 )
 def random_number(text: str, start: str = "1", end: str = "100"):
@@ -262,6 +263,7 @@ def random_number(text: str, start: str = "1", end: str = "100"):
         r"выбери (?P<options>.+)",
     ],
     description="Выбор случайного варианта из предложенных (например: что выбрать пиццу или бургер)",
+    examples=["выбери между пиццей или бургером"],
     category="Развлечения",
 )
 def make_decision(text: str, options: str = ""):
@@ -407,7 +409,7 @@ def good_morning_ritual(text: str):
 
 
 @skill(
-    keywords=["привет", "здравствуй", "ты здесь", "крест на связи"],
+    keywords=["привет", "здравствуй", "ты здесь", "на связи"],
     description="Поздороваться с Крест",
     category="Общение",
 )

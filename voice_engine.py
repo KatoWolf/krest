@@ -701,12 +701,13 @@ def listen():
                 result = json.loads(_decode(rec.Result))
                 _segments.append(result.get("text", ""))
                 _words.extend(result.get("result", []))
-                if cfg.get("voice_fast_commands", True) and _known_control(
-                    " ".join(v for v in _segments if v), cfg
-                ):
+                if cfg.get("voice_fast_commands", True) and any(_segments):
                     # Vosk already found a genuine acoustic boundary. A fan or
                     # game noise can keep RMS above the threshold indefinitely;
                     # do not wait another energy pause after the finalized words.
+                    # This applies to ALL speech, including command arguments.
+                    # Runtime still checks the address, confidence and exact
+                    # command; a standalone wake opens its explicit window.
                     return _finish_recognition("vosk")
             if finished:
                 return _finish_recognition("pause")

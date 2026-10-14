@@ -160,20 +160,26 @@ def main(argv=None):
         from skill_manager import SkillManager
 
         manager = SkillManager(settings.snapshot)
+        from command_audit import audit_catalog
+
+        audit = audit_catalog(manager)
+        report = {
+            "skills": len(manager.catalog()),
+            "commands": audit,
+            "errors": {**manager.errors, **audit["errors"]},
+        }
         if args.check_output:
             from storage import atomic_write_json
 
-            atomic_write_json(
-                args.check_output, {"skills": len(manager.catalog()), "errors": manager.errors}
-            )
+            atomic_write_json(args.check_output, report)
         print(
             json.dumps(
-                {"skills": len(manager.catalog()), "errors": manager.errors},
+                report,
                 ensure_ascii=False,
                 indent=2,
             )
         )
-        return 1 if manager.errors else 0
+        return 1 if report["errors"] else 0
     from process_lock import ProcessLock
 
     lock = ProcessLock(settings.filepath.parent / ".kernel.lock")

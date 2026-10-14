@@ -207,6 +207,7 @@ def list_categories(text: str):
         r"покажи раздел (?P<cat_name>.+)",
     ],
     description="Просмотр команд конкретной категории (например: команды категории Windows)",
+    examples=["команды категории Windows"],
     category="Meta",
 )
 def show_category_help(text: str, cat_name: str = ""):

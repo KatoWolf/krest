@@ -52,11 +52,10 @@ class AssistantRuntime:
         self.automation = EventAutomation(self)
         self._execute_lock = threading.RLock()
         self._dialog_lock = threading.RLock()
-        self._lane_locks = {
-            "general": self._execute_lock,
-            "music": threading.RLock(),
-            "discord": threading.RLock(),
-        }
+        from command_lanes import LANES
+
+        self._lane_locks = {name: threading.RLock() for name in LANES}
+        self._lane_locks["general"] = self._execute_lock
         self.manager = SkillManager(settings, plugin_dir=Path(data_dir) / "imported_skills")
         from name_vocabulary import NameVocabulary
 
@@ -73,11 +72,9 @@ class AssistantRuntime:
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
-        self._queues = {
-            "general": self.requests,
-            "music": queue.Queue(maxsize=12),
-            "discord": queue.Queue(maxsize=12),
-        }
+        self._queues = {name: queue.Queue(maxsize=12) for name in LANES}
+        self._queues["general"] = self.requests
+        self._queue_ready = {name: threading.Event() for name in LANES}
         self._running = {}
         self._request_lock = threading.RLock()
         self._submitted_at = {}
@@ -168,7 +165,8 @@ class AssistantRuntime:
         with self._request_lock:
             if self.stop_event.is_set():
                 return False
-            target = self._queues[self._command_lane(text)]
+            lane = self._command_lane(text)
+            target = self._queues[lane]
             if target.full() or sum(q.qsize() for q in self._queues.values()) >= 30:
                 self.events.put(("error", "Очередь заполнена"))
                 return False
@@ -177,6 +175,7 @@ class AssistantRuntime:
                 return True
             try:
                 target.put_nowait((text, source, confidence, job_id))
+                self._queue_ready[lane].set()
                 self._submitted_at[job_id] = (
                     time.monotonic(),
                     voice.recognition() if source == "voice" else {},
@@ -214,15 +213,9 @@ class AssistantRuntime:
         _, body = decode_voice_command(self.manager, text, self.settings())
         command = exact_command(self.manager, body)
         found = self.manager.match(command) if command else None
-        if found and found[0].id.startswith("skills.discord_voice."):
-            return "discord"
-        if (
-            found
-            and found[0].id.startswith("skills.media.")
-            and not found[0].func.__name__.startswith("open_")
-        ):
-            return "music"
-        return "general"
+        from command_lanes import lane_for
+
+        return lane_for(found[0] if found else None)
 
     def execute(self, text, source="text", confidence=None):
         started = time.monotonic()
@@ -497,11 +490,12 @@ class AssistantRuntime:
                     text, source, confidence, job_id = target.get_nowait()
                 except queue.Empty:
                     text = None
+                    self._queue_ready[lane].clear()
                 if text is not None:
                     self._running[lane] = text
                     self.current_command = " · ".join(self._running.values())
             if text is None:
-                self.stop_event.wait(0.02)
+                self._queue_ready[lane].wait(0.25)
                 continue
             try:
                 self._job_local.current = job_id
@@ -808,6 +802,21 @@ class AssistantRuntime:
                     addressed, _ = decode_voice_command(self.manager, text, self.settings())
                     if addressed:
                         voice.stop_speaking()
+                    elif time.monotonic() > self._active_until:
+                        # Game chat is not a job. Keep it out of command queues
+                        # and the SQLite job journal before any disk writes.
+                        self.events.put(
+                            (
+                                "recognition",
+                                {
+                                    "heard": text,
+                                    "command": "",
+                                    "confidence": voice.recognition().get("confidence"),
+                                    "status": "Без обращения — команда не выполнена",
+                                },
+                            )
+                        )
+                        continue
                     self.submit(text, "voice", voice.recognition().get("confidence"))
         except Exception as exc:
             failure = str(exc)
@@ -891,6 +900,8 @@ class AssistantRuntime:
     def close(self):
         with self._request_lock:
             self.stop_event.set()
+            for ready in self._queue_ready.values():
+                ready.set()
             self.clear_pending()
         self.warframe.close()
         self.scenarios.cancel()

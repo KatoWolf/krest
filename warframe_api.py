@@ -153,15 +153,9 @@ class DataCache:
                             delay = 120
                         self.retry[key] = now + delay
                     response.raise_for_status()
-                    chunks = []
-                    total = 0
-                    start = time.monotonic()
-                    for chunk in response.iter_content(65536):
-                        total += len(chunk)
-                        if total > limit or time.monotonic() - start > 25:
-                            raise ValueError("Ответ источника слишком большой или медленный")
-                        chunks.append(chunk)
-                    value = json.loads(b"".join(chunks))
+                    from network_reads import read_requests_response
+
+                    value = json.loads(read_requests_response(response, limit=limit))
                 if validator and not validator(value):
                     raise ValueError("Источник вернул неожиданный формат данных")
                 if not isinstance(value, (dict, list)):

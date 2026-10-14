@@ -20,7 +20,9 @@ def headphones_output(sd):
             if any(part in folded for part in ("headphone", "headset", "наушник", "гарнитур"))
             else ""
         )
-    except (AttributeError, KeyError, TypeError, ValueError, RuntimeError):
+    except Exception:
+        # PortAudioError is not a RuntimeError. Missing output must never stop
+        # microphone capture (headless PCs and temporarily unplugged headsets).
         return ""
 
 

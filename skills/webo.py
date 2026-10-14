@@ -417,7 +417,9 @@ def fetch_weather_info(city_name: str) -> dict:
 
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            from network_reads import read_response
+
+            data = json.loads(read_response(resp).decode("utf-8"))
             current = data["current_condition"][0]
 
             temp_c = current.get("temp_C", "0")
@@ -505,7 +507,9 @@ def fetch_wikipedia_summary(query_term: str) -> str:
 
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            from network_reads import read_response
+
+            data = json.loads(read_response(resp).decode("utf-8"))
             pages = data.get("query", {}).get("pages", {})
             for _, page in pages.items():
                 if "extract" in page and page["extract"].strip():
@@ -528,6 +532,7 @@ def fetch_wikipedia_summary(query_term: str) -> str:
         r"википедия (?P<query>.+)",
     ],
     description="Быстрый поиск определения или биографии в Википедии",
+    examples=["что такое фотосинтез"],
     category="Web & Info",
 )
 def search_wikipedia(text: str, query: str = ""):
@@ -595,7 +600,9 @@ def fetch_top_news_headlines(limit: int = 3) -> list:
     titles = []
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            xml_data = resp.read()
+            from network_reads import read_response
+
+            xml_data = read_response(resp)
             root = ET.fromstring(xml_data)
             for item in root.findall("./channel/item"):
                 title_elem = item.find("title")
@@ -638,6 +645,7 @@ def read_latest_news(text: str):
 @skill(
     patterns=[r"открой сайт (?P<site_name>.+)", r"перейди на (?P<site_name>.+)"],
     description="Быстрый переход на популярные сайты и порталы",
+    examples=["открой сайт ютуб"],
     category="Web & Info",
 )
 def navigate_to_popular_site(text: str, site_name: str = ""):

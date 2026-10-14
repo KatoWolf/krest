@@ -72,7 +72,7 @@ class VoicePages:
         tuning = self.advanced(card, "Точная настройка распознавания")
         ttk.Checkbutton(
             card,
-            text="Быстро завершать короткие команды музыки и микрофона",
+            text="Выполнять команды сразу после распознанного конца речи",
             variable=self.settings_vars["voice_fast_commands"],
         ).pack(anchor="w", pady=4)
         ttk.Checkbutton(

@@ -285,7 +285,9 @@ def update_rates_cache_online():
             "https://open.er-api.com/v6/latest/USD", headers={"User-Agent": "Krest/0.3"}
         )
         with urllib.request.urlopen(request, timeout=5) as response:
-            data = json.load(response)
+            from network_reads import read_response
+
+            data = json.loads(read_response(response))
         rates = data.get("rates", {})
         if data.get("result") != "success" or not isinstance(rates, dict) or not rates:
             raise ValueError("Сервис курсов вернул неполные данные")
@@ -708,6 +710,7 @@ def calc_expression_skill(text: str):
         r"переведи (?P<amount>[\d\.\,]+|\w+)\s*(?P<from_curr>\w+)\s*в\s*(?P<to_curr>\w+)",
     ],
     description="Автономный конвертер валют, длины, массы и объемов данных",
+    examples=["переведи 2 километра в метры"],
     category="Clipboard",
 )
 def convert_currency_or_units(text, amount="1", from_curr="", to_curr=""):

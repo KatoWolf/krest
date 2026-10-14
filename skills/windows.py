@@ -47,11 +47,15 @@ SW_MINIMIZE = 6
 
 def press_key_combination(keys: list):
     """Отправляет комбинацию клавиш (одновременное нажатие и отпускание в обратном порядке)."""
-    for key in keys:
-        ctypes.windll.user32.keybd_event(key, 0, 0, 0)
-    time.sleep(0.05)
-    for key in reversed(keys):
-        ctypes.windll.user32.keybd_event(key, 0, KEYEVENTF_KEYUP, 0)
+    pressed = []
+    try:
+        for key in keys:
+            ctypes.windll.user32.keybd_event(key, 0, 0, 0)
+            pressed.append(key)
+        time.sleep(0.05)
+    finally:
+        for key in reversed(pressed):
+            ctypes.windll.user32.keybd_event(key, 0, KEYEVENTF_KEYUP, 0)
 
 
 def force_set_foreground_window(hwnd: int):
@@ -141,6 +145,7 @@ def switch_application(text: str = ""):
         r"покажи окно (?P<target>.+)",
     ],
     description="Переключение на конкретное окно по его названию",
+    examples=["переключи на блокнот"],
     category="Windows",
 )
 def focus_specific_app(text: str = "", target: str = ""):
