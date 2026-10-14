@@ -2,7 +2,7 @@
 
 import time
 
-from command_sequence import parameter_error, plan_sequence
+from command_sequence import SEPARATOR, parameter_error, plan_sequence
 from command_understanding import exact_command
 from speech_recognition import decode_voice_command
 from speech_tools import addressed_speech
@@ -27,7 +27,8 @@ class VoiceTurn:
             return False  # Bare wake keeps the existing explicit listening window.
         plan = plan_sequence(self.manager, body)
         if plan is not None:
-            return False
+            tail = SEPARATOR.split(body)[-1].strip()
+            return bool(plan.error and tail and tail != body and self.incomplete(tail))
         command = exact_command(self.manager, body)
         if command:
             entry, params = self.manager.match(command)
@@ -83,7 +84,7 @@ class VoiceTurn:
                 or self.incomplete(combined_body)
                 or (plan and not plan.error)
             )
-            if now <= previous["until"] and valid:
+            if now <= self._deadline() and valid:
                 recognition = merge_recognition(previous["recognition"], recognition, combined)
                 text, body, addressed = combined, combined_body, True
             else:
@@ -115,13 +116,14 @@ class VoiceTurn:
             return []
         # Extend only while recognizer words are actually changing; no indefinite
         # hold due to a stale partial or a constant noise floor.
-        if not force and now < min(
-            self.pending["started"] + 5, max(self.pending["until"], self.partial_at + 0.7)
-        ):
+        if not force and now < self._deadline():
             return []
         pending, turn = self.pending, self.turn
         self.clear()
         return [(pending["text"], pending["recognition"], turn)]
+
+    def _deadline(self):
+        return min(self.pending["started"] + 5, max(self.pending["until"], self.partial_at + 1))
 
 
 def merge_recognition(first, second, text):
