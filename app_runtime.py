@@ -801,6 +801,7 @@ class AssistantRuntime:
         last_run = 0
         previous = None
         last_error = ""
+        was_paused = False
         while not self.stop_event.is_set():
             cfg = self.settings().get("app_settings", {})
             enabled = cfg.get("downloads_auto_sort", False) and self.settings().get(
@@ -816,10 +817,18 @@ class AssistantRuntime:
                 last_run = 0
                 previous = signature
                 last_error = ""
-            if enabled and self.performance.defer_files:
-                self.download_status = "Сортировка отложена: " + self.performance.active
-            elif enabled and time.monotonic() - last_run >= 30:
+            if enabled:
+                # Recheck even when an unrelated scheduler task is slow. The
+                # shared detector scans processes at most once per five seconds.
+                self.performance.refresh_activity()
+            pause_reason = self.performance.file_pause_reason if enabled else ""
+            if pause_reason:
+                was_paused = True
+                self.download_status = "Сортировка приостановлена: " + pause_reason
+            elif enabled and (was_paused or time.monotonic() - last_run >= 30):
+                was_paused = False
                 last_run = time.monotonic()
+                self.download_status = "Проверяю папку загрузок…"
                 try:
                     result = {"moved_count": 0, "skipped_count": 0, "errors": []}
                     for folder in folders:
@@ -845,6 +854,7 @@ class AssistantRuntime:
                     self.events.put(("error", "Автосортировка: " + error))
                 last_error = error
             elif not enabled:
+                was_paused = False
                 self.download_status = "Автосортировка выключена"
             self.stop_event.wait(1)
 

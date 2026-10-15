@@ -34,6 +34,17 @@ def check_kernel(config_path):
     draft["warframe"]["overlay_enabled"] = False
     draft["app_settings"]["voice_auto_start"] = False
     cfg.save_config(draft)
+    from performance import PerformancePolicy
+
+    profile = {"performance": {"mode": "game", "game_processes": ""}}
+    activity = PerformancePolicy(lambda: profile, config_path.parent / "activity-test.json")
+    activity.refresh_activity()
+    if activity.defer_files:
+        raise RuntimeError("Игровой профиль без игры блокирует автосортировку")
+    profile["performance"]["mode"] = "economy"
+    activity.refresh_activity()
+    if not activity.defer_files or "экономный" not in activity.file_pause_reason:
+        raise RuntimeError("Экономный профиль потерял паузу фоновой сортировки")
     from hearing_practice import HearingPractice
     from skill_manager import SkillManager
 

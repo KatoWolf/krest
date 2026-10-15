@@ -420,7 +420,7 @@ class WorkflowPages:
         self.label(card, textvariable=self.resource_var, wraplength=680).pack(anchor="w")
         self.label(
             card,
-            "В режимах «Игра» и «Экономный» автосортировка приостановлена; замеры и опрос Steam/Discord Presence выполняются реже. Распознавание речи и сроки напоминаний сохраняются.",
+            "В игровом профиле автосортировка ждёт только пока запущена игра; в экономном — до смены профиля. Замеры и опрос Steam/Discord Presence выполняются реже. Распознавание речи и сроки напоминаний сохраняются.",
             muted=True,
             wraplength=680,
         ).pack(anchor="w", pady=10)

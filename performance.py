@@ -1,15 +1,59 @@
 """Bounded sampling and shared background-work policy; no GPU probes."""
 
-from storage import read_json
-
-
+import os
 from pathlib import Path
 import threading
 import time
 import psutil
-from storage import atomic_write_json
+from storage import atomic_write_json, read_json
 
 MODES = {"auto", "balanced", "game", "economy"}
+# Steam also installs desktop software. A manifest or a process under
+# steamapps/common alone does not establish that a game is running.
+DESKTOP_APP_IDS = {"431960", "993090", "228980", "250820"}
+DESKTOP_FOLDERS = {
+    "wallpaper_engine",
+    "wallpaper engine",
+    "lossless scaling",
+    "steamworks shared",
+    "steamvr",
+}
+BACKGROUND_PROCESSES = {
+    "steam.exe",
+    "steamservice.exe",
+    "steamwebhelper.exe",
+    "wallpaper32.exe",
+    "wallpaper64.exe",
+    "wallpaperservice32.exe",
+    "wallpaperservice64.exe",
+    "losslessscaling.exe",
+    "vrserver.exe",
+    "vrcompositor.exe",
+    "vrmonitor.exe",
+}
+
+
+def background_process(name):
+    name = name.casefold()
+    return (
+        name in BACKGROUND_PROCESSES
+        or any(
+            part in name
+            for part in (
+                "launcher",
+                "crash",
+                "updater",
+                "uninstall",
+                "installer",
+                "redist",
+                "helper",
+                "anticheat",
+                "battleye",
+                "reporter",
+            )
+        )
+        or name in {"setup.exe", "install.exe"}
+    )
 
 
 class PerformancePolicy:
@@ -18,10 +62,12 @@ class PerformancePolicy:
         self.override = None
         self.active = "balanced"
         self.game = ""
+        self.game_process = ""
         self.game_folders = {}
         self.metrics = {"cpu": 0, "memory_mb": 0, "processes": 1}
         self.processes = {psutil.Process().pid: psutil.Process()}
         self._last_sample = self._last_detect = 0
+        self._detect_config = None
         self._lock = threading.RLock()
 
     def set_mode(self, mode):
@@ -37,54 +83,67 @@ class PerformancePolicy:
         for game in games:
             if not game.get("installed") or not game.get("library") or not game.get("install_dir"):
                 continue
+            if (
+                str(game.get("appid", "")) in DESKTOP_APP_IDS
+                or str(game.get("type", "")).casefold()
+                in {"application", "software", "tool", "dlc"}
+                or str(game["install_dir"]).casefold() in DESKTOP_FOLDERS
+            ):
+                continue
             parent = Path(game["library"]) / "steamapps" / "common"
             path = (parent / game["install_dir"]).resolve()
-            if path.is_relative_to(parent.resolve()):
+            if path != parent.resolve() and path.is_relative_to(parent.resolve()):
                 folders[str(path).casefold()] = str(game.get("name", "Игра"))[:100]
         with self._lock:
-            self.game_folders = folders
+            if folders != self.game_folders:
+                self.game_folders = folders
+                self._detect_config = None
 
-    def tick(self, force=False):
+    def _detect_game(self, names):
+        for process in psutil.process_iter(["name", "exe"]):
+            try:
+                name = process.info.get("name") or ""
+                # Explicit game names can contain words such as "Crash". Only
+                # the known desktop/service executables override this list.
+                if name.casefold() in names and name.casefold() not in BACKGROUND_PROCESSES:
+                    return name, name
+                if background_process(name):
+                    continue
+                executable = str(process.info.get("exe") or "").casefold()
+                if executable:
+                    for folder, title in self.game_folders.items():
+                        if executable.startswith(folder + os.sep):
+                            return title, name
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return "", ""
+
+    def refresh_activity(self, force=False):
+        """Shared, bounded detection, also usable by the file worker on its own."""
         with self._lock:
             now = time.monotonic()
             cfg = self.settings().get("performance", {})
             mode = self.override or cfg.get("mode", "auto")
-            if force or now - self._last_detect >= 10:
-                self._last_detect = now
-                self.game = ""
-                # Detect games even when the resource profile is manually selected.
-                names = {
-                    n.strip().casefold()
-                    for n in cfg.get("game_processes", "cs2.exe,dota2.exe").split(",")
-                    if n.strip()
-                }
-                for process in psutil.process_iter(["name", "exe"]):
-                    if (process.info["name"] or "").casefold() in names:
-                        self.game = process.info["name"]
-                        break
-                    executable = str(process.info.get("exe") or "").casefold()
-                    if executable and not any(
-                        v in (process.info.get("name") or "").casefold()
-                        for v in ("launcher", "crash", "updater", "uninstall")
-                    ):
-                        matched = next(
-                            (
-                                name
-                                for folder, name in self.game_folders.items()
-                                if executable.startswith(folder + __import__("os").sep)
-                            ),
-                            None,
-                        )
-                        if matched:
-                            self.game = matched
-                            break
-                self.active = (
-                    "game"
-                    if mode == "auto" and self.game
-                    else "balanced"
-                    if mode == "auto"
-                    else mode
-                )
+            names = cfg.get("game_processes", "cs2.exe,dota2.exe,Warframe.x64.exe,Warframe.exe")
+            signature = (mode, names)
+            if not force and signature == self._detect_config and now - self._last_detect < 5:
+                return
+            self._last_detect = now
+            self._detect_config = signature
+            names = {n.strip().casefold() for n in names.split(",") if n.strip()}
+            # Detect games even when the resource profile is manually selected.
+            try:
+                self.game, self.game_process = self._detect_game(names)
+            except psutil.Error:
+                # A process disappearing during enumeration must not kill the
+                # downloads worker or keep yesterday's game latched forever.
+                self.game = self.game_process = ""
+            self.active = ("game" if self.game else "balanced") if mode == "auto" else mode
+
+    def tick(self, force=False):
+        with self._lock:
+            self.refresh_activity(force)
+            now = time.monotonic()
             interval = 5 if self.active == "balanced" else 10
             if force or now - self._last_sample >= interval:
                 self._last_sample = now
@@ -113,7 +172,21 @@ class PerformancePolicy:
 
     @property
     def defer_files(self):
-        return self.active in ("game", "economy")
+        return bool(self.file_pause_reason)
+
+    @property
+    def file_pause_reason(self):
+        with self._lock:
+            if self.active == "economy":
+                return "включён экономный профиль"
+            if self.active == "game" and self.game:
+                process = (
+                    f" ({self.game_process})"
+                    if self.game_process and self.game_process != self.game
+                    else ""
+                )
+                return f"запущена игра «{self.game}»{process}"
+            return ""
 
     @property
     def poll_multiplier(self):
