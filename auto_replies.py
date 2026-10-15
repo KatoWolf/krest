@@ -60,6 +60,12 @@ def render_reply(
     except (ValueError, TypeError):
         variant = 0
     body = bank[variant].format(owner=owner, reason=reason)
+    if selected == "concise":
+        if attachment:
+            body += " Вопрос — текстом."
+        elif important:
+            body += " Срочность отмечена."
+        return body + "\nАвтоматический ответ Крест."
     if attachment:
         body += " Если вопрос важный, напишите его текстом."
     elif important:

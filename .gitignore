@@ -86,3 +86,5 @@ tools/soak_kernel.py
 tools/ci_test_report.py
 
 .kernel-start.lock
+
+.voice-indicator.lock

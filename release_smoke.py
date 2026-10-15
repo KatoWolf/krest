@@ -52,6 +52,8 @@ def check_kernel(config_path):
     try:
         if not client.call("ping")["safe_mode"]:
             raise RuntimeError("Ядро запустилось с неправильным режимом")
+        if client.call("voice.indicator")["enabled"]:
+            raise RuntimeError("Индикатор включился в безопасном режиме без микрофона")
         result = client.call("command.parse", text="Крест, сделай скриншот")
         if result["skill"] != "skills.windows.take_screenshot":
             raise RuntimeError("Команды не загрузились в отдельном ядре")
@@ -366,6 +368,34 @@ def check_menu_surface():
         root.update()
         if pane.content.winfo_y() != 0:
             raise RuntimeError("Не удалось вернуть страницу в начало")
+        from relic_indicator_window import LayeredWindow
+        from relic_indicator_visual import animation_frame
+        from ctypes import wintypes
+        import ctypes
+
+        overlay = LayeredWindow(root)
+        try:
+            overlay.u.GetForegroundWindow.restype = wintypes.HWND
+            before = overlay.u.GetForegroundWindow()
+            overlay._position()
+            overlay._present(animation_frame("idle", 0))
+            root.update()
+            if overlay.u.GetForegroundWindow() != before:
+                raise RuntimeError("Индикатор забрал фокус")
+            flags = 0x80000 | 0x20 | 0x80 | 0x8000000
+            if overlay.get_style(overlay.hwnd, -20) & flags != flags:
+                raise RuntimeError("Индикатор не настроил прозрачность и пропуск кликов")
+            overlay.hide()
+            overlay.u.IsWindowVisible.argtypes = [wintypes.HWND]
+            overlay.u.IsWindowVisible.restype = ctypes.c_int
+            if overlay.u.IsWindowVisible(overlay.hwnd):
+                raise RuntimeError("Индикатор не скрылся")
+            print(
+                "Relic V2: layered alpha, no activation, click-through flags and hide checked.",
+                flush=True,
+            )
+        finally:
+            overlay.close()
         print("Меню: шрифт, кнопки и границы прокрутки проверены.", flush=True)
     finally:
         root.destroy()

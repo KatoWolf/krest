@@ -15,9 +15,9 @@ NEXT = {
         "Следующий трек.",
         "Переключила.",
         "Трек сменён.",
-        "Дальше по списку.",
+        "Следующий.",
         "Следующая песня.",
-        "Перешли дальше.",
+        "Сменила трек.",
     ),
     "lively": (
         "Переключила! Что у нас дальше?",
@@ -225,4 +225,6 @@ def action_reply(skill_id, text, state):
         state._action_reply_decks[key] = deck
     phrase = deck.pop()
     state._last_action_reply[key] = phrase
+    if style == "concise" and expected is None:
+        return text  # The result already says what happened; no redundant «Готово».
     return phrase if expected else phrase + " " + text

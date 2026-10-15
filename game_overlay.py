@@ -190,6 +190,8 @@ def draw_panel(canvas, panel, width, top):
 
 
 class OverlayManager:
+    FLAG = "--game-overlay"
+
     def __init__(self, config_path):
         self.config_path = Path(config_path)
         self.process = None
@@ -204,13 +206,15 @@ class OverlayManager:
             return
         if self.process and self.process.poll() is None:
             return
+        if self.process and self.process.returncode:
+            self.error = "Индикатор завершился с ошибкой; повторное подключение через 15 секунд"
         if time.monotonic() - self.last_try < 15:
             return
         self.last_try = time.monotonic()
         try:
             self.process = subprocess.Popen(
                 app_command(
-                    "--game-overlay",
+                    self.FLAG,
                     "--config",
                     str(self.config_path),
                 ),

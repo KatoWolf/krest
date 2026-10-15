@@ -1,7 +1,7 @@
 """Offline characters with separate, non-repeating dialogue decks."""
 
 import random
-from personality_bank import INTERACTIONS, FACTS
+from personality_bank import INTERACTIONS, FACTS, CONCISE_FACTS
 
 PERSONALITIES = {
     "friendly": "Дружелюбная",
@@ -14,7 +14,7 @@ PERSONALITIES = {
 }
 CHARACTERS = {
     "friendly": "Тёплая и внимательная. Объясняет действия простыми словами.",
-    "concise": "Деловая. Короткие ответы, минимум вступлений.",
+    "concise": "Ответы по делу: короткое подтверждение, без вступлений и лишних вопросов.",
     "lively": "Энергичная и любопытная. Предлагает занятия и поддерживает разговор.",
     "calm": "Спокойная и терпеливая. Помогает разбить большое дело на маленькие шаги.",
     "tactical": "Собранный второй пилот. Цели, приоритеты, состояние системы.",
@@ -23,6 +23,7 @@ CHARACTERS = {
 }
 
 STYLE_REPLIES = {style: {**bank, "fact": FACTS} for style, bank in INTERACTIONS.items()}
+STYLE_REPLIES["concise"]["fact"] = CONCISE_FACTS
 REPLIES = STYLE_REPLIES["friendly"]
 
 

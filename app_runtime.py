@@ -261,7 +261,7 @@ class AssistantRuntime:
                     turn = (
                         feedback_turn
                         if feedback_turn is not None
-                        else self.feedback.begin("recognizing", text)
+                        else self.feedback.begin("recognizing", text, source=source)
                     )
                     self._feedback_turns[job_id] = turn
                     self.feedback.update(turn, "queued", text)
@@ -316,7 +316,7 @@ class AssistantRuntime:
         self._job_local.recognition = recognition
         turn = self._feedback_turns.pop(ident, None)
         if turn is None and source in ("voice", "text"):
-            turn = self.feedback.begin("recognizing", text)
+            turn = self.feedback.begin("recognizing", text, source=source)
         self._job_local.feedback_turn = turn
         self.feedback.update(turn, "recognizing", text)
         if not self.jobs.transition(ident, "running"):
@@ -979,6 +979,14 @@ class AssistantRuntime:
                     self._active_until = time.monotonic() + self.settings().get(
                         "app_settings", {}
                     ).get("active_timeout", 6)
+                    turn.clear()
+                    waiting = self.feedback.begin("listening", "Слушаю команду")
+                    self.feedback.update(
+                        waiting,
+                        "listening",
+                        "Слушаю команду",
+                        max(0, self._active_until - time.monotonic()),
+                    )
                     self.events.put(("voice", "Слушаю команду без обращения"))
                 text = voice.listen()
                 telemetry = voice.telemetry()

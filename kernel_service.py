@@ -61,6 +61,10 @@ class Kernel:
         from game_overlay import OverlayManager
 
         self.overlay = OverlayManager(self.config.filepath)
+        from relic_indicator import VoiceIndicatorManager
+
+        self.voice_indicator = VoiceIndicatorManager(self.config.filepath)
+        self._indicator_config = {"enabled": False, "reduced": False}
 
     def open_ui(self, quick=False):
         with self._ui_spawn_lock:
@@ -170,7 +174,9 @@ class Kernel:
             "events": events,
             "sequence": seq,
             "safe_mode": self.safe,
-            "windows_events_error": self.windows.error,
+            "windows_events_error": "; ".join(
+                v for v in (self.windows.error, self.voice_indicator.error) if v
+            ),
             "tray": {"ready": self.tray.ready, "error": self.tray.error},
         }
 
@@ -196,6 +202,8 @@ class Kernel:
             return rt.warframe.request(args["action"], args.get("values", {}))
         if method == "warframe.result":
             return rt.warframe.result(args["id"])
+        if method == "voice.indicator":
+            return {**self._indicator_config, "feedback": rt.feedback.snapshot()}
         if method == "overlay":
             import voice
 
@@ -404,12 +412,25 @@ class Kernel:
                 self.integrations.refresh()
                 last_services = time.monotonic()
             cfg = self.settings()
+            self._indicator_config = {
+                "enabled": bool(
+                    self._ready
+                    and not self.safe
+                    and cfg["app_settings"]["indicator_enabled"]
+                    and self.runtime._voice_thread
+                    and self.runtime._voice_thread.is_alive()
+                    and not self.runtime._voice_stop.is_set()
+                ),
+                "reduced": cfg["accessibility"]["reduce_motion"],
+            }
+            self.voice_indicator.tick(self._indicator_config["enabled"])
             self.overlay.tick(
                 self._ready
                 and not self.safe
                 and cfg["warframe"]["overlay_enabled"]
                 and self.runtime.warframe.running
             )
+        self.voice_indicator.close()
         self.overlay.close()
         self.event("shutdown", None)
         # Let attached menus observe the final event before closing local IPC.

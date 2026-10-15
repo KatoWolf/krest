@@ -1878,8 +1878,7 @@ class ControlCenterApp(
             elif kind == "speech":
                 self.brand_mark.pulse()
                 self._append_log(value)
-                if self.config_mgr.config["app_settings"]["indicator_enabled"]:
-                    indicator_controller.pulse(min(8, len(value) / 12))
+
             elif kind == "recognition":
                 self._show_recognition(value)
             elif kind == "scenario_saved":
@@ -1916,6 +1915,10 @@ class ControlCenterApp(
                         logger.warning("Уведомление трея недоступно; напоминание сохранено в меню")
             elif kind == "shutdown":
                 self._real_quit()
+        indicator_controller.show_feedback(
+            self.runtime.voice_feedback,
+            enabled=self.config_mgr.config["app_settings"]["indicator_enabled"],
+        )
         if self.state() in ("normal", "zoomed") and self.current_page in ("actions", "voice"):
             if time.monotonic() - getattr(self, "_meter_at", 0) >= 0.15:
                 self._meter_at = time.monotonic()

@@ -57,6 +57,7 @@ def main(argv=None):
     parser.add_argument("--kernel", action="store_true", help="Постоянное ядро без меню")
     parser.add_argument("--config", help="Путь к конфигурации")
     parser.add_argument("--game-overlay", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--voice-indicator", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--safe-mode", action="store_true", help="Без автозапуска ботов")
     parser.add_argument("--status", action="store_true", help="Состояние работающего ядра")
     parser.add_argument("--stop-kernel", action="store_true", help="Завершить ядро и его сервисы")
@@ -70,6 +71,7 @@ def main(argv=None):
         or args.external_script
         or args.extension_worker
         or args.game_overlay
+        or args.voice_indicator
         or args.desktop_worker
         or args.desktop_service
         or args.status
@@ -109,7 +111,6 @@ def main(argv=None):
 
         return run_service(args.service) if args.service else run_external(args.external_script)
     from configuration import CONFIG_PATH, ConfigManager
-    from app_runtime import AssistantRuntime
 
     settings = ConfigManager(args.config or CONFIG_PATH)
     if args.release_import_check:
@@ -127,6 +128,10 @@ def main(argv=None):
 
         check_kernel(settings.filepath)
         return 0
+    if args.voice_indicator:
+        from relic_indicator import run_indicator
+
+        return run_indicator(settings.filepath)
     if args.game_overlay:
         from game_overlay import run_overlay
 
@@ -248,6 +253,8 @@ def main(argv=None):
         except (OSError, ValueError, RuntimeError) as exc:
             print("Ошибка ядра: " + str(exc))
             return 1
+    from app_runtime import AssistantRuntime
+
     runtime = None
     try:
         runtime = AssistantRuntime(settings.snapshot, data_dir=settings.filepath.parent)
