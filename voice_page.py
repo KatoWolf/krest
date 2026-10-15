@@ -42,10 +42,24 @@ class VoicePages:
             muted=True,
             wraplength=680,
         ).pack(anchor="w", pady=8)
+        practice = self.card(
+            self.page_bodies["voice"],
+            "Проверка слуха за три фразы",
+            "Проверьте настоящее распознавание на вашем микрофоне. На 90 секунд голосовые действия "
+            "приостанавливаются: тестовые фразы ничего не переключают. Звук не записывается.",
+        )
+        row = tk.Frame(practice, bg=self.theme["card"])
+        row.pack(fill="x", pady=8)
+        for caption, action in (("Начать проверку", "start"), ("Закончить проверку", "stop")):
+            ttk.Button(row, text=caption, command=lambda a=action: self._hearing_action(a)).pack(
+                side="left", padx=(0, 8)
+            )
+        self.hearing_result = self.label(practice, "Проверка ещё не запускалась", wraplength=680)
+        self.hearing_result.pack(fill="x", pady=8)
         card = self.card(
             self.page_bodies["voice"],
             "Голос Крест",
-            "Распознавание и озвучка работают локально. F8 — слушать команду без обращения; Escape — прервать озвучку. Клавиши работают в окне Крест.",
+            "Распознавание и озвучка работают локально. Ctrl+Alt+V — слушать команду без обращения даже в игре и трее. В окне Крест: F8 — слушать; Escape — прервать ответ.",
         )
         row = tk.Frame(card, bg=self.theme["card"])
         row.pack(fill="x", pady=8)
@@ -423,6 +437,31 @@ class VoicePages:
         if self.save_all_settings():
             voice.speak(self.pron_word.get())
 
+    def _hearing_action(self, action):
+        def work():
+            if action == "start":
+                self.runtime.start_voice()
+            return self.runtime.hearing.call(action)
+
+        self._background(work, lambda result: self._refresh_hearing(result))
+
+    def _refresh_hearing(self, snapshot=None):
+        widget = getattr(self, "hearing_result", None)
+        if widget is None or not widget.winfo_exists() or not widget.winfo_ismapped():
+            return
+        data = self.runtime.hearing.snapshot() if snapshot is None else snapshot
+        text = data.get("message", "")
+        if data.get("active"):
+            text += f"\n«{data['expected']}» · Осталось {data['remaining']} с"
+        for row in data.get("rows", [])[-6:]:
+            text += "\n" + ("Верно" if row["passed"] else "Повторить") + ": «" + row["heard"] + "»"
+            if row.get("pause_ms") is not None:
+                text += f" · пауза {row['pause_ms']} мс"
+            if row.get("audio_queue_ms") is not None:
+                text += f" · буфер {row['audio_queue_ms']} мс"
+        if widget.cget("text") != text:
+            widget.configure(text=text)
+
     def _update_voice_meter(self):
         data = voice.telemetry()
         if self.runtime.voice_status and not self.audio_test_busy:
@@ -439,7 +478,7 @@ class VoicePages:
         peak = self.microphone_test.peak if self.audio_test_busy else data.get("peak", 0)
         for key in ("mic_meter", "home_meter"):
             widget = getattr(self, key, None)
-            if widget is not None and widget.winfo_exists():
+            if widget is not None and widget.winfo_exists() and widget.winfo_ismapped():
                 widget["value"] = min(100, peak / 32768 * 100)
         text = f"Уровень: {rms:.0f} · Пик: {peak / 32768:.0%}"
         if data.get("threshold"):
@@ -475,9 +514,13 @@ class VoicePages:
             text += "\n" + data["tts_error"][:300]
         for key in ("mic_level_label", "home_mic_detail"):
             widget = getattr(self, key, None)
-            if widget is not None and widget.winfo_exists():
-                widget.configure(
-                    text=text
+            if widget is not None and widget.winfo_exists() and widget.winfo_ismapped():
+                value = (
+                    text
                     if data or self.audio_test_busy
-                    else "Микрофон и модели подключаются автоматически. Ход подготовки показан выше."
+                    else (
+                        "Микрофон и модели подключаются автоматически. Ход подготовки показан выше."
+                    )
                 )
+                if widget.cget("text") != value:
+                    widget.configure(text=value)

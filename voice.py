@@ -167,13 +167,16 @@ def enable():
 
         if not compiled():
             importlib.reload(config)
-        # Pass discovered paths before import: the engine initializes its models once.
+        # Pass paths explicitly; importing the engine never loads Silero or PyTorch.
         config.MODEL_VOSK_PATH = models["vosk_path"]
         config.MODEL_SILERO_PATH = models["silero_path"]
         was_loaded = "voice_engine" in __import__("sys").modules
         engine = importlib.import_module("voice_engine")
-        if was_loaded and (signature != _model_signature or engine.rec is None):
-            engine.initialize_models(models)
+        if signature != _model_signature or engine.rec is None:
+            engine.initialize_recognition(models["vosk_path"])
+        if getattr(engine, "silero_path", models["silero_path"]) != models["silero_path"]:
+            # A changed voice model is reloaded by the TTS worker, never by capture.
+            engine.model_tts = None
         _model_signature = signature
         engine.configure(_settings)
         from audio_scheduling import status

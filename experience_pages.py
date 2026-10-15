@@ -72,6 +72,7 @@ class ExperiencePages:
             )
 
     def _refresh_experience(self, force=False):
+        self._refresh_hearing()
         snapshot = self.runtime.companion.snapshot()
         trace = snapshot.get("trace", {})
         parts = []

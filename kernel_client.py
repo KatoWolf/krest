@@ -20,16 +20,24 @@ import uuid
 from secret_store import protect_bootstrap
 
 
+class KernelUnavailable(RuntimeError):
+    """A stale endpoint or an instance which is not yet accepting connections."""
+
+
 class KernelClient:
     def __init__(self, config_path):
         self.config_path = Path(config_path).resolve()
 
-    def call(self, method, **args):
+    def call(self, method, *, _timeout=8, **args):
         endpoint = read_json(self.config_path.parent / "kernel_endpoint.json")
+        if not endpoint:
+            raise KernelUnavailable("Ядро ещё запускается")
         if endpoint.get("protocol") != 1:
             raise RuntimeError("Несовместимая версия ядра. Перезапустите Крест.")
         token = protect_bootstrap(endpoint["token"], decrypt=True)
-        connection = http.client.HTTPConnection("127.0.0.1", int(endpoint["port"]), timeout=8)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", int(endpoint["port"]), timeout=_timeout
+        )
         try:
             body = json.dumps({"method": method, "args": args}, ensure_ascii=False).encode()
             connection.request(
@@ -40,7 +48,7 @@ class KernelClient:
             )
             response = connection.getresponse()
             if response.status != 200:
-                raise RuntimeError("Ядро отклонило локальное подключение")
+                raise KernelUnavailable("Ядро отклонило локальное подключение")
             data = response.read(4_000_001)
             if len(data) > 4_000_000:
                 raise RuntimeError("Ответ ядра превышает допустимый размер")
@@ -51,13 +59,19 @@ class KernelClient:
         finally:
             connection.close()
 
-    def ensure_started(self, safe=False):
-        try:
-            status = self.call("ping")
+    def ensure_started(self, safe=False, timeout=45):
+        transient = (OSError, ValueError, KeyError, http.client.HTTPException, KernelUnavailable)
+
+        def ready():
+            status = self.call("ping", _timeout=0.6)
             if safe and not status["safe_mode"]:
                 raise RuntimeError("Сначала завершите обычную Крест через меню")
+            return True
+
+        try:
+            ready()
             return self
-        except (OSError, ValueError, KeyError, http.client.HTTPException):
+        except transient:
             pass
         args = app_command(
             "--kernel",
@@ -72,25 +86,50 @@ class KernelClient:
             if os.name == "nt"
             else {"start_new_session": True}
         )
-        subprocess.Popen(
-            args,
-            cwd=Path(__file__).parent,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **kwargs,
-        )
-        deadline = time.monotonic() + 12
-        while time.monotonic() < deadline:
-            try:
-                self.call("ping")
-                return self
-            except (OSError, ValueError, KeyError, http.client.HTTPException):
+        # One launcher at a time, including two Windows startup shortcuts.
+        # The kernel has its own lifetime lock; this lock covers the readiness gap.
+        from process_lock import ProcessLock
+
+        launch = ProcessLock(self.config_path.parent / ".kernel-start.lock")
+        owned = False
+        process = None
+        deadline = time.monotonic() + timeout
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    ready()
+                    return self
+                except transient:
+                    pass
+                if not owned and launch.acquire():
+                    owned = True
+                    # A slow constructor holds the kernel lock before publishing
+                    # its endpoint. Wait for it instead of spawning a duplicate.
+                    running = ProcessLock(self.config_path.parent / ".kernel.lock")
+                    if running.acquire():
+                        running.close()
+                        log = self.config_path.parent / "logs" / "startup.log"
+                        log.parent.mkdir(parents=True, exist_ok=True)
+                        if log.exists() and log.stat().st_size > 512_000:
+                            log.replace(log.with_suffix(".previous.log"))
+                        with log.open("ab") as output:
+                            process = subprocess.Popen(
+                                args,
+                                cwd=Path(__file__).parent,
+                                env=environment,
+                                stdin=subprocess.DEVNULL,
+                                stdout=output,
+                                stderr=output,
+                                **kwargs,
+                            )
+                if process is not None and process.poll() not in (None, 0):
+                    break
                 time.sleep(0.15)
+        finally:
+            launch.close()
         raise RuntimeError(
             "Не удалось подключиться к ядру. Журнал запуска: "
-            + str(self.config_path.parent / "logs" / "kernel.log")
+            + str(self.config_path.parent / "logs" / "startup.log")
         )
 
 
@@ -280,6 +319,10 @@ class RemoteRuntime:
         self.companion = SimpleNamespace(
             snapshot=lambda: self.cached.get("companion", {}),
             call=lambda action, **args: self.client.call("companion", action=action, **args),
+        )
+        self.hearing = SimpleNamespace(
+            snapshot=lambda: self.cached.get("hearing", {}),
+            call=lambda action: self.client.call("hearing", action=action),
         )
         root = client.config_path.parent
         self.center = NotificationCenter(root / "inbox.sqlite3")

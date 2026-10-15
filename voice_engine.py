@@ -2,12 +2,10 @@ import os
 import sys
 import json
 
+# Recognition must start before importing/loading the much larger TTS runtime.
+torch = None
 torch_import_error = ""
-try:
-    import torch
-except (ImportError, OSError) as exc:
-    torch = None
-    torch_import_error = str(exc)[:240]
+model_tts = model_vosk = rec = None
 import sounddevice as sd
 import vosk
 
@@ -83,23 +81,6 @@ try:
 except ImportError:
     config = None
 
-
-if torch is not None:
-    torch.set_num_threads(
-        int(config.reload_config().get("app_settings", {}).get("tts_threads", 2)) if config else 2
-    )
-    try:
-        torch.set_num_interop_threads(1)
-    except RuntimeError:
-        pass  # PyTorch inter-op count cannot be reset after initialization.
-    torch.set_grad_enabled(False)
-    torch.backends.cudnn.benchmark = False
-
-    if sys.platform == "win32":
-        try:
-            torch.backends.quantized.engine = "qnnpack"
-        except Exception:
-            pass
 
 # Глобальное состояние
 q = AudioFrames()
@@ -319,6 +300,9 @@ def initialize_recognition(path):
         rec.SetWords(True)
         if hasattr(rec, "SetPartialWords"):
             rec.SetPartialWords(True)
+        # Pay initial decoder graph costs before opening the microphone.
+        rec.AcceptWaveform(bytes(SAMPLE_RATE // 2))
+        rec.Reset()
         metrics.update(model_path=vosk_path, model_native_path=actual_path)
     except Exception as e:
         metrics["model_error"] = str(e)
@@ -333,13 +317,29 @@ def initialize_tts(path):
     silero_path = path
     model_tts = None
     metrics.update(tts_ready=False, tts_error="")
-    if torch is None:
-        metrics["tts_error"] = "Не загрузился голосовой движок PyTorch: " + torch_import_error
-        return False
     if not os.path.isfile(path):
         metrics["tts_error"] = "Модель Silero отсутствует или повреждена."
         return False
     try:
+        global torch, torch_import_error
+        if torch is None:
+            import torch as backend
+
+            torch = backend
+            torch.set_num_threads(
+                int(_settings_getter().get("app_settings", {}).get("tts_threads", 2))
+            )
+            try:
+                torch.set_num_interop_threads(1)
+            except RuntimeError:
+                pass
+            torch.set_grad_enabled(False)
+            torch.backends.cudnn.benchmark = False
+            if sys.platform == "win32":
+                try:
+                    torch.backends.quantized.engine = "qnnpack"
+                except Exception:
+                    pass
         device = torch.device("cpu")
         candidate = torch.package.PackageImporter(path).load_pickle("tts_models", "model")
         candidate.to(device)
@@ -384,7 +384,7 @@ def validate_audio(samples):
     return samples
 
 
-initialize_models()
+# Models are initialized explicitly by voice.enable / the release check.
 
 # --- Захват и обработка звука ---
 
@@ -435,7 +435,9 @@ def _known_control(text, cfg):
     addressed, body = addressed_speech(text, wake)
     body = conversational_form(body if addressed else text)
     candidate = wake + " " + body if addressed else body
-    return candidate.casefold() in _quick_phrases
+    # A separate wake word opens the listening window without the long pause
+    # needed for free-form dictation. FinalResult and runtime confidence still gate it.
+    return (addressed and not body) or candidate.casefold() in _quick_phrases
 
 
 def _finish_recognition(reason):
@@ -694,9 +696,16 @@ def listen():
             # wait for a complete known transport command; FinalResult still wins.
             if (
                 cfg.get("voice_fast_commands", True)
-                and _known_control(metrics.get("partial", ""), cfg)
                 and _partial_stable >= 0.09
-                and _endpoint.silence + 1e-9 >= min(_endpoint.pause, 0.27)
+                and _endpoint.silence + 1e-9
+                >= min(
+                    _endpoint.pause,
+                    0.24
+                    if metrics.get("partial", "").casefold().strip()
+                    == cfg.get("wake_word", "крест").casefold()
+                    else 0.27,
+                )
+                and _known_control(metrics.get("partial", ""), cfg)
             ):
                 finished = True
             if _decode(rec.AcceptWaveform, data):

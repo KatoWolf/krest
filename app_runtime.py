@@ -91,6 +91,9 @@ class AssistantRuntime:
 
         self.companion = CompanionSession(self, Path(data_dir))
         self.understanding = VoiceUnderstanding(self.manager, self.memory, self.companion)
+        from hearing_practice import HearingPractice
+
+        self.hearing = HearingPractice(self.manager, settings)
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
         self.requests = queue.Queue(maxsize=30)
@@ -1015,6 +1018,14 @@ class AssistantRuntime:
         """Accept final audio on capture time; a wake word never waits in a job lane."""
         from speech_recognition import decode_voice_command, command_confidence
 
+        if self.hearing.consume(text, recognition):
+            # Includes background chat: no job, player, microphone or screenshot side effect.
+            self._active_until = 0
+            if feedback_turn is not None:
+                self.feedback.update(
+                    feedback_turn, "listening", "Проверка слуха — действие не выполняется", 3
+                )
+            return True
         settings = self.settings()
         cfg = settings.get("app_settings", {})
         addressed, command = decode_voice_command(self.manager, text, settings)

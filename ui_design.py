@@ -2,7 +2,6 @@
 
 from ui_fonts import UI_FONT, load_fonts
 
-import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -357,75 +356,22 @@ def style_titlebar(window, colours):
 
 
 class MotionController:
-    """Time-bounded interaction animation, zero timers at rest. Respects reduced motion."""
+    """Native ttk state changes repaint only the hovered control.
+
+    Never mutate ttk styles on pointer motion: each configure/map broadcasts
+    ThemeChanged to the entire widget tree (including hidden pages). The
+    cached image elements already supply distinct hover/focus/pressed states.
+    """
 
     def __init__(self, root):
         self.root = root
         self.jobs = {}
         self.styles = {}
-        root.bind_class("TButton", "<Enter>", self._enter, add="+")
-        root.bind_class("TButton", "<Leave>", self._leave, add="+")
-        root.bind_class("TButton", "<Destroy>", self._destroy, add="+")
 
     def enabled(self):
         return (
             not self.root.config_mgr.snapshot().get("accessibility", {}).get("reduce_motion", False)
         )
-
-    def _enter(self, event):
-        self._animate(event.widget, True)
-
-    def _leave(self, event):
-        self._animate(event.widget, False)
-
-    def _destroy(self, event):
-        job = self.jobs.pop(event.widget, None)
-        if job:
-            self.root.after_cancel(job)
-        self.styles.pop(event.widget, None)
-
-    def _animate(self, widget, entering):
-        if not isinstance(widget, ttk.Button) or not self.enabled() or widget.instate(["disabled"]):
-            return
-        previous = self.jobs.pop(widget, None)
-        if previous:
-            self.root.after_cancel(previous)
-        style = ttk.Style(self.root)
-        current = str(widget.cget("style")) or "TButton"
-        old = self.styles.get(widget)
-        base = old[0] if old and current == old[1] else current
-        name = f"KrestMotion{widget.winfo_id()}." + base
-        self.styles[widget] = (base, name)
-        normal = style.lookup(base, "background", ("!active", "!pressed"))
-        active = style.lookup(base, "background", ("active",))
-        if not normal.startswith("#") or not active.startswith("#"):
-            return
-        widget.configure(style=name)
-        start, end = (normal, active) if entering else (active, normal)
-
-        began = time.monotonic()
-
-        def frame():
-            self.jobs.pop(widget, None)
-            if not widget.winfo_exists() or str(widget.cget("style")) != name:
-                return
-            progress = min(1, (time.monotonic() - began) / 0.12)
-            colour = colour_mix(start, end, progress)
-            style.configure(name, background=colour)
-            style.map(
-                name,
-                background=[
-                    ("disabled", self.root.theme["card"]),
-                    ("pressed", active),
-                    ("!disabled", colour),
-                ],
-            )
-            if progress < 1:
-                self.jobs[widget] = self.root.after(24, frame)
-            elif not entering:
-                widget.configure(style=base)
-
-        frame()
 
 
 class BrandMark(tk.Canvas):

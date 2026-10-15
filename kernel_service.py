@@ -100,6 +100,8 @@ class Kernel:
     def system_event(self, kind, payload):
         if kind == "quick_panel":
             self.open_ui(quick=True)
+        elif kind == "voice_arm":
+            self.runtime.arm_voice()
         else:
             self.runtime.automation.emit(kind, payload)
 
@@ -154,6 +156,7 @@ class Kernel:
             },
             "scenario": rt.scenarios.status,
             "companion": rt.companion.snapshot(),
+            "hearing": rt.hearing.snapshot(),
             "warframe": rt.warframe.status(),
             "downloads": rt.download_status,
             "command": rt.command_status(),
@@ -173,6 +176,10 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "hearing":
+            if args["action"] == "start":
+                rt.start_voice()
+            return rt.hearing.call(args["action"])
         if method == "companion":
             return rt.companion.call(**args)
         if method == "environment":

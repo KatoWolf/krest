@@ -34,6 +34,16 @@ def check_kernel(config_path):
     draft["warframe"]["overlay_enabled"] = False
     draft["app_settings"]["voice_auto_start"] = False
     cfg.save_config(draft)
+    from hearing_practice import HearingPractice
+    from skill_manager import SkillManager
+
+    practice = HearingPractice(SkillManager(cfg.snapshot), cfg.snapshot)
+    practice.call("start")
+    for phrase in practice.PHRASES:
+        if not practice.consume("крест " + phrase, {"confidence": 0.99}):
+            raise RuntimeError("Проверка слуха не перехватила тестовую команду")
+    if practice.snapshot()["passed"] != 3 or practice.snapshot()["active"]:
+        raise RuntimeError("Проверка слуха неверно оценила контрольные фразы")
     lock = ProcessLock(config_path.parent / ".kernel.lock")
     if not lock.acquire():
         raise RuntimeError("Для проверки нужна отдельная папка конфигурации")
@@ -172,6 +182,14 @@ def check_models(settings):
     config.MODEL_VOSK_PATH, config.MODEL_SILERO_PATH = paths["vosk_path"], paths["silero_path"]
     import voice_engine as engine
 
+    if engine.torch is not None or engine.rec is not None:
+        raise RuntimeError("Импорт движка начал загрузку моделей до подключения микрофона")
+    started = time.monotonic()
+    engine.initialize_recognition(paths["vosk_path"])
+    if engine.rec is None or engine.torch is not None:
+        raise RuntimeError("Распознавание не запустилось независимо от Silero")
+    print(f"Vosk ready before TTS: {time.monotonic() - started:.2f}s", flush=True)
+    engine.initialize_tts(paths["silero_path"])
     if engine.rec is None or engine.model_tts is None:
         raise RuntimeError("Сборка не загрузила модели: " + str(engine.metrics))
     engine.rec.AcceptWaveform(bytes(3200))

@@ -31,7 +31,8 @@ class ThornVine(tk.Canvas):
     def highlight(self, active):
         if self.highlighted != active:
             self.highlighted = active
-            self.schedule()
+            colour = self.colours["accent"] if active else self.colours["border"]
+            self.itemconfigure("stem", fill=colour)
 
     def draw(self):
         self.job = None
@@ -48,11 +49,13 @@ class ThornVine(tk.Canvas):
 
         points = [point(t) for t in range(5, length - 4, 6)]
         if len(points) > 1:
-            self.create_line(*[n for p in points for n in p], fill=colour, width=1.4, smooth=True)
+            self.create_line(
+                *[n for p in points for n in p], fill=colour, width=1.4, smooth=True, tags="stem"
+            )
         for index, t in enumerate(range(19, length - 15, 31)):
             sign = 1 if index % 2 else -1
             base, tip, end = point(t), point(t + 8, sign * breadth * 0.35), point(t + 6)
-            self.create_polygon(*base, *tip, *end, fill=colour, outline="")
+            self.create_polygon(*base, *tip, *end, fill=colour, outline="", tags="stem")
         # A second interrupted stem, quieter than the main vine.
         for t in range(32, length - 28, 104):
             pts = [

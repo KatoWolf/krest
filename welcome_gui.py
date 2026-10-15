@@ -480,12 +480,11 @@ class ControlCenterApp(
 
         self.after_idle(lambda: style_titlebar(self, self.theme))
         self.switch_page(self.current_page)
-        first = ["voice", "music", "skills", "inbox", "settings", "bots", "api", "discord_account"]
-        self._warm_pages = first + [
-            code for code, _ in self.NAV if code != "actions" and code not in first
-        ]
+        # Keep unopened heavy pages lazy. Their Tk widgets and queries used to
+        # compete with pointer/scroll events throughout the first minute.
+        self._warm_pages = ["voice", "music"]
         self._last_interaction = time.monotonic()
-        self._warm_job = self.after(900, self._warm_next_page)
+        self._warm_job = self.after(3000, self._warm_next_page)
 
     def _warm_next_page(self):
         self._warm_job = None
@@ -493,7 +492,7 @@ class ControlCenterApp(
             return
         if (
             self.state() not in ("normal", "zoomed")
-            or time.monotonic() - self._last_interaction < 0.5
+            or time.monotonic() - self._last_interaction < 2
         ):
             self._warm_job = self.after(600, self._warm_next_page)
             return
@@ -507,7 +506,7 @@ class ControlCenterApp(
             except Exception:
                 self._built_pages.discard(code)
                 logger.exception("Предзагрузка страницы %s", code)
-        self._warm_job = self.after(150, self._warm_next_page)
+        self._warm_job = self.after(1500, self._warm_next_page)
 
     BOT_PAGES = {"bots", "api", "steam", "discord_account", "discord_bot", "scripts"}
     CORE_PAGES = {
@@ -1918,7 +1917,9 @@ class ControlCenterApp(
             elif kind == "shutdown":
                 self._real_quit()
         if self.state() in ("normal", "zoomed") and self.current_page in ("actions", "voice"):
-            self._update_voice_meter()
+            if time.monotonic() - getattr(self, "_meter_at", 0) >= 0.15:
+                self._meter_at = time.monotonic()
+                self._update_voice_meter()
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
             self._last_refresh = now

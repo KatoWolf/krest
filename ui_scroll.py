@@ -101,7 +101,9 @@ class ScrollViewport(tk.Frame):
                 wintypes.HANDLE,
                 wintypes.UINT,
             ]
-            user.RedrawWindow(self.winfo_id(), None, None, 0x1 | 0x4 | 0x80 | 0x100)
+            # Invalidate once; let Windows coalesce WM_PAINT with the next frame.
+            # RDW_UPDATENOW/ERASE forced synchronous painting of every child.
+            user.RedrawWindow(self.winfo_id(), None, None, 0x1 | 0x80)
 
     def destroy(self):
         self._destroyed()

@@ -5,6 +5,8 @@ import threading
 
 
 class WindowsEvents:
+    HOTKEYS = {1: (0x20, "quick_panel", "Ctrl+Alt+Space"), 2: (0x56, "voice_arm", "Ctrl+Alt+V")}
+
     def __init__(self, callback):
         self.callback = callback
         self.thread = None
@@ -32,6 +34,10 @@ class WindowsEvents:
             api.PostMessageW(self.hwnd, 0x0010, 0, 0)
         if self.thread:
             self.thread.join(timeout=2)
+
+    def hotkey(self, ident):
+        if ident in self.HOTKEYS:
+            self.callback(self.HOTKEYS[ident][1], {})
 
     def _run(self):
         import ctypes as c
@@ -89,7 +95,7 @@ class WindowsEvents:
         def procedure(hwnd, msg, wp, lp):
             try:
                 if msg == 0x0312:
-                    self.callback("quick_panel", {})
+                    self.hotkey(wp)
                 elif msg == 0x0218 and wp in (7, 18):
                     self.callback("wake", {"source": "windows"})
                 elif msg == 0x02B1 and wp in (7, 8):
@@ -120,8 +126,11 @@ class WindowsEvents:
             if not self.hwnd:
                 raise c.WinError(c.get_last_error())
             wts.WTSRegisterSessionNotification(self.hwnd, 0)
-            if not user.RegisterHotKey(self.hwnd, 1, 0x4000 | 0x0002 | 0x0001, 0x20):
-                self.error = "Ctrl+Alt+Space занято другим приложением"
+            failed = []
+            for ident, (key, _, caption) in self.HOTKEYS.items():
+                if not user.RegisterHotKey(self.hwnd, ident, 0x4000 | 0x0002 | 0x0001, key):
+                    failed.append(caption + " занято другим приложением")
+            self.error = "; ".join(failed)
             message = w.MSG()
             while user.GetMessageW(c.byref(message), None, 0, 0) > 0:
                 user.TranslateMessage(c.byref(message))
@@ -130,6 +139,7 @@ class WindowsEvents:
             self.error = str(exc)
         finally:
             if self.hwnd:
-                user.UnregisterHotKey(self.hwnd, 1)
+                for ident in self.HOTKEYS:
+                    user.UnregisterHotKey(self.hwnd, ident)
                 wts.WTSUnRegisterSessionNotification(self.hwnd)
             self.hwnd = None
