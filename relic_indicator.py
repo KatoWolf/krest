@@ -94,9 +94,11 @@ def run_indicator(config_path):
     last_image, last_scaled = None, None
 
     def poll():
+        revision = -1
         while not stopped.is_set():
             try:
-                value = client.call("voice.indicator", _timeout=0.8)
+                value = client.call("voice.indicator", after=revision, _timeout=2)
+                revision = value.get("revision", -1)
             except Exception:
                 value = None
             try:
@@ -104,7 +106,10 @@ def run_indicator(config_path):
             except queue.Empty:
                 pass
             updates.put_nowait(value)
-            stopped.wait(0.08)
+            # The kernel waits on feedback changes for up to one second. Wake
+            # words notify it immediately; only errors/old kernels need a delay.
+            if value is None or revision == -1:
+                stopped.wait(0.25)
 
     def tick():
         nonlocal data, received, failures, positioned_turn, last_image, last_scaled

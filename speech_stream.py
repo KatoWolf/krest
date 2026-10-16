@@ -7,7 +7,7 @@ from speech_tools import pcm_levels
 
 
 class AudioFrames:
-    def __init__(self, rate=16000, milliseconds=30, capacity=80):
+    def __init__(self, rate=16000, milliseconds=30, capacity=80, levels=pcm_levels):
         self.size = rate * milliseconds // 1000 * 2
         self.seconds = milliseconds / 1000
         self.capacity = capacity
@@ -17,6 +17,7 @@ class AudioFrames:
         self.generation = 0
         self.dropped = 0
         self.ready = threading.Event()
+        self.levels = levels
 
     def put(self, data, captured, overflow=False):
         with self.lock:
@@ -35,7 +36,7 @@ class AudioFrames:
             for index in range(max(0, count - self.capacity), count):
                 frame = data[index * self.size : (index + 1) * self.size]
                 at = captured - (len(data) - (index + 1) * self.size) / (self.size / self.seconds)
-                self.frames.append((frame, pcm_levels(frame)[0], at, self.generation))
+                self.frames.append((frame, self.levels(frame)[0], at, self.generation))
             self.tail = data[count * self.size :]
             if self.frames:
                 self.ready.set()

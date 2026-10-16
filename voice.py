@@ -280,6 +280,8 @@ def wait_for_audio(timeout=0.03):
     engine = _engine
     if engine is not None:
         engine.wait_for_audio(timeout)
+    else:
+        time.sleep(timeout)
 
 
 def set_command_dictionary(phrases):

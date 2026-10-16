@@ -27,17 +27,34 @@ class KernelUnavailable(RuntimeError):
 class KernelClient:
     def __init__(self, config_path):
         self.config_path = Path(config_path).resolve()
+        self._endpoint_lock = threading.Lock()
+        self._endpoint_stamp = None
+        self._endpoint = None
+
+    def _connection_info(self):
+        path = self.config_path.parent / "kernel_endpoint.json"
+        with self._endpoint_lock:
+            try:
+                info = path.stat()
+                stamp = (info.st_mtime_ns, info.st_ctime_ns, info.st_size, info.st_ino)
+            except OSError:
+                self._endpoint_stamp = self._endpoint = None
+                raise
+            if stamp != self._endpoint_stamp:
+                self._endpoint_stamp = self._endpoint = None
+                endpoint = read_json(path)
+                if not endpoint:
+                    raise KernelUnavailable("Ядро ещё запускается")
+                if endpoint.get("protocol") != 1:
+                    raise RuntimeError("Несовместимая версия ядра. Перезапустите Крест.")
+                token = protect_bootstrap(endpoint["token"], decrypt=True)
+                self._endpoint = (int(endpoint["port"]), token)
+                self._endpoint_stamp = stamp
+            return self._endpoint
 
     def call(self, method, *, _timeout=8, **args):
-        endpoint = read_json(self.config_path.parent / "kernel_endpoint.json")
-        if not endpoint:
-            raise KernelUnavailable("Ядро ещё запускается")
-        if endpoint.get("protocol") != 1:
-            raise RuntimeError("Несовместимая версия ядра. Перезапустите Крест.")
-        token = protect_bootstrap(endpoint["token"], decrypt=True)
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", int(endpoint["port"]), timeout=_timeout
-        )
+        port, token = self._connection_info()
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=_timeout)
         try:
             body = json.dumps({"method": method, "args": args}, ensure_ascii=False).encode()
             connection.request(

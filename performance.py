@@ -69,6 +69,58 @@ class PerformancePolicy:
         self._last_sample = self._last_detect = 0
         self._detect_config = None
         self._lock = threading.RLock()
+        self._thread_sample = {}
+        self._thread_at = None
+        self._roles = {}
+
+    def _threads(self, process, now):
+        """Sample cumulative kernel thread CPU only on the existing 5–10s tick."""
+        try:
+            times = {t.id: t.user_time + t.system_time for t in process.threads()}
+        except psutil.Error:
+            return []
+        names = {t.native_id: t.name for t in threading.enumerate()}
+        elapsed = now - self._thread_at if self._thread_at is not None else 0
+        rows = [
+            {
+                "id": ident,
+                "name": names.get(ident, "Нативный поток"),
+                "cpu": round(
+                    max(0, value - self._thread_sample[ident])
+                    / elapsed
+                    * 100
+                    / (psutil.cpu_count() or 1),
+                    2,
+                ),
+            }
+            for ident, value in times.items()
+            if elapsed > 0 and ident in self._thread_sample
+        ]
+        self._thread_at, self._thread_sample = now, times
+        return sorted(rows, key=lambda row: row["cpu"], reverse=True)[:8]
+
+    def _role(self, process, root):
+        if process.pid == root.pid:
+            return "Ядро Крест"
+        if process.pid not in self._roles:
+            role = "Дочерний процесс"
+            try:
+                args = process.cmdline()
+                for flag, label in (
+                    ("--voice-indicator", "Индикатор голоса"),
+                    ("--game-overlay", "Игровой индикатор"),
+                    ("--desktop-service", "Управление плеером"),
+                ):
+                    if flag in args:
+                        role = label
+                        break
+                else:
+                    if "--service" in args:
+                        role = "Бот: " + Path(args[args.index("--service") + 1]).name[:80]
+            except (psutil.Error, IndexError):
+                pass
+            self._roles[process.pid] = role
+        return self._roles[process.pid]
 
     def set_mode(self, mode):
         if mode not in MODES:
@@ -155,16 +207,30 @@ class PerformancePolicy:
                 alive = {p.pid: p for p in [root, *children]}
                 self.processes = {pid: self.processes.get(pid, proc) for pid, proc in alive.items()}
                 cpu, memory = 0, 0
+                breakdown = []
                 for process in self.processes.values():
                     try:
-                        cpu += process.cpu_percent(None)
-                        memory += process.memory_info().rss
+                        usage = process.cpu_percent(None)
+                        rss = process.memory_info().rss
+                        cpu += usage
+                        memory += rss
+                        breakdown.append(
+                            {
+                                "pid": process.pid,
+                                "name": self._role(process, root),
+                                "cpu": round(usage / (psutil.cpu_count() or 1), 2),
+                                "memory_mb": round(rss / 1024**2, 1),
+                            }
+                        )
                     except psutil.Error:
                         continue
+                self._roles = {pid: role for pid, role in self._roles.items() if pid in alive}
                 self.metrics = {
                     "cpu": round(cpu / (psutil.cpu_count() or 1), 1),
                     "memory_mb": round(memory / 1024**2, 1),
                     "processes": len(alive),
+                    "breakdown": sorted(breakdown, key=lambda row: row["cpu"], reverse=True),
+                    "threads": self._threads(root, now),
                 }
                 atomic_write_json(
                     self.path, {"mode": self.active, "game": self.game, "updated": time.time()}

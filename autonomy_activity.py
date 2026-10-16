@@ -5,11 +5,13 @@ import ctypes
 import os
 import threading
 import time
+from functools import lru_cache
 
 import psutil
 
 
-def windows_input():
+@lru_cache(maxsize=1)
+def _input_api():
     if os.name != "nt":
         raise OSError("Автоматический простой определяется только в Windows")
     from ctypes import wintypes as w
@@ -21,6 +23,11 @@ def windows_input():
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     user.GetLastInputInfo.argtypes = [ctypes.POINTER(LastInput)]
     kernel.GetTickCount64.restype = ctypes.c_ulonglong
+    return user, kernel, LastInput
+
+
+def windows_input():
+    user, kernel, LastInput = _input_api()
     item = LastInput(ctypes.sizeof(LastInput), 0)
     if not user.GetLastInputInfo(ctypes.byref(item)):
         raise ctypes.WinError(ctypes.get_last_error())
@@ -203,7 +210,10 @@ class ActivityGate:
         idle = 0
         try:
             idle = min(self.input_probe(), max(0, now - self.last_interaction))
-            if self.controller.active():
+            # Recent keyboard/mouse input already resets the idle clock. Once
+            # quiet, keep observing the controller so a brief press before the
+            # AFK threshold also postpones work for a full idle interval.
+            if idle >= 1 and self.controller.active():
                 self.touch()
                 idle = 0
             if cfg.get("safe_mode") or not options.get("enabled", True):

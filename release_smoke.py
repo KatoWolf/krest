@@ -10,6 +10,7 @@ def check_kernel(config_path):
     from configuration import ConfigManager
 
     check_duty()
+    check_idle_protocol()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -248,6 +249,90 @@ def check_models(settings):
     from speech_check import check
 
     check(engine)
+    check_idle_audio(engine)
+
+
+def check_idle_protocol():
+    """The idle indicator must block, wake on changes, and refresh rotated tokens."""
+    import tempfile
+    import threading
+    from pathlib import Path
+    from command_feedback import CommandFeedback
+    from kernel_client import KernelClient
+    from secret_store import protect_bootstrap
+    from storage import atomic_write_json
+
+    feedback = CommandFeedback()
+    ready, completed = threading.Event(), threading.Event()
+    result = []
+
+    def waiter():
+        ready.set()
+        result.append(feedback.wait(0, timeout=1))
+        completed.set()
+
+    worker = threading.Thread(target=waiter)
+    worker.start()
+    try:
+        if not ready.wait(2) or completed.wait(0.05):
+            raise RuntimeError("Индикатор опрашивает состояние без ожидания события")
+        turn = feedback.begin()
+        if not completed.wait(2) or result[0][1].get("turn") != turn:
+            raise RuntimeError("Обращение не разбудило индикатор")
+    finally:
+        worker.join(timeout=2)
+    with tempfile.TemporaryDirectory(prefix="krest-ipc-cache-") as folder:
+        path = Path(folder) / "kernel_endpoint.json"
+        client = KernelClient(Path(folder) / "config.json")
+        for token, port in (("test-one", 12345), ("test-two", 12346)):
+            atomic_write_json(
+                path, {"protocol": 1, "port": port, "token": protect_bootstrap(token)}
+            )
+            for _ in range(3):
+                if client._connection_info() != (port, token):
+                    raise RuntimeError(
+                        "Клиент сохранил старые данные подключения после перезапуска"
+                    )
+    print("Ожидание индикатора и смена локального ключа проверены.", flush=True)
+
+
+def check_idle_audio(engine):
+    """Real loaded models, simulated silent microphone, no device or action."""
+    from types import SimpleNamespace
+
+    original = engine.stream
+    engine.stream = SimpleNamespace(active=True)
+    engine.clear_audio_queue()
+    engine._reset_recognizer()
+    engine._noise.reset()
+    try:
+        # A failed/reconnecting microphone must not keep the audio event set.
+        engine.q.put(bytes(960), time.monotonic())
+        engine.stream = None
+        original_attempt = engine.last_mic_error_time
+        engine.last_mic_error_time = time.time()
+        try:
+            engine.listen()
+            if engine.q.ready.is_set():
+                raise RuntimeError("Сбой микрофона оставил активное ожидание звука")
+        finally:
+            engine.last_mic_error_time = original_attempt
+        engine.stream = SimpleNamespace(active=True)
+        started, cpu = time.monotonic(), time.process_time()
+        for _ in range(100):
+            engine.audio_callback(bytes(960), 480, None, None)
+            if engine.listen():
+                raise RuntimeError("Тишина распознана как команда")
+            engine.wait_for_audio(0.03)
+        duration = time.monotonic() - started
+        used = time.process_time() - cpu
+        print(f"Loaded voice idle: {used:.3f}s CPU / {duration:.2f}s wall (one core).", flush=True)
+        if used > max(0.75, duration * 0.25):
+            raise RuntimeError("Голос в тишине использует больше 25% одного ядра")
+    finally:
+        engine.stream = original
+        engine.clear_audio_queue()
+        engine._reset_recognizer()
 
 
 def check_telegram_worker():

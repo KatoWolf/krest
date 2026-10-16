@@ -212,7 +212,10 @@ class Kernel:
         if method == "warframe.result":
             return rt.warframe.result(args["id"])
         if method == "voice.indicator":
-            return {**self._indicator_config, "feedback": rt.feedback.snapshot()}
+            revision, feedback = rt.feedback.wait(
+                int(args.get("after", -1)), 1 if "after" in args else 0
+            )
+            return {**self._indicator_config, "feedback": feedback, "revision": revision}
         if method == "overlay":
             import voice
 
@@ -406,6 +409,7 @@ class Kernel:
     def pump(self):
         self.activate()
         last_services = 0
+        cfg = self.settings()
         while not self.stop.wait(0.1):
             while True:
                 try:
@@ -419,8 +423,8 @@ class Kernel:
                     break
             if time.monotonic() - last_services >= 1:
                 self.integrations.refresh()
+                cfg = self.settings()
                 last_services = time.monotonic()
-            cfg = self.settings()
             self._indicator_config = {
                 "enabled": bool(
                     self._ready

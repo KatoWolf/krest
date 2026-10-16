@@ -23,6 +23,9 @@ def configure_output():
 
 
 def main(argv=None):
+    from native_cpu import configure
+
+    configure()
     configure_output()
     parser = argparse.ArgumentParser(description="КРЕСТ — локальный ассистент")
     parser.add_argument(

@@ -2,6 +2,10 @@ import os
 import sys
 import json
 
+from native_cpu import configure as configure_native_cpu
+
+configure_native_cpu()
+
 # Recognition must start before importing/loading the much larger TTS runtime.
 torch = None
 torch_import_error = ""
@@ -25,7 +29,7 @@ import numpy as np
 import hashlib
 import threading
 from collections import deque
-from speech_tools import Endpoint, pcm_levels, verbalize_numbers, AdaptiveNoiseFloor
+from speech_tools import Endpoint, verbalize_numbers, AdaptiveNoiseFloor
 from speech_stream import AudioFrames, Continuity
 
 # --- Индикатор и конфигурация ---
@@ -83,7 +87,16 @@ except ImportError:
 
 
 # Глобальное состояние
-q = AudioFrames()
+def _pcm_levels(data):
+    # Native reductions keep the PortAudio callback short. int32 avoids overflow
+    # at -32768; float64 accumulation also handles long/high-amplitude blocks.
+    samples = np.frombuffer(data, dtype="<i2", count=len(data) // 2).astype(np.int32)
+    if not samples.size:
+        return 0.0, 0
+    return float(np.sqrt(np.square(samples, dtype=np.float64).mean())), int(np.abs(samples).max())
+
+
+q = AudioFrames(levels=_pcm_levels)
 _continuity = Continuity()
 _recognizer_lock = threading.RLock()
 _play_lock = threading.Lock()
@@ -475,7 +488,7 @@ def audio_callback(indata, frames, time_info, status):
     if is_speaking and not _headphones(_audio_cfg):
         return
     data = bytes(indata)
-    rms, peak = pcm_levels(data)
+    rms, peak = _pcm_levels(data)
     if peak > 0:
         _last_nonzero_audio_at = _last_audio_at
     metrics.update(rms=rms, peak=peak)
@@ -503,6 +516,7 @@ def start_microphone() -> bool:
 
     # Защита от слишком частых попыток перезапуска при сбое устройства
     if time.time() - last_mic_error_time < 3.0:
+        clear_audio_queue()
         return False
 
     try:
@@ -635,6 +649,9 @@ def listen():
         or stalled
     ):
         if not start_microphone():
+            # A disconnected stream can leave queued audio signalled. Without
+            # clearing it the capture loop retries at full CPU for the backoff.
+            clear_audio_queue()
             return ""
     metrics["mic_hint"] = (
         "Микрофон подключён, но передаёт тишину. Проверьте кнопку mute на гарнитуре и уровень входа в Windows."

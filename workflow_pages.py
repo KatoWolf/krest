@@ -408,7 +408,7 @@ class WorkflowPages:
         card = self.card(
             self.page_bodies["maintenance"],
             "Нагрузка и фоновые задачи",
-            "Замеры включают Крест и её дочерние процессы. CPU указан как доля всей мощности процессора; память — сумма RSS.",
+            "Замеры включают ядро и его дочерние процессы; окно меню работает отдельно. CPU указан как доля всей мощности процессора; память — сумма RSS. Обновление раз в 5–10 секунд.",
         )
         ttk.Combobox(
             card, textvariable=self.profile_var, values=list(MODES), state="readonly"
@@ -526,6 +526,18 @@ class WorkflowPages:
         metrics = self.runtime.performance.metrics
         self.resource_var.set(
             f"Сейчас: {next(k for k, v in MODES.items() if v == self.runtime.performance.active)} · CPU {metrics['cpu']}% · RAM {metrics['memory_mb']} МБ · процессов {metrics['processes']}"
+            + "\n"
+            + " · ".join(
+                f"{row['name']}: {row['cpu']}%" for row in metrics.get("breakdown", [])[:4]
+            )
+            + (
+                "\nПотоки ядра: "
+                + " · ".join(
+                    f"{row['name']}: {row['cpu']}%" for row in metrics.get("threads", [])[:3]
+                )
+                if metrics.get("threads")
+                else ""
+            )
         )
         if self.current_page == "inbox":
             self._refresh_inbox()
