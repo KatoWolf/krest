@@ -311,6 +311,7 @@ def check_active_trades():
 )
 def handle_remote_upload(message):
     from configuration import ConfigManager
+    from integrations import redact
 
     if (
         getattr(message.from_user, "id", None) != MY_ID
@@ -322,45 +323,43 @@ def handle_remote_upload(message):
         return
 
     try:
-        bot.send_chat_action(message.chat.id, "upload_document")
-        file_info = None
-        file_name = f"upload_{int(time.time())}"
+        from kernel_client import KernelClient
 
-        if message.document:
-            file_info = bot.get_file(message.document.file_id)
-            file_name = os.path.basename(
-                (message.document.file_name or file_name).replace("\\", "/")
-            )
-            if file_name in (".", ".."):
-                file_name = f"upload_{time.time_ns()}"
-        elif message.photo:
-            file_info = bot.get_file(message.photo[-1].file_id)
-            file_name += ".jpg"
-        elif message.video:
-            file_info = bot.get_file(message.video.file_id)
-            file_name += ".mp4"
-        elif message.audio:
-            file_info = bot.get_file(message.audio.file_id)
-            file_name += ".mp3"
-
-        if file_info:
-            if not 0 <= (file_info.file_size or 0) <= 20 * 1024 * 1024:
-                bot.reply_to(message, "Размер файла превышает 20 МБ.")
-                return
-            downloaded_file = bot.download_file(file_info.file_path)
-            save_path = os.path.join(UPLOADS_DIR, file_name)
-            if os.path.exists(save_path):
-                stem, extension = os.path.splitext(save_path)
-                save_path = f"{stem}_{time.time_ns()}{extension}"
-            with open(save_path, "xb") as new_file:
-                new_file.write(downloaded_file)
-            bot.reply_to(
-                message,
-                f"📥 **ФАЙЛ ПОЛУЧЕН!**\nУспешно сохранен на ПК.\n📂 Путь: `{save_path}`",
-                parse_mode="Markdown",
-            )
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка приема файла: {e}")
+        content = message.document or message.video or message.audio
+        if content is None and message.photo:
+            content = message.photo[-1]
+        if content is None:
+            return
+        if not 0 <= (getattr(content, "file_size", 0) or 0) <= 20 * 1024 * 1024:
+            bot.reply_to(message, "Размер файла превышает 20 МБ.")
+            return
+        suffix = (
+            ".jpg"
+            if message.photo
+            else ".mp4"
+            if message.video
+            else ".mp3"
+            if message.audio
+            else ".bin"
+        )
+        name = getattr(content, "file_name", None) or f"upload_{message.message_id}{suffix}"
+        KernelClient(ConfigManager().filepath).call(
+            "autonomy.receive",
+            file_id=content.file_id,
+            filename=name,
+            sender=message.from_user.id,
+            message_id=message.message_id,
+        )
+        bot.reply_to(
+            message,
+            "Приняла файл в очередь. Сохраню в uploads, когда ПК будет свободен. Результат — в разделе «Дежурство» пульта и меню Крест.",
+        )
+    except Exception as exc:
+        bot.reply_to(
+            message,
+            "Не удалось поставить файл в очередь: "
+            + redact(str(exc), ConfigManager().snapshot())[:700],
+        )
 
 
 # --- ОБРАБОТКА КОМАНД И ТЕКСТА ---

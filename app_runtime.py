@@ -106,6 +106,9 @@ class AssistantRuntime:
         self.current_command = ""
         self.notifications = NotificationQueue(Path(data_dir) / "notifications.sqlite3")
         self.stop_event = threading.Event()
+        from autonomy import AutonomousDuty
+
+        self.autonomy = AutonomousDuty(self, data_dir)
         self._threads = []
         self._voice_thread = None
         self._voice_control = threading.Lock()
@@ -204,6 +207,7 @@ class AssistantRuntime:
         ]
         for thread in self._threads:
             thread.start()
+        self.autonomy.start()
         self.warframe.start()
         cfg = self.settings()
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
@@ -222,6 +226,8 @@ class AssistantRuntime:
         text = text.strip()
         if not text:
             return False
+        if source in ("text", "voice"):
+            self.autonomy.gate.touch()
         # Emergency release must not wait behind network commands in the execution queue.
         from speech_tools import normalize_command
 
@@ -234,6 +240,11 @@ class AssistantRuntime:
             "я вернулся в игру",
         ):
             self.warframe.routes.cancel()
+        if normalize_command(stop_text or text) in (
+            "останови дежурство",
+            "пауза дежурства",
+        ):
+            self.autonomy.call("pause")
         if len(text) > 2000:
             self.events.put(("error", "Команда слишком длинная: максимум 2000 символов."))
             return False
@@ -746,8 +757,16 @@ class AssistantRuntime:
                 self.stop_event.wait(2)
 
     def _file_index_worker(self):
+        runtime = self
+
+        class ScanStop:
+            def is_set(self):
+                return runtime.stop_event.is_set() or not runtime.autonomy.permitted()
+
         while not self.stop_event.wait(5):
-            self.desktop.scan(self.stop_event)
+            if not self.autonomy.permitted():
+                continue
+            self.desktop.scan(ScanStop())
             if self.stop_event.wait(900 if self.performance.game else 300):
                 return
 
@@ -822,7 +841,12 @@ class AssistantRuntime:
                 # shared detector scans processes at most once per five seconds.
                 self.performance.refresh_activity()
             pause_reason = self.performance.file_pause_reason if enabled else ""
-            if pause_reason:
+            if enabled and not self.autonomy.permitted():
+                was_paused = True
+                self.download_status = (
+                    "Сортировка ожидает AFK: " + self.autonomy.gate.snapshot()["reason"]
+                )
+            elif pause_reason:
                 was_paused = True
                 self.download_status = "Сортировка приостановлена: " + pause_reason
             elif enabled and (was_paused or time.monotonic() - last_run >= 30):
@@ -835,7 +859,12 @@ class AssistantRuntime:
                         sorter = sorters[folder]
                         sorter.policy = policy
                         try:
-                            item = sorter.scan(folder, stop=self.stop_event)
+
+                            class SortStop:
+                                def is_set(inner):
+                                    return self.stop_event.is_set() or not self.autonomy.permitted()
+
+                            item = sorter.scan(folder, stop=SortStop())
                             result["moved_count"] += item["moved_count"]
                             result["skipped_count"] += item["skipped_count"]
                             result["errors"].extend(item["errors"])
@@ -1180,6 +1209,7 @@ class AssistantRuntime:
         voice.stop_speaking()
 
     def close(self):
+        self.autonomy.close()
         self.verifier.closed.set()
         self.audio_focus.close()
         with self._request_lock:

@@ -88,3 +88,6 @@ tools/ci_test_report.py
 .kernel-start.lock
 
 .voice-indicator.lock
+autonomy.sqlite3*
+autonomy/
+received/

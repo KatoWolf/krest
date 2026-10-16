@@ -163,6 +163,11 @@ class Kernel:
             "hearing": rt.hearing.snapshot(),
             "warframe": rt.warframe.status(),
             "downloads": rt.download_status,
+            "autonomy": {
+                "activity": rt.autonomy.gate.snapshot(),
+                "paused": rt.autonomy.paused,
+                "atomic": rt.autonomy.atomic,
+            },
             "command": rt.command_status(),
             "notifications_mode": rt.notification_mode,
             "modules": self.integrations.MODULES,
@@ -182,6 +187,10 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "autonomy":
+            return rt.autonomy.call(**args)
+        if method == "autonomy.receive":
+            return rt.autonomy.receive_telegram(**args)
         if method == "hearing":
             if args["action"] == "start":
                 rt.start_voice()

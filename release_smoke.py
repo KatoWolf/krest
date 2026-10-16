@@ -9,6 +9,8 @@ def check_kernel(config_path):
     from process_lock import ProcessLock
     from configuration import ConfigManager
 
+    check_duty()
+
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
     from pathlib import Path
@@ -83,6 +85,9 @@ def check_kernel(config_path):
             ("крест заметка для игры проверить реликвии", "skills.personal_tools.game_note"),
             ("крест итоги игровой сессии", "skills.personal_tools.game_report"),
             ("крест покажи историю буфера", "skills.personal_tools.clipboard_history"),
+            ("крест статус дежурства", "skills.autonomy.duty_status"),
+            ("крест останови дежурство", "skills.autonomy.duty_pause"),
+            ("крест продолжи дежурство", "skills.autonomy.duty_resume"),
         ):
             parsed = client.call("command.parse", text=phrase)
             if parsed["skill"] != expected:
@@ -91,6 +96,14 @@ def check_kernel(config_path):
             raise RuntimeError("Удалённый Dota-гид остался в сборке")
         if not isinstance(client.call("catalog.names"), list):
             raise RuntimeError("Недоступен словарь приложений")
+        duty = client.call("autonomy", action="snapshot")
+        if duty["jobs"] or duty["activity"]["allowed"]:
+            raise RuntimeError("Дежурство не должно запускаться в безопасном режиме")
+        task = client.call("autonomy", action="enqueue", kind="profile_backup")
+        client.call("autonomy", action="cancel", id=task["id"])
+        duty = client.call("autonomy", action="snapshot")
+        if duty["jobs"][0]["status"] != "cancelled":
+            raise RuntimeError("RPC очереди дежурства не обновляет задачу")
         clips = client.call("personal_tools", section="clipboard", action="list")
         if clips["rows"] or clips["enabled"]:
             raise RuntimeError("История буфера нового профиля должна быть пустой и выключенной")
@@ -286,6 +299,15 @@ def check_dependencies():
         "PortAudio: устройств ввода найдено " + str(len(input_candidates(sounddevice))), flush=True
     )
     if os.name == "nt":
+        from concurrent.futures import ThreadPoolExecutor
+        from autonomy_activity import windows_input, windows_busy
+
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            idle = worker.submit(windows_input).result(timeout=10)
+            busy = worker.submit(windows_busy, {os.getpid()}).result(timeout=15)
+        if idle < 0 or not isinstance(busy, str):
+            raise RuntimeError("Проверка AFK не вернула состояние Windows")
+        print("AFK: native input, media, audio/capture and fullscreen probes verified.", flush=True)
         from audio_scheduling import recognition_priority, status
 
         with recognition_priority() as scheduling:
@@ -410,3 +432,82 @@ def check_menu_surface():
         print("Меню: шрифт, кнопки и границы прокрутки проверены.", flush=True)
     finally:
         root.destroy()
+
+
+def check_duty():
+    """Exercise persistence, AFK gating, version restoration and a return mid-copy."""
+    import os
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+    from configuration import ConfigManager
+    from autonomy import AutonomousDuty
+    from autonomy_store import DutyStore
+    from autonomy_files import Paused, CHUNK
+
+    with tempfile.TemporaryDirectory(prefix="krest-duty-check-") as temp:
+        root = Path(temp)
+        config = ConfigManager(root / "config.json")
+        options = config.snapshot()
+        options["autonomy"].update(profile_backup=False, health_checks=False)
+        config.save_config(options)
+        permission = [False]
+        gate = SimpleNamespace(
+            permitted=lambda: permission[0],
+            snapshot=lambda: {"allowed": permission[0], "reason": "smoke", "idle": 600},
+        )
+        rt = SimpleNamespace(
+            settings=config.snapshot, config_manager=config, publish_notice=lambda *a, **kw: None
+        )
+        duty = AutonomousDuty(rt, root, gate=gate)
+        source = root / "original.txt"
+        source.write_bytes(b"original content")
+        os.utime(source, (time.time() - 300, time.time() - 300))
+        task = duty.call(
+            "enqueue",
+            kind="backup",
+            values={"source": str(source), "destination": str(root / "versions")},
+        )["id"]
+        if duty.run_once() or (root / "versions").exists():
+            raise RuntimeError("AFK worker touched files while the user was active")
+        permission[0] = True
+        duty.run_once()
+        record = DutyStore(duty.store.path).get(task)
+        versions = duty.store.versions(source)
+        if record["status"] != "completed" or len(versions) != 1:
+            raise RuntimeError("Backup did not persist its verified result: " + record["result"])
+        restore = duty.call("enqueue", kind="restore", values={"version_id": versions[0]["id"]})[
+            "id"
+        ]
+        duty.run_once()
+        if (
+            duty.store.get(restore)["status"] != "completed"
+            or source.read_bytes() != b"original content"
+        ):
+            raise RuntimeError("Version restoration did not preserve the current original")
+        big = root / "large.bin"
+        big.write_bytes(b"x" * (2 * CHUNK))
+        os.utime(big, (time.time() - 300, time.time() - 300))
+        target = root / "copy.bin"
+        ident = duty.store.enqueue("copy", "copy", {})
+        count = [0]
+
+        def guard():
+            count[0] += 1
+            if count[0] >= 3:
+                raise Paused("user returned")
+
+        duty.files.guard = guard
+        try:
+            duty.files.copy_file(big, target, duty.store.get(ident))
+        except Paused:
+            pass
+        else:
+            raise RuntimeError("Copy ignored cancellation")
+        if target.exists():
+            raise RuntimeError("Partial copy was published as a completed file")
+        duty.files.guard = duty.guard
+        duty.files.copy_file(big, target, duty.store.get(ident))
+        if target.read_bytes() != big.read_bytes():
+            raise RuntimeError("Interrupted copy did not resume correctly")
+    print("AFK queue, verified backup, restore and interrupted copy passed.", flush=True)

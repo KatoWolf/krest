@@ -324,6 +324,12 @@ class RemoteRuntime:
             snapshot=lambda: self.cached.get("hearing", {}),
             call=lambda action: self.client.call("hearing", action=action),
         )
+        self.autonomy = SimpleNamespace(
+            snapshot=lambda: self.client.call("autonomy", action="snapshot"),
+            call=lambda action, **args: self.client.call(
+                "autonomy", action=action, _timeout=70 if action == "software.list" else 8, **args
+            ),
+        )
         root = client.config_path.parent
         self.center = NotificationCenter(root / "inbox.sqlite3")
         self.jobs = JobStore(root / "jobs.sqlite3", recover=False)

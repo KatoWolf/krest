@@ -22,11 +22,13 @@ FILES = {
 MAX_TOTAL = 64 * 1024 * 1024
 
 
-def create_backup(config, destination):
+def create_backup(config, destination, guard=None):
     from secret_store import SECRET_KEYS
     from storage import atomic_write_json
 
     destination = Path(destination)
+    guard = guard or (lambda: None)
+    guard()
     root = config.filepath.parent
     with tempfile.TemporaryDirectory(prefix="krest-backup-") as temp:
         staging = Path(temp)
@@ -40,8 +42,10 @@ def create_backup(config, destination):
         cfg["event_rules"] = [dict(rule, enabled=False) for rule in cfg.get("event_rules", [])]
         cfg["app_settings"]["downloads_auto_sort"] = False
         cfg["audio_focus"]["enabled"] = False
+        cfg["autonomy"]["enabled"] = False
         atomic_write_json(staging / "config.json", cfg)
         for filename in FILES - {"config.json"}:
+            guard()
             source = root / filename
             if not source.exists() or source.is_symlink():
                 continue
@@ -52,12 +56,19 @@ def create_backup(config, destination):
                     closing(sqlite3.connect(source)) as original,
                     closing(sqlite3.connect(staging / filename)) as target,
                 ):
-                    original.backup(target)
+                    original.backup(target, pages=128, progress=lambda *args: guard())
             else:
-                (staging / filename).write_bytes(source.read_bytes())
+                with source.open("rb") as original, (staging / filename).open("wb") as target:
+                    while True:
+                        guard()
+                        block = original.read(1024 * 1024)
+                        if not block:
+                            break
+                        target.write(block)
         manifest = {}
         total = 0
         for item in staging.iterdir():
+            guard()
             raw = item.read_bytes()
             total += len(raw)
             manifest[item.name] = hashlib.sha256(raw).hexdigest()
@@ -68,7 +79,14 @@ def create_backup(config, destination):
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("manifest.json", json.dumps({"version": 1, "files": manifest}))
                 for name in manifest:
-                    archive.write(staging / name, name)
+                    with (staging / name).open("rb") as source, archive.open(name, "w") as target:
+                        while True:
+                            guard()
+                            block = source.read(1024 * 1024)
+                            if not block:
+                                break
+                            target.write(block)
+            guard()
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)

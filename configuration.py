@@ -13,12 +13,14 @@ import threading
 from storage import atomic_write_json
 from scenarios import DEFAULT_SCENARIOS, validate_scenarios
 from warframe_config import DEFAULT_WARFRAME, validate_game_settings
+from autonomy import DEFAULT_AUTONOMY, validate_settings as validate_autonomy
 
 from app_paths import data_dir
 
 CONFIG_PATH = data_dir() / "config.json"
 DEFAULT_CONFIG = {
     "schema_version": 2,
+    "autonomy": DEFAULT_AUTONOMY,
     "warframe": DEFAULT_WARFRAME,
     "owner_name": "",
     "profile": {"onboarding_completed": False, "personality": "friendly"},
@@ -238,6 +240,7 @@ def validate(data):
     from file_tools import validate_policy
 
     validate_policy(data["file_policy"])
+    validate_autonomy(data["autonomy"])
     from automation import validate_rules
 
     validate_rules(data["event_rules"], data["scenarios"])

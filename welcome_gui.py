@@ -20,6 +20,7 @@ from warframe_pages import WarframePages, PAGE_NAMES
 from appearance_pages import AppearancePages
 from experience_pages import ExperiencePages
 from personal_pages import PersonalPages
+from autonomy_pages import AutonomyPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -43,6 +44,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    AutonomyPages,
     PersonalPages,
     ExperiencePages,
     WarframePages,
@@ -84,6 +86,7 @@ class ControlCenterApp(
         ("security", "Доступ и восстановление"),
         ("clipboard", "Буфер обмена"),
         ("sessions", "Игровые сессии"),
+        ("autonomy", "Дежурство"),
     ]
 
     NAV_GROUPS = [
@@ -91,6 +94,7 @@ class ControlCenterApp(
         ("skills", "Команды", ("skills", "favorites")),
         ("music", "Музыка", ("music",)),
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
+        ("autonomy", "Дежурство", ("autonomy",)),
         ("inbox", "Уведомления", ("inbox", "logs")),
         (
             "bots",
@@ -611,6 +615,7 @@ class ControlCenterApp(
             "skills": "Что Крест умеет сейчас: фразы, примеры и ваши команды.",
             "music": "Ваш плеер, текущий трек и управление воспроизведением.",
             "timers": "Освободите голову. Крест напомнит и выполнит привычные действия.",
+            "autonomy": "Поручения выполняются, когда компьютер свободен.",
             "inbox": "События, которые важно не пропустить.",
             "steam": "Игры, боты и ваши сервисы.",
             "bots": "Подключения, состояние мостов и результаты действий.",
@@ -1518,6 +1523,8 @@ class ControlCenterApp(
         data["telegram_user"].update({key: var.get() for key, var in self.tg_vars.items()})
         if self.CORE_PAGES & self._built_pages:
             data.update(self.core_settings_draft())
+        if "autonomy" in self._built_pages:
+            data["autonomy"].update(self.duty_settings_draft())
         return data
 
     def save_all_settings(self, quiet=False):
@@ -1978,6 +1985,7 @@ class ControlCenterApp(
                     button.configure(state="normal" if enabled else "disabled")
             self._update_timers()
             self._update_reminders()
+            self._duty_refresh()
             if self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             self._update_license_view()
