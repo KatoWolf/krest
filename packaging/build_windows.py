@@ -15,6 +15,31 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.15.1"
 
 
+def source_smoke():
+    """Also expose setup/cleanup failures outside the checked child process."""
+    try:
+        with tempfile.TemporaryDirectory(prefix="krest-source-check-") as folder:
+            run_checked(
+                [
+                    sys.executable,
+                    "main.py",
+                    "--release-smoke",
+                    "--config",
+                    str(Path(folder) / "config.json"),
+                ],
+                timeout=120,
+            )
+    except Exception:
+        import traceback
+
+        detail = traceback.format_exc()[-3000:]
+        print(
+            "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
+            flush=True,
+        )
+        raise
+
+
 def run_checked(command, **kwargs):
     """Stream progress and retain a bounded failure summary for CI."""
     from collections import deque

@@ -63,6 +63,9 @@ def check_kernel(config_path):
         raise RuntimeError("Для проверки нужна отдельная папка конфигурации")
     lock.close()
     client = KernelClient(config_path).ensure_started(safe=True)
+    import psutil
+
+    process = psutil.Process(client.call("ping")["pid"])
     try:
         if not client.call("ping")["safe_mode"]:
             raise RuntimeError("Ядро запустилось с неправильным режимом")
@@ -188,12 +191,20 @@ def check_kernel(config_path):
         raise RuntimeError("Ядро не выполнило отмену последнего действия")
     finally:
         client.call("shutdown")
+        # Releasing the kernel lock precedes process exit. On Windows stderr's
+        # startup.log handle stays open until then and makes temp cleanup fail.
+        try:
+            process.wait(timeout=15)
+        except psutil.TimeoutExpired as exc:
+            raise RuntimeError("Проверочное ядро не завершилось после shutdown") from exc
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if lock.acquire():
                 lock.close()
                 break
             time.sleep(0.1)
+        else:
+            raise RuntimeError("Проверочное ядро не освободило блокировку профиля")
 
 
 def check_models(settings):
