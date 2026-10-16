@@ -90,22 +90,28 @@ class IntegrationManager:
                 self.stop(filename)
         self.MODULES = updated
 
-    def path(self, filename):
-        custom = self.app.config_mgr.snapshot().get("services", {}).get(filename, {}).get("path")
+    def path(self, filename, settings=None):
+        settings = self.app.config_mgr.snapshot() if settings is None else settings
+        custom = settings.get("services", {}).get(filename, {}).get("path")
         return str(Path(custom).expanduser().resolve()) if custom else str(self.base_dir / filename)
 
-    def is_builtin_release(self, filename):
+    def is_builtin_release(self, filename, settings=None):
         from app_paths import compiled
         from service_runner import BUILTIN_SERVICES
 
-        custom = self.app.config_mgr.snapshot().get("services", {}).get(filename, {}).get("path")
+        settings = self.app.config_mgr.snapshot() if settings is None else settings
+        custom = settings.get("services", {}).get(filename, {}).get("path")
         return compiled() and filename in BUILTIN_SERVICES and not custom
 
-    def exists(self, filename):
-        return self.is_builtin_release(filename) or Path(self.path(filename)).is_file()
+    def exists(self, filename, settings=None):
+        settings = self.app.config_mgr.snapshot() if settings is None else settings
+        return (
+            self.is_builtin_release(filename, settings)
+            or Path(self.path(filename, settings)).is_file()
+        )
 
-    def _module_status(self, filename):
-        if not self.exists(filename):
+    def _module_status(self, filename, settings=None):
+        if not self.exists(filename, settings):
             return "Не установлен"
         proc = self.processes.get(filename)
         if proc and proc.poll() is None:
@@ -113,6 +119,14 @@ class IntegrationManager:
                 return "Требует внимания"
             return "Подключён" if self.bridge.get(filename, {}).get("ready") else "Подключение…"
         return "Ошибка запуска" if filename in self.errors else "Не запущен"
+
+    def statuses(self, settings=None):
+        """Read all services from one settings snapshot; never run recovery here."""
+        settings = self.app.config_mgr.snapshot() if settings is None else settings
+        return {
+            key: self._module_status(filename, settings)
+            for key, (filename, _) in list(self.MODULES.items())
+        }
 
     def details(self, filename):
         """Read-only UI snapshot; never wait for a process being stopped."""
@@ -281,10 +295,7 @@ class IntegrationManager:
 
     def refresh(self):
         if not self._health_lock.acquire(blocking=False):
-            return {
-                key: self._module_status(filename)
-                for key, (filename, _) in list(self.MODULES.items())
-            }
+            return self.statuses()
         try:
             return self._refresh()
         finally:
@@ -333,7 +344,7 @@ class IntegrationManager:
                         self.processes.pop(filename, None)
                         if proc.stdin:
                             proc.stdin.close()
-                        cfg = self.app.config_mgr.snapshot().get("services", {}).get(filename, {})
+                        cfg = settings.get("services", {}).get(filename, {})
                         if (
                             code
                             and cfg.get("auto_restart", True)
@@ -376,9 +387,7 @@ class IntegrationManager:
                     }
                 except psutil.Error:
                     self.resources.pop(filename, None)
-        return {
-            key: self._module_status(filename) for key, (filename, _) in list(self.MODULES.items())
-        }
+        return self.statuses(settings)
 
     def _recover_service(self, filename, generation):
         with self._lock:

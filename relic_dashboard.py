@@ -133,7 +133,7 @@ def refresh(app):
         return
     tasks = len(app.runtime.state.snapshot()["active_timers"])
     services = len(app.integration.processes)
-    unread = len(app.runtime.center.list(unread=True))
+    unread = app.runtime.center.unread_count()
     app.home_tiles["tasks"].set(f"Таймеров: {tasks}" if tasks else "Открыть дела")
     app.home_tiles["services"].set(f"Запущено: {services}" if services else "Подключить")
     app.home_tiles["notices"].set(f"Новых: {unread}" if unread else "Нет новых")

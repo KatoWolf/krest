@@ -673,6 +673,9 @@ class ControlCenterApp(
             self.refresh_log()
         if code == "music":
             self._refresh_music()
+        if code == "timers":
+            self._update_timers()
+            self._update_reminders()
         if code == "inbox":
             self._refresh_inbox()
         if code == "kernel":
@@ -1088,11 +1091,15 @@ class ControlCenterApp(
         self.status_var.set("Ежедневное напоминание сохранено")
         self._update_timers()
 
-    def _update_reminders(self):
+    def _update_reminders(self, update_rows=True):
         items = self.runtime.state.reminders()
-        self.reminder_var.set(
+        text = (
             f"Непрочитанных напоминаний: {len(items)}" if items else "Нет непрочитанных напоминаний"
         )
+        if self.reminder_var.get() != text:
+            self.reminder_var.set(text)
+        if not update_rows:
+            return
         if "timers" not in self._built_pages or items == self._reminder_rows:
             return
         self._reminder_rows = items
@@ -1114,7 +1121,6 @@ class ControlCenterApp(
     def _update_timers(self):
         if "timers" not in self._built_pages:
             return
-        selected = self.timer_tree.selection()
         rows = []
         for kind, items in self.runtime.state.snapshot().items():
             if kind == "completed_tasks":
@@ -1140,13 +1146,20 @@ class ControlCenterApp(
                 )
         if rows == self._timer_rows:
             return
+        previous = dict(self._timer_rows or ())
+        current = dict(rows)
+        for key in self.timer_tree.get_children():
+            if key not in current:
+                self.timer_tree.delete(key)
+        order_changed = list(previous) != list(current)
+        for index, (key, values) in enumerate(rows):
+            if not self.timer_tree.exists(key):
+                self.timer_tree.insert("", "end", iid=key, values=values)
+            elif previous.get(key) != values:
+                self.timer_tree.item(key, values=values)
+            if order_changed:
+                self.timer_tree.move(key, "", index)
         self._timer_rows = rows
-        self.timer_tree.delete(*self.timer_tree.get_children())
-        for key, values in rows:
-            self.timer_tree.insert("", "end", iid=key, values=values)
-        for key in selected:
-            if self.timer_tree.exists(key):
-                self.timer_tree.selection_add(key)
 
     def build_api_tab(self):
         self.build_reply_controls(self.page_bodies["api"])
@@ -1838,7 +1851,7 @@ class ControlCenterApp(
             self.wf_refresh()
         if (
             self.current_page == "music"
-            and self.state() != "withdrawn"
+            and self.state() in ("normal", "zoomed")
             and time.monotonic() - self.music_refreshed_at >= 8
         ):
             self._refresh_music(quiet=True)
@@ -1926,14 +1939,15 @@ class ControlCenterApp(
             self.runtime.voice_feedback,
             enabled=self.config_mgr.config["app_settings"]["indicator_enabled"],
         )
-        if self.state() in ("normal", "zoomed") and self.current_page in ("actions", "voice"):
+        visible = self.state() in ("normal", "zoomed")
+        if visible and self.current_page in ("actions", "voice"):
             if time.monotonic() - getattr(self, "_meter_at", 0) >= 0.15:
                 self._meter_at = time.monotonic()
                 self._update_voice_meter()
         now = time.monotonic()
         if not hasattr(self, "_last_refresh") or now - self._last_refresh >= 1:
             self._last_refresh = now
-            if self.state() in ("normal", "zoomed") and self.current_page in (
+            if visible and self.current_page in (
                 "actions",
                 "voice",
                 "scenarios",
@@ -1983,22 +1997,27 @@ class ControlCenterApp(
                         not detail["running"] if action == "start" else detail["running"]
                     )
                     button.configure(state="normal" if enabled else "disabled")
-            self._update_timers()
-            self._update_reminders()
+            if visible and self.current_page == "timers":
+                self._update_timers()
+            if visible and self.current_page in ("actions", "timers"):
+                self._update_reminders(update_rows=self.current_page == "timers")
             self._duty_refresh()
-            if self.current_page in self.CORE_PAGES:
+            if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()
-            self._update_license_view()
-            if self.current_page == "discord_bot" and "discord_bot" in self._built_pages:
+            license_state = licensing.status(self.config_mgr.snapshot())
+            premium = license_state["premium"]
+            if visible:
+                self._update_license_view(license_state)
+            if (
+                visible
+                and self.current_page == "discord_bot"
+                and "discord_bot" in self._built_pages
+            ):
                 self._update_discord_bot()
-            if self.current_page in self.BOT_PAGES and not self.config_mgr.is_premium():
+            if self.current_page in self.BOT_PAGES and not premium:
                 if self.pages[self.current_page].winfo_manager():
                     self.switch_page(self.current_page)
-            if (
-                not self.config_mgr.is_premium()
-                and self.integration.processes
-                and not self._license_check_busy
-            ):
+            if not premium and self.integration.processes and not self._license_check_busy:
                 self._license_check_busy = True
 
                 def enforce():
@@ -2008,25 +2027,29 @@ class ControlCenterApp(
                         self.post_ui(lambda: setattr(self, "_license_check_busy", False))
 
                 self._background(enforce)
-            if not self.config_mgr.is_premium() and self.theme_var.get() in PREMIUM_THEMES:
+            if not premium and self.theme_var.get() in PREMIUM_THEMES:
                 self.apply_theme("Graphite")
-            if self.current_page == "settings":
+            if visible and self.current_page == "settings":
                 self.download_label.configure(text=self.runtime.download_status)
-            if self.current_page == "steam" and "steam" in self._built_pages:
+            if visible and self.current_page == "steam" and "steam" in self._built_pages:
                 self._update_steam()
-            current, pending = self.runtime.command_status()
-            self.queue_var.set(
-                ("Выполняется: " + current[:100] if current else "Ожидаю обращение «Крест»")
-                + f" · В очереди: {pending}"
-            )
-            self.overview_label.configure(
-                text=f"{len(self.runtime.manager.catalog())} навыков готовы  ·  "
-                f"{len(self.runtime.state.snapshot()['active_timers'])} активных таймеров  ·  "
-                f"{len(self.integration.processes)} подключённых сервисов"
-            )
-            from relic_dashboard import refresh
+            if visible and self.current_page == "actions":
+                current, pending = self.runtime.command_status()
+                queue_text = (
+                    "Выполняется: " + current[:100] if current else "Ожидаю обращение «Крест»"
+                ) + f" · В очереди: {pending}"
+                if self.queue_var.get() != queue_text:
+                    self.queue_var.set(queue_text)
+                overview = (
+                    f"{len(self.runtime.manager.catalog())} навыков готовы  ·  "
+                    f"{len(self.runtime.state.snapshot()['active_timers'])} активных таймеров  ·  "
+                    f"{len(self.integration.processes)} подключённых сервисов"
+                )
+                if self.overview_label.cget("text") != overview:
+                    self.overview_label.configure(text=overview)
+                from relic_dashboard import refresh
 
-            refresh(self)
+                refresh(self)
         if self.winfo_exists():
             self._poll_job = self.after(
                 40 if self.state() in ("normal", "zoomed") else 600, self._poll

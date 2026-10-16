@@ -419,8 +419,8 @@ class ProductPages:
         )
         self._update_license_view()
 
-    def _update_license_view(self):
-        state = licensing.status(self.config_mgr.snapshot())
+    def _update_license_view(self, state=None):
+        state = licensing.status(self.config_mgr.snapshot()) if state is None else state
         text = state["message"]
         if state["premium"]:
             text += " · " + (
@@ -428,9 +428,12 @@ class ProductPages:
                 if state["expires"]
                 else "бессрочно"
             )
-        self.license_status_var.set(text)
+        if self.license_status_var.get() != text:
+            self.license_status_var.set(text)
         if hasattr(self, "edition_label"):
-            self.edition_label.configure(text="PREMIUM" if state["premium"] else "ОБЫЧНАЯ ВЕРСИЯ")
+            edition = "PREMIUM" if state["premium"] else "ОБЫЧНАЯ ВЕРСИЯ"
+            if self.edition_label.cget("text") != edition:
+                self.edition_label.configure(text=edition)
 
     @staticmethod
     def _normalize_premium_code(text):

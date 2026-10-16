@@ -188,9 +188,15 @@ class WarframeStore:
             except (OSError, ValueError, TypeError) as exc:
                 self.error = str(exc)
 
-    def snapshot(self):
+    def snapshot(self, *sections):
+        """Copy only requested sections for frequent status reads, or all for editing."""
         with self.lock:
-            return copy.deepcopy(self.data)
+            data = (
+                {key: self.data[key] for key in sections if key in self.data}
+                if sections
+                else self.data
+            )
+            return copy.deepcopy(data)
 
     @contextmanager
     def edit(self):

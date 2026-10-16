@@ -57,10 +57,21 @@ class NotificationQueue:
 
     def get_nowait(self):
         with self._connect() as connection:
+            cutoff = time.time() - 300
+            # Idle polling must stay read-only, including an expired queue.
+            # put() already bounds and removes old rows. Recheck under the write
+            # lock below so two consumers can never deliver the same message.
+            if (
+                connection.execute(
+                    "SELECT 1 FROM notifications WHERE created>=? LIMIT 1", (cutoff,)
+                ).fetchone()
+                is None
+            ):
+                raise queue.Empty
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute("DELETE FROM notifications WHERE created < ?", (time.time() - 300,))
             row = connection.execute(
-                "SELECT id,text FROM notifications ORDER BY id LIMIT 1"
+                "SELECT id,text FROM notifications WHERE created>=? ORDER BY id LIMIT 1",
+                (time.time() - 300,),
             ).fetchone()
             if row is not None:
                 connection.execute("DELETE FROM notifications WHERE id=?", (row[0],))

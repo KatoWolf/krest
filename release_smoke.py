@@ -11,6 +11,7 @@ def check_kernel(config_path):
 
     check_duty()
     check_idle_protocol()
+    check_idle_storage()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -307,6 +308,56 @@ def check_idle_protocol():
     print("Ожидание индикатора и смена локального ключа проверены.", flush=True)
 
 
+def check_idle_storage():
+    """Empty notification polling must not acquire a database write lock."""
+    import queue
+    import tempfile
+    from contextlib import contextmanager
+    from pathlib import Path
+    from notifications import NotificationQueue
+    from notification_center import NotificationCenter
+
+    with tempfile.TemporaryDirectory(prefix="krest-idle-storage-") as folder:
+        root = Path(folder)
+        delivery = NotificationQueue(root / "delivery.sqlite3")
+        inbox = NotificationCenter(root / "inbox.sqlite3")
+        statements = []
+
+        @contextmanager
+        def traced(connect):
+            with connect() as db:
+                db.set_trace_callback(statements.append)
+                yield db
+
+        delivery_connect, inbox_connect = delivery._connect, inbox.connect
+        delivery._connect = lambda: traced(delivery_connect)
+        inbox.connect = lambda: traced(inbox_connect)
+        for _ in range(5):
+            try:
+                delivery.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                raise RuntimeError("Пустая очередь вернула сообщение")
+            if inbox.take_after_game():
+                raise RuntimeError("Пустой список отложенных уведомлений вернул сообщение")
+        if any(s.startswith(("BEGIN", "DELETE", "UPDATE", "INSERT")) for s in statements):
+            raise RuntimeError("Пустая очередь уведомлений открывает запись в базу")
+        delivery.put("Проверка доставки")
+        if delivery.get_nowait() != "Проверка доставки":
+            raise RuntimeError("Уведомление потеряно после пустого ожидания")
+        ident, _ = inbox.add("Проверка после игры")
+        inbox.after_game(ident)
+        if [r["id"] for r in inbox.take_after_game()] != [ident] or inbox.take_after_game():
+            raise RuntimeError("Уведомление после игры потеряно или доставлено повторно")
+        if inbox.unread_count() != 1:
+            raise RuntimeError("Счётчик входящих не обновился после доставки")
+        inbox.mark_read(ident)
+        if inbox.unread_count():
+            raise RuntimeError("Прочитанное сообщение осталось в счётчике")
+    print("Пустые очереди без записи и доставка новых уведомлений проверены.", flush=True)
+
+
 def check_idle_audio(engine):
     """Real loaded models, simulated silent microphone, no device or action."""
     from types import SimpleNamespace
@@ -497,6 +548,25 @@ def check_menu_surface():
         root.update()
         if pane.content.winfo_y() != 0:
             raise RuntimeError("Не удалось вернуть страницу в начало")
+        from types import SimpleNamespace
+        from welcome_gui import ControlCenterApp
+
+        tree = ttk.Treeview(root, columns=("kind", "label", "remaining"))
+        rows = {"active_timers": [{"id": "sample", "label": "Тест", "end_time": time.time() + 60}]}
+        app = SimpleNamespace(
+            _built_pages={"timers"},
+            _timer_rows=None,
+            timer_tree=tree,
+            runtime=SimpleNamespace(state=SimpleNamespace(snapshot=lambda: rows)),
+        )
+        ControlCenterApp._update_timers(app)
+        tree.selection_set("active_timers:sample")
+        tree.focus("active_timers:sample")
+        rows["active_timers"][0]["end_time"] += 60
+        ControlCenterApp._update_timers(app)
+        if tree.selection() != ("active_timers:sample",) or tree.focus() != "active_timers:sample":
+            raise RuntimeError("Обновление таймера пересоздало выбранную строку")
+        tree.destroy()
         from relic_indicator_window import LayeredWindow
         from relic_indicator_visual import animation_frame
         from ctypes import wintypes

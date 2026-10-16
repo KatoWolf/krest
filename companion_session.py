@@ -56,16 +56,17 @@ class CompanionSession:
 
     def snapshot(self):
         with self.lock:
-            if self.profile != self._learning_profile or time.monotonic() - self._learning_at >= 2:
-                self._learning_profile = self.profile
-                self._learning_rows = self.learning.list(self.profile)
+            profile = self.profile
+            if profile != self._learning_profile or time.monotonic() - self._learning_at >= 2:
+                self._learning_profile = profile
+                self._learning_rows = self.learning.list(profile)
                 self._learning_at = time.monotonic()
             return {
                 "topic": self.topic if time.monotonic() < self.topic_until else "",
                 "remaining": max(0, round(self.topic_until - time.monotonic())),
                 "trace": dict(self.last_trace),
                 "draft": copy.deepcopy(self.draft)
-                if self.draft and self.draft["profile"] == self.profile
+                if self.draft and self.draft["profile"] == profile
                 else None,
                 "learning": copy.deepcopy(self._learning_rows),
             }

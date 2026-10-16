@@ -64,7 +64,7 @@ def credit(journal, store, name, quantity):
 
 
 def summary(journal, store):
-    data = store.snapshot()
+    data = store.snapshot("farm_credits", "goals")
     rows = data.get("farm_credits", [])
     today = time.strftime("%Y-%m-%d")
     recent = [r for r in rows if time.strftime("%Y-%m-%d", time.localtime(r["time"])) == today]

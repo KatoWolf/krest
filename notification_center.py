@@ -25,6 +25,9 @@ class NotificationCenter:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS chat_mutes(source TEXT, chat TEXT, until REAL, PRIMARY KEY(source,chat))"
             )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS inbox_after_game ON inbox(after_game) WHERE after_game=1"
+            )
 
     @contextmanager
     def connect(self):
@@ -83,6 +86,10 @@ class NotificationCenter:
             else:
                 db.execute("UPDATE inbox SET unread=0 WHERE id=?", (ident,))
 
+    def unread_count(self):
+        with self.connect() as db:
+            return db.execute("SELECT COUNT(*) FROM inbox WHERE unread=1").fetchone()[0]
+
     def mute(self, source, chat, until):
         with self.connect() as db:
             db.execute(
@@ -104,6 +111,8 @@ class NotificationCenter:
 
     def take_after_game(self):
         with self.connect() as db:
+            if db.execute("SELECT 1 FROM inbox WHERE after_game=1 LIMIT 1").fetchone() is None:
+                return []
             db.execute("BEGIN IMMEDIATE")
             rows = [dict(r) for r in db.execute("SELECT * FROM inbox WHERE after_game=1")]
             db.execute("UPDATE inbox SET after_game=0 WHERE after_game=1")

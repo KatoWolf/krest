@@ -117,6 +117,7 @@ class DesktopShell:
         self._tray_hide_requested = False
         self.deiconify()
         self.state("normal")
+        self._last_refresh = 0
         self.lift()
         self.focus_force()
 

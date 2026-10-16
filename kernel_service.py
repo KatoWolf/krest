@@ -175,7 +175,7 @@ class Kernel:
                 ident: self.integrations.details(ident)
                 for ident, _ in list(self.integrations.MODULES.values())
             },
-            "service_statuses": self.integrations.refresh(),
+            "service_statuses": self.integrations.statuses(),
             "events": events,
             "sequence": seq,
             "safe_mode": self.safe,
