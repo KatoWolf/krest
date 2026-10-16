@@ -545,24 +545,46 @@ class AutonomousDuty:
         self.guard()
         try:
             with requests.get(url, headers=headers, stream=True, timeout=(5, 5)) as response:
+                self.guard()
+                if response.status_code == 416 and offset:
+                    # May have crashed after the last byte, before verification.
+                    # A fresh transfer is safer than publishing an unverified tail.
+                    temporary.unlink(missing_ok=True)
+                    checkpoint.pop("validator", None)
+                    self.store.update(job["id"], checkpoint=checkpoint)
+                    raise OSError("Сервер не принимает докачку; повторю загрузку целиком")
                 response.raise_for_status()
+                expected_total = 0
+                validator = response.headers.get("ETag") or response.headers.get("Last-Modified")
                 if response.status_code == 206:
-                    if not offset or not response.headers.get("Content-Range", "").startswith(
-                        f"bytes {offset}-"
+                    span = re.fullmatch(
+                        r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", "")
+                    )
+                    if (
+                        not offset
+                        or not span
+                        or int(span[1]) != offset
+                        or not offset <= int(span[2]) < int(span[3])
                     ):
                         raise ValueError("Сервер вернул некорректный диапазон файла")
+                    expected_total = int(span[3])
+                    if validator and validator != checkpoint.get("validator"):
+                        temporary.unlink(missing_ok=True)
+                        checkpoint.pop("validator", None)
+                        self.store.update(job["id"], checkpoint=checkpoint)
+                        raise OSError("Файл на сервере изменился; повторю загрузку целиком")
                 else:
                     offset = 0
-                validator = response.headers.get("ETag") or response.headers.get("Last-Modified")
-                checkpoint["validator"] = validator
-                self.store.update(job["id"], checkpoint=checkpoint)
                 length = int(response.headers.get("Content-Length", "0"))
+                expected_total = expected_total or (offset + length if length else 0)
                 limit = 20 * 1024**2 if job["kind"] == "telegram" else MAX_BYTES
-                if offset + length > limit:
+                if max(offset + length, expected_total) > limit:
                     raise ValueError("Размер превышает предел загрузки")
                 if length and shutil.disk_usage(root).free < length + DISK_RESERVE:
                     raise OSError("Недостаточно места для загрузки")
                 with temporary.open("ab" if offset else "wb") as output:
+                    checkpoint["validator"] = validator
+                    self.store.update(job["id"], checkpoint=checkpoint)
                     for chunk in response.iter_content(64 * 1024):
                         self.guard()
                         offset += len(chunk)
@@ -577,6 +599,8 @@ class AutonomousDuty:
                         self.progress(f"Получено {offset // 1024**2} МБ")
                     output.flush()
                     os.fsync(output.fileno())
+                if expected_total and offset != expected_total:
+                    raise OSError("Сервер передал только часть файла; продолжу докачку позже")
         except requests.RequestException:
             raise OSError(
                 "Загрузка прервана сетью; сохранённые данные будут проверены при повторе"
