@@ -166,7 +166,7 @@ class AutonomousDuty:
             raise Paused("Задача отменена")
 
     def permitted(self):
-        return not self.paused and self.gate.permitted()
+        return not self.stop.is_set() and not self.paused and self.gate.permitted()
 
     def progress(self, text):
         if self.current and time.monotonic() - self._progress_at >= 2:

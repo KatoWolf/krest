@@ -40,4 +40,4 @@ jobs:
       - run: python main.py --check
       - name: Run an isolated child kernel and a real command
         shell: bash
-        run: python -c "import tempfile, subprocess, sys; from pathlib import Path; d=tempfile.TemporaryDirectory(); subprocess.run([sys.executable, 'main.py', '--release-smoke', '--config', str(Path(d.name)/'config.json')], check=True, timeout=120); d.cleanup()"
+        run: python -c "import tempfile, runpy, sys; from pathlib import Path; d=tempfile.TemporaryDirectory(); runpy.run_path('packaging/build_windows.py')['run_checked']([sys.executable, 'main.py', '--release-smoke', '--config', str(Path(d.name)/'config.json')], timeout=120); d.cleanup()"

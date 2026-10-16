@@ -1067,6 +1067,7 @@ class AssistantRuntime:
 
         if self.hearing.consume(text, recognition):
             # Includes background chat: no job, player, microphone or screenshot side effect.
+            self.autonomy.gate.touch()
             self._active_until = 0
             if feedback_turn is not None:
                 self.feedback.update(
@@ -1079,6 +1080,7 @@ class AssistantRuntime:
         recognition = dict(recognition)
         recognition.pop("listening_window", None)
         if addressed:
+            self.autonomy.gate.touch()
             voice.stop_speaking()
             if not command:
                 score = command_confidence(
@@ -1198,6 +1200,7 @@ class AssistantRuntime:
             delay = min(300, delay * 2)
 
     def arm_voice(self):
+        self.autonomy.gate.touch()
         voice.stop_speaking()
         self._arm_requested.set()
         self.start_voice()
