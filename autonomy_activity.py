@@ -181,7 +181,7 @@ class ActivityGate:
         self._snapshot = {"allowed": False, "reason": self.busy_reason, "idle": 0}
         self._stop = threading.Event()
         self._thread = None
-        self._threshold = 300
+        self._threshold = 20 * 60
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -204,7 +204,7 @@ class ActivityGate:
         now = time.monotonic()
         cfg = self.runtime.settings()
         options = cfg.get("autonomy", {})
-        threshold = options.get("idle_minutes", 5) * 60
+        threshold = options.get("idle_minutes", 20) * 60
         self._threshold = threshold
         reason = ""
         idle = 0

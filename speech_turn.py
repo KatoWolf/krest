@@ -50,14 +50,14 @@ class VoiceTurn:
                 return bool(exact_command(self.manager, body[: -len(suffix)]))
         return False
 
-    def observe(self, partial, now=None):
+    def observe(self, partial, now=None, *, listening_until=0.0):
         now = time.monotonic() if now is None else now
         if not partial or partial == self.partial:
             return
         self.partial, self.partial_at = partial, now
         wake = self.manager.settings().get("app_settings", {}).get("wake_word", "крест")
         addressed, body = addressed_speech(partial, wake)
-        if addressed or self.pending:
+        if addressed or self.pending or now < listening_until:
             if self.turn is None:
                 self.turn = self.feedback.begin("addressed", "Обращение услышано")
             else:
@@ -71,37 +71,43 @@ class VoiceTurn:
         self.partial = ""
         self.partial_at = 0
 
-    def push(self, text, recognition, now=None):
+    def push(self, text, recognition, now=None, *, listening_until=0.0):
         now = time.monotonic() if now is None else now
-        addressed, body = decode_voice_command(self.manager, text, self.manager.settings())
+        settings = self.manager.settings()
+        addressed, body = decode_voice_command(self.manager, text, settings)
         if self.pending and not addressed:
             previous = self.pending
+            if now > self._deadline() or (not previous["addressed"] and now >= listening_until):
+                return self.flush(now, force=True)
             combined = previous["text"] + " " + text
-            _, combined_body = decode_voice_command(self.manager, combined, self.manager.settings())
+            _, combined_body = decode_voice_command(self.manager, combined, settings)
             plan = plan_sequence(self.manager, combined_body)
             valid = (
                 exact_command(self.manager, combined_body)
                 or self.incomplete(combined_body)
                 or (plan and not plan.error)
             )
-            if now <= self._deadline() and valid:
+            if valid:
                 recognition = merge_recognition(previous["recognition"], recognition, combined)
-                text, body, addressed = combined, combined_body, True
+                text, body, addressed = combined, combined_body, previous["addressed"]
             else:
                 # Unrelated speech must not turn an incomplete command into a
                 # guessed action. Let the ordinary path explain the original.
                 return self.flush(now, force=True)
         elif self.pending and addressed:
             self.clear()
-        if addressed and self.turn is None:
+        incomplete = (addressed or now < listening_until) and self.incomplete(body)
+        if (addressed or incomplete) and self.turn is None:
             self.turn = self.feedback.begin("addressed", body)
-        if addressed and self.incomplete(body):
+        if incomplete:
             started = self.pending["started"] if self.pending else now
             self.pending = dict(
                 text=text,
                 recognition=recognition,
                 started=started,
                 until=min(started + 5, now + 2),
+                addressed=addressed,
+                listening_until=listening_until if not addressed else None,
             )
             self.feedback.update(self.turn, "recognizing", "Слушаю продолжение команды")
             self.partial = ""
@@ -123,7 +129,11 @@ class VoiceTurn:
         return [(pending["text"], pending["recognition"], turn)]
 
     def _deadline(self):
-        return min(self.pending["started"] + 5, max(self.pending["until"], self.partial_at + 1))
+        return min(
+            self.pending["started"] + 5,
+            max(self.pending["until"], self.partial_at + 1),
+            self.pending.get("listening_until") or float("inf"),
+        )
 
 
 def merge_recognition(first, second, text):

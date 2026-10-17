@@ -17,7 +17,7 @@ from autonomy_store import DutyStore
 DEFAULT_AUTONOMY = {
     "paused": False,
     "enabled": True,
-    "idle_minutes": 5,
+    "idle_minutes": 20,
     "learning": True,
     "min_free_memory_mb": 1024,
     "profile_backup": True,

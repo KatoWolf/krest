@@ -209,13 +209,14 @@ class SkillManager:
             "не могу сосредоточиться",
         ):
             return None
+        entries = self.catalog()
+        # Exact keywords always outrank patterns for the same text. Keep the
+        # identity tie-break and live registry; no stale cache after skill import.
+        exact = [entry for entry in entries if clean in entry.keywords]
+        if exact:
+            return min(exact, key=lambda entry: entry.id), {}
         candidates = []
-        for entry in self.catalog():
-            for keyword in entry.keywords:
-                if clean == keyword:
-                    candidates.append((10000 + len(keyword), entry, {}))
-                # Commands embedded inside narration or a negated sentence must
-                # never execute. Flexible phrasing belongs in anchored templates.
+        for entry in entries:
             for pattern in entry.patterns:
                 match = pattern.fullmatch(clean)
                 if match:
@@ -229,7 +230,7 @@ class SkillManager:
         if not candidates:
             return None
         # Stable ordering is by specificity, then skill identity, independent of file traversal.
-        _, entry, kwargs = sorted(candidates, key=lambda v: (-v[0], v[1].id))[0]
+        _, entry, kwargs = min(candidates, key=lambda v: (-v[0], v[1].id))
         return entry, kwargs
 
     def suggest(self, text, limit=3):

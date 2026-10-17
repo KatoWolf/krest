@@ -28,10 +28,26 @@ def check_kernel(config_path):
         if script.read_text(encoding="utf-8") != "pass\n":
             raise RuntimeError("Экспорт моста изменил исходник бота")
 
+    with TemporaryDirectory(prefix="krest-idle-upgrade-") as folder:
+        from storage import atomic_write_json
+
+        path = Path(folder) / "config.json"
+        atomic_write_json(path, {"autonomy": {"idle_minutes": 5}})
+        upgraded = ConfigManager(path)
+        data = upgraded.snapshot()
+        if data["autonomy"]["idle_minutes"] != 20:
+            raise RuntimeError("Старые стандартные пять минут не обновились")
+        data["autonomy"]["idle_minutes"] = 15
+        upgraded.save_config(data)
+        if ConfigManager(path).snapshot()["autonomy"]["idle_minutes"] != 15:
+            raise RuntimeError("Обновление заменило выбранный интервал дежурства")
+
     if config_path.exists():
         raise RuntimeError("Проверка сборки требует новый временный профиль")
     cfg = ConfigManager(config_path)
     draft = cfg.snapshot()
+    if draft["autonomy"]["idle_minutes"] != 20:
+        raise RuntimeError("Новый профиль запускает дежурство раньше 20 минут")
     draft["owner_name"] = "Проверка сборки"
     draft["profile"]["onboarding_completed"] = True
     draft["warframe"]["enabled"] = False
@@ -52,7 +68,11 @@ def check_kernel(config_path):
     from hearing_practice import HearingPractice
     from skill_manager import SkillManager
 
-    practice = HearingPractice(SkillManager(cfg.snapshot), cfg.snapshot)
+    manager = SkillManager(cfg.snapshot)
+    from speech_check import check_turns
+
+    check_turns(manager)
+    practice = HearingPractice(manager, cfg.snapshot)
     practice.call("start")
     for phrase in practice.PHRASES:
         if not practice.consume("крест " + phrase, {"confidence": 0.99}):

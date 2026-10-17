@@ -75,9 +75,9 @@ def decode_voice_command(manager, text, settings):
     clean = normalize_command(command, aliases).casefold().strip(" ,.!?")
     # Reported small-model transcripts: corrections apply to complete music
     # phrases only, never to reminder contents or arbitrary computer actions.
-    if not manager.match(clean) and re.fullmatch(
+    if re.fullmatch(
         r"(?:с ключи|сключи|прикручивать|прикручивай) (?:тр[еэ]к|песню)", clean
-    ):
+    ) and not manager.match(clean):
         command = "переключи трек"
     if wake or near_wake:
         command = isolate_control(manager, command, aliases)

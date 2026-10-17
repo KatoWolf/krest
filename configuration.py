@@ -21,6 +21,7 @@ CONFIG_PATH = data_dir() / "config.json"
 DEFAULT_CONFIG = {
     "schema_version": 2,
     "autonomy": DEFAULT_AUTONOMY,
+    "autonomy_idle_revision": 1,
     "warframe": DEFAULT_WARFRAME,
     "owner_name": "",
     "profile": {"onboarding_completed": False, "personality": "friendly"},
@@ -469,6 +470,11 @@ class ConfigManager:
                 raise ValueError("Настройки созданы более новой версией Крест")
             self.future_version = False
             data["schema_version"] = 2
+            if not data.get("autonomy_idle_revision"):
+                duty = data.get("autonomy", {})
+                if isinstance(duty, dict) and duty.get("idle_minutes") == 5:
+                    duty["idle_minutes"] = DEFAULT_AUTONOMY["idle_minutes"]
+                data["autonomy_idle_revision"] = 1
             if not data.get("design_revision"):
                 if data.get("selected_theme", "Graphite") in ("Graphite", "Amethyst Modern"):
                     data["selected_theme"] = "Relic"

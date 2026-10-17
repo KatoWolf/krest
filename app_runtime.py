@@ -1033,7 +1033,7 @@ class AssistantRuntime:
                 if telemetry.get("recovery") or not now_connected:
                     turn.clear(telemetry.get("recovery") or "Микрофон переподключается")
                 else:
-                    turn.observe(telemetry.get("partial", ""))
+                    turn.observe(telemetry.get("partial", ""), listening_until=self._active_until)
                 if now_connected != connected:
                     connected = now_connected
                     self.voice_status = (
@@ -1047,7 +1047,11 @@ class AssistantRuntime:
                             else "Микрофон отключён, пробую подключиться снова…",
                         )
                     )
-                recognized = turn.push(text, voice.recognition()) if text else turn.flush()
+                recognized = (
+                    turn.push(text, voice.recognition(), listening_until=self._active_until)
+                    if text
+                    else turn.flush()
+                )
                 for text, recognition, feedback_turn in recognized:
                     self._dispatch_voice(text, recognition, feedback_turn)
         except Exception as exc:

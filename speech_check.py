@@ -3,6 +3,37 @@
 import time
 
 
+def check_turns(manager):
+    """A live listening window assembles fragments without inventing a wake word."""
+    from command_feedback import CommandFeedback
+    from speech_turn import VoiceTurn
+
+    def recognized(text):
+        return dict(text=text, confidence=0.9, words=[dict(word=w, conf=0.9) for w in text.split()])
+
+    for first, second in (
+        ("переключи", "трек"),
+        ("выключи", "микрофон"),
+        ("таймер на", "две минуты"),
+    ):
+        turn = VoiceTurn(manager, CommandFeedback())
+        if turn.push(first, recognized(first), 1, listening_until=6):
+            raise RuntimeError("Незаконченная команда отправлена до продолжения")
+        result = turn.push(second, recognized(second), 1.5, listening_until=6)
+        if len(result) != 1 or result[0][0] != first + " " + second:
+            raise RuntimeError("Продолжение команды после обращения потеряно")
+        if result[0][1]["endpoint"] != "joined" or turn.pending:
+            raise RuntimeError("Собранная команда осталась в ожидании")
+    turn = VoiceTurn(manager, CommandFeedback())
+    if not turn.push("переключи", recognized("переключи"), 1) or turn.pending:
+        raise RuntimeError("Разговор без обращения открыл ожидание команды")
+    turn.push("переключи", recognized("переключи"), 1, listening_until=2)
+    result = turn.push("трек", recognized("трек"), 2.1, listening_until=2)
+    if result[0][0] != "переключи" or turn.pending:
+        raise RuntimeError("Истёкшее окно слушания приняло продолжение")
+    print("Команды с паузой после отдельного обращения и границы слушания проверены.", flush=True)
+
+
 def check(engine):
     import numpy as np
     from types import SimpleNamespace
@@ -106,13 +137,14 @@ def check_game_audio(engine, manager):
         ("Крест, таймер на две минуты.", 0.004, 1, "skills.timers_alarms.set_timer"),
         ("Крест, время и поставь таймер на две минуты.", 0.0, 1, "sequence"),
         (("Крест, переключи.", "Трек."), 0.0, 1, target),
+        (("Крест.", "Переключи.", "Трек."), 0.0, 1, target),
         ("Мы продолжаем играть.", 0.0, 1, ""),
         ("Переключи трек.", 0.0, 1, ""),
     )
     for phrase, noise, batch, expected in checks:
         if isinstance(phrase, tuple):
             samples = np.concatenate(
-                [engine.synthesize(phrase[0]), np.zeros(19200), engine.synthesize(phrase[1])]
+                [part for text in phrase for part in (engine.synthesize(text), np.zeros(19200))]
             )
         else:
             samples = engine.synthesize(phrase)
@@ -128,8 +160,10 @@ def check_game_audio(engine, manager):
         engine._continuity.recovering = False
         accepted, transcripts, decisions = [], [], []
         turn = VoiceTurn(manager, CommandFeedback())
+        listening_until = 0.0
 
-        def consume(results):
+        def consume(results, now):
+            nonlocal listening_until
             for text, data, _ in results:
                 wake, body = decode_voice_command(manager, text, DEFAULT_CONFIG)
                 found = manager.match(normalize_command(body))
@@ -148,11 +182,17 @@ def check_game_audio(engine, manager):
                         "words": [(w.get("word"), w.get("conf")) for w in data.get("words", [])],
                     }
                 )
-                if wake and confidence is not None and confidence >= 0.6:
+                if confidence is not None and confidence >= 0.6:
+                    if wake and not body:
+                        listening_until = now + cfg.get("active_timeout", 6)
+                        continue
+                    if not wake and now >= listening_until:
+                        continue
                     if plan is not None and not plan.error:
                         accepted.append("sequence")
                     elif found:
                         accepted.append(found[0].id)
+                    listening_until = 0.0
 
         for offset in range(0, len(raw), 960 * batch):
             chunk = raw[offset : offset + 960 * batch]
@@ -160,13 +200,18 @@ def check_game_audio(engine, manager):
             while engine.q.ready.is_set():
                 text = engine.listen()
                 now = offset / 32000
-                turn.observe(engine.metrics.get("partial", ""), now)
+                turn.observe(
+                    engine.metrics.get("partial", ""), now, listening_until=listening_until
+                )
                 if not text:
-                    consume(turn.flush(now))
+                    consume(turn.flush(now), now)
                     continue
                 transcripts.append(text)
-                consume(turn.push(text, engine.last_recognition, now))
-        consume(turn.flush(len(raw) / 32000 + 6))
+                consume(
+                    turn.push(text, engine.last_recognition, now, listening_until=listening_until),
+                    now,
+                )
+        consume(turn.flush(len(raw) / 32000 + 6), len(raw) / 32000 + 6)
         print(
             "Game audio check: "
             + str(

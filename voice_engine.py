@@ -705,9 +705,16 @@ def listen():
                 _preroll.append(data)
                 continue
             if not _endpoint.started:
-                for prefix in _preroll:
-                    _decode(rec.AcceptWaveform, prefix)
-                _preroll.clear()
+                if _preroll:
+                    # One native call for the retained onset, rather than up
+                    # to twenty. A quiet wake may already finalize here: retain
+                    # its words/confidence before feeding the louder command.
+                    prefix = b"".join(_preroll)
+                    _preroll.clear()
+                    if _decode(rec.AcceptWaveform, prefix):
+                        result = json.loads(_decode(rec.Result))
+                        _segments.append(result.get("text", ""))
+                        _words.extend(result.get("result", []))
             finished = _endpoint.feed(rms, len(data) / (2 * SAMPLE_RATE))
             # Never execute a partial hypothesis. Only shorten the end-of-speech
             # wait for a complete known transport command; FinalResult still wins.
