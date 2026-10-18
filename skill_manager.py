@@ -188,12 +188,13 @@ class SkillManager:
                 or e.func.__module__.startswith(getattr(self, "package_prefix", "__none__"))
             ]
 
-    def availability(self, entry):
-        if self.settings().get("safe_mode", False) and entry.func.__module__.startswith(
+    def availability(self, entry, settings=None):
+        settings = self.settings() if settings is None else settings
+        if settings.get("safe_mode", False) and entry.func.__module__.startswith(
             ("plugins.", "krest_imported_", "krest_package_")
         ):
             return "Сторонние навыки отключены в безопасном режиме"
-        if not self.settings().get("skills", {}).get(entry.module, True):
+        if not settings.get("skills", {}).get(entry.module, True):
             return "Выключен в настройках"
         if entry.requires_windows and os.name != "nt":
             return "Требуется Windows"
@@ -239,8 +240,9 @@ class SkillManager:
         if len(clean) < 3:
             return []
         scores = {}
+        settings = self.settings()
         for entry in self.catalog():
-            if self.availability(entry) != "Доступен":
+            if self.availability(entry, settings) != "Доступен":
                 continue
             for keyword in entry.keywords:
                 score = SequenceMatcher(None, clean, keyword).ratio()

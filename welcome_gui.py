@@ -1809,11 +1809,20 @@ class ControlCenterApp(
         self._last_log_text = text
         self.history.append(time.strftime("%H:%M:%S") + "  " + text)
         self.history = self.history[-250:]
-        self._render_history()
-        if self.current_page == "logs":
+        self._history_dirty = self._log_dirty = True
+
+    def _flush_history(self):
+        # A burst of bot/voice events needs one repaint, not one full Text
+        # replacement per message. Collapsed pages and the tray keep only data.
+        if self.state() not in ("normal", "zoomed"):
+            return
+        if getattr(self, "_history_dirty", False) and self.event_text.winfo_ismapped():
+            self._render_history()
+        if getattr(self, "_log_dirty", False) and self.current_page == "logs":
             self.refresh_log()
 
     def _render_history(self):
+        self._history_dirty = False
         self.event_text.configure(state="normal")
         self.event_text.delete("1.0", "end")
         self.event_text.insert("end", "\n\n".join(self.history[-15:]))
@@ -1821,6 +1830,7 @@ class ControlCenterApp(
         self.event_text.configure(state="disabled")
 
     def refresh_log(self):
+        self._log_dirty = False
         source = self.log_source.get()
         text = (
             "\n\n".join(self.history)
@@ -1940,6 +1950,7 @@ class ControlCenterApp(
             enabled=self.config_mgr.config["app_settings"]["indicator_enabled"],
         )
         visible = self.state() in ("normal", "zoomed")
+        self._flush_history()
         if visible and self.current_page in ("actions", "voice"):
             if time.monotonic() - getattr(self, "_meter_at", 0) >= 0.15:
                 self._meter_at = time.monotonic()

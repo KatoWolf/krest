@@ -66,7 +66,7 @@ def rows(manager, settings):
                 "category": category,
                 "phrases": phrases,
                 "aliases": own,
-                "availability": manager.availability(entry),
+                "availability": manager.availability(entry, settings),
                 "requirements": REQUIREMENTS.get(
                     entry.id.split(".")[-2],
                     "Дополнительные условия и права проверяются при выполнении команды.",

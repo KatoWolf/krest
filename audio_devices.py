@@ -117,6 +117,16 @@ class PCMConverter:
             self.audioop = audioop
         except ImportError:
             self.audioop = None
+        self.numpy = None
+        if self.audioop is None and (rate != target or channels == 2):
+            # Python 3.13 removed audioop. Keep conversion in native code when
+            # the voice dependencies are installed, not in a per-sample callback.
+            try:
+                import numpy
+
+                self.numpy = numpy
+            except ImportError:
+                pass  # Device diagnostics can still run before voice setup.
 
     def convert(self, data):
         raw = bytes(data)
@@ -133,6 +143,10 @@ class PCMConverter:
                 )
             if self.rate != self.target:
                 raw, self.state = self.audioop.ratecv(raw, 2, 1, self.rate, self.target, self.state)
+            return raw
+        if self.numpy is not None:
+            return self._convert_numpy(raw)
+        if self.channels == 1 and self.rate == self.target:
             return raw
         values = array("h")
         values.frombytes(raw)
@@ -166,6 +180,36 @@ class PCMConverter:
         if sys.byteorder != "little":
             result.byteswap()
         return result.tobytes()
+
+    def _convert_numpy(self, raw):
+        np = self.numpy
+        values = np.frombuffer(raw, dtype="<i2")
+        if self.channels == 2:
+            stereo = values.reshape(-1, 2).astype(np.float64)
+            mixed = np.trunc(stereo.mean(axis=1))
+            energy = np.square(stereo).sum(axis=0)
+            a, b = energy
+            values = (
+                stereo[:, 0 if a >= b else 1]
+                if min(a, b) < max(a, b) * 0.01 or np.square(mixed).sum() < max(a, b) * 0.04
+                else mixed
+            )
+        if self.rate == self.target:
+            return values.astype("<i2").tobytes()
+        points = np.concatenate((self.previous, values))
+        if not points.size:
+            return b""
+        step = self.rate / self.target
+        count = max(0, int(np.ceil((len(points) - 1 - self.position) / step)))
+        positions = self.position + np.arange(count) * step
+        indices = positions.astype(np.int64)
+        fractions = positions - indices
+        result = np.rint(points[indices] * (1 - fractions) + points[indices + 1] * fractions)
+        # Preserve fractional phase across callbacks; never trim each block to
+        # an independent duration (that loses syllables at 44.1 kHz).
+        self.position += count * step - max(0, len(points) - 1)
+        self.previous = points[-1:]
+        return result.astype("<i2").tobytes()
 
 
 def open_microphone(sd, preferred, callback, target_rate=16000, *, avoid=()):

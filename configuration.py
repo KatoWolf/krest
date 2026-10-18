@@ -18,6 +18,25 @@ from autonomy import DEFAULT_AUTONOMY, validate_settings as validate_autonomy
 from app_paths import data_dir
 
 CONFIG_PATH = data_dir() / "config.json"
+
+
+def _copy_settings(value):
+    """Copy the JSON tree without deepcopy's per-value memo bookkeeping.
+
+    Snapshots must remain independent: callers edit them before saving. Settings
+    loaded from JSON have no cycles or shared containers; extension values retain
+    the ordinary deepcopy fallback.
+    """
+    kind = type(value)
+    if kind is dict:
+        return {key: _copy_settings(item) for key, item in value.items()}
+    if kind is list:
+        return [_copy_settings(item) for item in value]
+    if kind in (str, int, float, bool, type(None)):
+        return value
+    return copy.deepcopy(value)
+
+
 DEFAULT_CONFIG = {
     "schema_version": 2,
     "autonomy": DEFAULT_AUTONOMY,
@@ -502,7 +521,7 @@ class ConfigManager:
                 if not self.load_error:
                     self.config = candidate
                 self._disk_stamp = stamp
-            return copy.deepcopy(self.config)
+            return _copy_settings(self.config)
 
     def save_config(self, data=None):
         with self._lock:

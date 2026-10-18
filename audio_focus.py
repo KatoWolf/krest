@@ -28,7 +28,13 @@ class AudioFocus:
 
     def _apply(self):
         cfg = self.settings().get("audio_focus", {})
-        if not cfg.get("enabled") and not self.owned and (self.recovered or not self.path.exists()):
+        factor = min(self.reasons.values(), default=1) if cfg.get("enabled") else 1
+        if factor == 1 and not self.owned and (self.recovered or not self.path.exists()):
+            # No pending restore and no ducking: avoid COM enumeration and an
+            # empty journal write on every tick, even with the mixer enabled.
+            self.recovered = True
+            self.ignored.clear()
+            self.error = ""
             return
         read, write = self.port()
         sessions = {r["id"]: r for r in read()}
@@ -51,7 +57,6 @@ class AudioFocus:
             # Leave the previous ledger intact if even one restore fails.
             atomic_write_json(self.path, {})
             self.recovered = True
-        factor = min(self.reasons.values(), default=1) if cfg.get("enabled") else 1
         names = {v.strip().casefold() for v in cfg.get("applications", "").split(",") if v.strip()}
         for key, row in list(self.owned.items()):
             current = sessions.get(key)

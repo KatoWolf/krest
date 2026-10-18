@@ -671,7 +671,10 @@ class AssistantRuntime:
                     self._running[lane] = text
                     self.current_command = " · ".join(self._running.values())
             if text is None:
-                self._queue_ready[lane].wait(0.25)
+                # submit() and close() signal under the same request lock.
+                # Empty lanes can sleep indefinitely without polling or losing
+                # a command arriving between the queue check and this wait.
+                self._queue_ready[lane].wait()
                 continue
             try:
                 self._job_local.current = job_id
@@ -822,11 +825,12 @@ class AssistantRuntime:
         last_error = ""
         was_paused = False
         while not self.stop_event.is_set():
-            cfg = self.settings().get("app_settings", {})
-            enabled = cfg.get("downloads_auto_sort", False) and self.settings().get(
-                "skills", {}
-            ).get("system_mon", True)
-            policy = self.settings().get("file_policy", {})
+            settings = self.settings()
+            cfg = settings.get("app_settings", {})
+            enabled = cfg.get("downloads_auto_sort", False) and settings.get("skills", {}).get(
+                "system_mon", True
+            )
+            policy = settings.get("file_policy", {})
             folders = tuple(
                 dict.fromkeys([cfg.get("downloads_path", ""), *policy.get("folders", [])])
             )
@@ -1147,17 +1151,19 @@ class AssistantRuntime:
         )
 
     def _voice_dictionary(self, stopped):
-        from speech_dictionary import quick_phrases
+        from speech_dictionary import CommandDictionary
 
+        dictionary = CommandDictionary()
         while not stopped.is_set() and not self.stop_event.is_set():
             try:
                 cfg = self.settings()
-                names = self.manager.name_vocabulary.phrases()
-                phrases = quick_phrases(self.manager, cfg, self.companion.snapshot()["learning"])
-                phrases |= names | {cfg["app_settings"]["wake_word"] + " " + p for p in names}
+                phrases = dictionary.refresh(
+                    self.manager, cfg, self.companion.snapshot()["learning"]
+                )
                 if stopped.is_set():
                     return
-                voice.set_command_dictionary(phrases)
+                if phrases is not None:
+                    voice.set_command_dictionary(phrases)
                 voice.refresh_output()
             except Exception:
                 logger.exception("Не удалось обновить голосовой словарь")
@@ -1172,6 +1178,10 @@ class AssistantRuntime:
 
         delay = 60
         while not cancelled():
+            if not self.settings().get("app_settings", {}).get("voice_enabled", True):
+                voice.tts_progress("Озвучка выключена; распознавание продолжает работать")
+                stopped.wait(1)
+                continue
             try:
                 voice.tts_progress("Подключаю голос Silero…")
                 models = prepare(

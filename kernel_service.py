@@ -266,6 +266,7 @@ class Kernel:
         if method == "clear_pending":
             return rt.clear_pending()
         if method == "catalog":
+            settings = self.settings()
             return {
                 "errors": rt.manager.errors,
                 "entries": [
@@ -276,7 +277,7 @@ class Kernel:
                         "keywords": entry.keywords,
                         "examples": entry.examples,
                         "patterns": [v.pattern for v in entry.patterns],
-                        "availability": rt.manager.availability(entry),
+                        "availability": rt.manager.availability(entry, settings),
                     }
                     for entry in rt.manager.catalog()
                 ],

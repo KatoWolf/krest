@@ -310,7 +310,7 @@ class CatalogProxy:
     def catalog(self):
         return self.entries
 
-    def availability(self, entry):
+    def availability(self, entry, settings=None):
         return entry.availability
 
     def match(self, text):

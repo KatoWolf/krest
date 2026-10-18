@@ -12,6 +12,7 @@ def check_kernel(config_path):
     check_duty()
     check_idle_protocol()
     check_idle_storage()
+    check_runtime_efficiency()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -282,6 +283,96 @@ def check_models(settings):
 
     check(engine)
     check_idle_audio(engine)
+    check_audio_conversion()
+
+
+def check_runtime_efficiency():
+    """Check idle work and cache invalidation without native devices/accounts."""
+    import copy
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from configuration import ConfigManager
+    from skill_manager import SkillManager
+    from speech_dictionary import CommandDictionary
+    from command_catalog import rows
+    from audio_focus import AudioFocus
+
+    with TemporaryDirectory(prefix="krest-efficiency-") as folder:
+        cfg = ConfigManager(Path(folder) / "config.json")
+        draft = cfg.snapshot()
+        draft["applications"] = [{"name": "Проверка", "kind": "exe", "target": "check.exe"}]
+        cfg.save_config(draft)
+        independent = cfg.snapshot()
+        independent["applications"][0]["name"] = "Несохранённое изменение"
+        if cfg.snapshot() != draft:
+            raise RuntimeError("Редактирование снимка изменило сохранённые настройки")
+        calls = 0
+
+        def settings():
+            nonlocal calls
+            calls += 1
+            return cfg.snapshot()
+
+        manager = SkillManager(settings)
+        calls = 0
+        if not rows(manager, draft) or calls:
+            raise RuntimeError("Каталог повторно читает настройки для каждой команды")
+        dictionary = CommandDictionary()
+        first = dictionary.refresh(manager, draft)
+        if not first or dictionary.refresh(manager, draft) is not None:
+            raise RuntimeError("Неизменившийся голосовой словарь пересоздаётся")
+        draft["command_aliases"]["музыка дальше"] = "переключи трек"
+        if "крест музыка дальше" not in dictionary.refresh(manager, draft):
+            raise RuntimeError("Новая фраза не обновила голосовой словарь")
+        draft["command_aliases"].clear()
+        if "крест музыка дальше" in dictionary.refresh(manager, draft):
+            raise RuntimeError("Удалённая фраза осталась в голосовом словаре")
+        mixer_cfg = {
+            "audio_focus": {"enabled": True, "applications": "music.exe", "game_percent": 50}
+        }
+        sessions = [{"id": "one", "name": "music.exe", "volume": 0.8}]
+        reads = 0
+
+        def read():
+            nonlocal reads
+            reads += 1
+            return copy.deepcopy(sessions)
+
+        def write(ident, value):
+            sessions[0]["volume"] = value
+
+        focus = AudioFocus(lambda: mixer_cfg, Path(folder) / "audio.json", (read, write))
+        for _ in range(10):
+            focus.tick(force=True)
+        if reads or focus.path.exists():
+            raise RuntimeError("Микшер опрашивает аудиосессии или пишет журнал в покое")
+        focus.tick(gaming=True, force=True)
+        if sessions[0]["volume"] != 0.4:
+            raise RuntimeError("Микшер не приглушил музыку после простоя")
+        focus.tick(force=True)
+        if sessions[0]["volume"] != 0.8:
+            raise RuntimeError("Микшер не восстановил громкость")
+    print(
+        "Проверены изоляция настроек, обновление словаря и работа микшера после простоя.",
+        flush=True,
+    )
+
+
+def check_audio_conversion():
+    """Native fallback for Python without audioop, including callback boundaries."""
+    import numpy as np
+    from audio_devices import PCMConverter
+
+    for rate in (44100, 48000):
+        converter = PCMConverter(rate, channels=2)
+        converter.audioop, converter.numpy = None, np
+        # An antiphase stereo microphone must not disappear when mixed to mono.
+        raw = np.tile(np.array([1200, -1200], dtype="<i2"), rate).tobytes()
+        data = b"".join(converter.convert(raw[i : i + 772]) for i in range(0, len(raw), 772))
+        values = np.frombuffer(data, dtype="<i2")
+        if abs(len(values) - 16000) > 1 or not np.all(np.abs(values) == 1200):
+            raise RuntimeError("Преобразование микрофона теряет звук или время между блоками")
+    print("Преобразование 44,1/48 кГц: длительность и голос в противофазе сохранены.", flush=True)
 
 
 def check_idle_protocol():
@@ -587,6 +678,28 @@ def check_menu_surface():
         if tree.selection() != ("active_timers:sample",) or tree.focus() != "active_timers:sample":
             raise RuntimeError("Обновление таймера пересоздало выбранную строку")
         tree.destroy()
+        history = tk.Text(pane.content)
+        history.pack()
+        history_state = SimpleNamespace(
+            history=[],
+            config_mgr=SimpleNamespace(snapshot=lambda: {}),
+            current_page="actions",
+            state=lambda: "withdrawn",
+            event_text=history,
+        )
+        history_state._render_history = lambda: ControlCenterApp._render_history(history_state)
+        for index in range(30):
+            ControlCenterApp._append_log(history_state, f"Сообщение {index}")
+        ControlCenterApp._flush_history(history_state)
+        if history.get("1.0", "end").strip():
+            raise RuntimeError("Скрытое меню перерисовывает журнал событий")
+        history_state.state = lambda: "normal"
+        root.update()
+        ControlCenterApp._flush_history(history_state)
+        if history_state._history_dirty or "Сообщение 29" not in history.get("1.0", "end"):
+            raise RuntimeError("Меню не показало накопившиеся события после открытия")
+        del history_state._render_history
+        history.destroy()
         from relic_indicator_window import LayeredWindow
         from relic_indicator_visual import animation_frame
         from ctypes import wintypes

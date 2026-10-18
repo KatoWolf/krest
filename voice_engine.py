@@ -843,7 +843,7 @@ def apply_cyberpunk_dsp(
 
     drive_amount = 1.15
     audio_data = audio_data * drive_amount
-    audio_data = audio_data - (np.power(audio_data, 3) / 3.0)
+    audio_data = audio_data - (audio_data * audio_data * audio_data / 3.0)
     return audio_data
 
 

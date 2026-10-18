@@ -12,6 +12,43 @@ QUICK_SKILLS = SHORT_AUDIO_SKILLS | {
 }
 
 
+class CommandDictionary:
+    """Rebuild only when command sources change, not on each device check."""
+
+    def __init__(self):
+        self.signature = None
+
+    def refresh(self, manager, settings, learned=()):
+        wake = settings.get("app_settings", {}).get("wake_word", "крест").casefold()
+        vocabulary = getattr(manager, "name_vocabulary", None)
+        names = frozenset(vocabulary.phrases()) if vocabulary is not None else frozenset()
+        signature = (
+            wake,
+            tuple(sorted(settings.get("command_aliases", {}).items())),
+            tuple(
+                (
+                    entry.id,
+                    tuple(entry.keywords),
+                    tuple(entry.examples),
+                    tuple((pattern.pattern, pattern.flags) for pattern in entry.patterns),
+                )
+                for entry in manager.catalog()
+            ),
+            tuple(
+                (row.get("heard"), row.get("skill"))
+                for row in learned
+                if row.get("status") == "approved"
+            ),
+            names,
+        )
+        if signature == self.signature:
+            return None
+        phrases = quick_phrases(manager, settings, learned)
+        phrases |= names | {wake + " " + phrase for phrase in names}
+        self.signature = signature
+        return phrases
+
+
 def quick_phrases(manager, settings, learned=()):
     wake = settings.get("app_settings", {}).get("wake_word", "крест").casefold()
     phrases = set()
