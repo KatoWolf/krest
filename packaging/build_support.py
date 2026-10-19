@@ -3,9 +3,11 @@
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
+import json
 import os
 import sys
 import threading
+import uuid
 
 
 class Tee:
@@ -34,19 +36,31 @@ class BuildSession:
     def __init__(self, root):
         self.root = Path(root)
         self.stack = ExitStack()
-        self.inherited = os.environ.get("KREST_BUILD_PARENT") == str(os.getppid())
+        self.token = ""
 
     def __enter__(self):
-        if self.inherited:
-            return self
         sys.path.insert(0, str(self.root))
         from process_lock import ProcessLock
 
         lock = ProcessLock(self.root / "build" / ".builder.lock")
+        owner = lock.path.with_name(".builder-owner.json")
         if not lock.acquire():
+            # Windows' venv redirector inserts a process between the launcher
+            # and Python. A parent-PID test cannot recognize our own child.
+            # Accept its per-build token only while the OS lock is still held.
+            token = os.environ.get("KREST_BUILD_SESSION", "")
+            try:
+                held = json.loads(owner.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                held = {}
+            if token and token == held.get("token"):
+                self.token = token
+                return self
             raise RuntimeError("Сборка уже выполняется. Дождитесь её завершения.")
         self.stack.callback(lock.close)
         try:
+            self.token = uuid.uuid4().hex
+            owner.write_text(json.dumps({"token": self.token}), encoding="utf-8")
             log = self.root / "build" / "build-last.log"
             if log.exists():
                 log.replace(log.with_name("build-previous.log"))
@@ -65,7 +79,7 @@ class BuildSession:
     def environment(self):
         return dict(
             os.environ,
-            KREST_BUILD_PARENT=str(os.getpid()),
+            KREST_BUILD_SESSION=self.token,
             PYTHONUTF8="1",
             PYTHONIOENCODING="utf-8",
             PYTHONUNBUFFERED="1",

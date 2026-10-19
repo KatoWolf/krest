@@ -104,6 +104,30 @@ class ReleaseRecovery(unittest.TestCase):
             self.assertEqual(error.exception.returncode, 7)
         self.assertIn("builder failure", (self.root / "build/build-last.log").read_text())
 
+    def check_child_session(self, python, folder):
+        child = folder / "child.py"
+        root = Path(__file__).resolve().parents[1]
+        child.write_text(
+            "import sys\n"
+            + "sys.path[:0] = "
+            + repr([str(root), str(root / "packaging")])
+            + "\n"
+            + "from build_support import BuildSession\n"
+            + "with BuildSession("
+            + repr(str(folder))
+            + "):\n"
+            + "    print('child joined builder')\n",
+            encoding="utf-8",
+        )
+        with BuildSession(folder) as session:
+            builder.run_checked([str(python), str(child)], env=session.environment(), timeout=30)
+        log = (folder / "build/build-last.log").read_text(encoding="utf-8")
+        self.assertIn("child joined builder", log)
+        self.assertEqual(log.count("Крест — сборка"), 1)
+
+    def test_child_joins_active_session_without_replacing_log(self):
+        self.check_child_session(sys.executable, self.root)
+
     @unittest.skipUnless(os.name == "nt", "Windows build environment")
     def test_repairs_broken_environment_in_unicode_path(self):
         folder = self.root / "Крест сборка"
@@ -113,6 +137,7 @@ class ReleaseRecovery(unittest.TestCase):
         python = prepare_environment(folder, sys.executable, dict(os.environ))
         self.assertTrue(environment_valid(python))
         self.assertEqual(prepare_environment(folder, sys.executable, dict(os.environ)), python)
+        self.check_child_session(python, folder)
         backups = list(folder.glob(".build-venv-broken-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "keep.txt").read_text(), "old cache")
