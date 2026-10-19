@@ -152,7 +152,10 @@ class PerformancePolicy:
                 self._detect_config = None
 
     def _detect_game(self, names):
-        for process in psutil.process_iter(["name", "exe"]):
+        candidates = []
+        # Most users play a known game: inspect cheap names first and avoid
+        # querying executable paths of every desktop/service process each tick.
+        for process in psutil.process_iter(["name"]):
             try:
                 name = process.info.get("name") or ""
                 # Explicit game names can contain words such as "Crash". Only
@@ -161,11 +164,23 @@ class PerformancePolicy:
                     return name, name
                 if background_process(name):
                     continue
-                executable = str(process.info.get("exe") or "").casefold()
-                if executable:
-                    for folder, title in self.game_folders.items():
-                        if executable.startswith(folder + os.sep):
-                            return title, name
+                if self.game_folders:
+                    candidates.append((process, name))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        for process, name in candidates:
+            try:
+                executable = str(process.exe() or "").casefold()
+                # Walk a handful of parents instead of comparing every path
+                # with hundreds of installed Steam games. No disk access.
+                folder = os.path.dirname(executable)
+                while folder:
+                    if folder in self.game_folders:
+                        return self.game_folders[folder], name
+                    parent = os.path.dirname(folder)
+                    if parent == folder:
+                        break
+                    folder = parent
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return "", ""

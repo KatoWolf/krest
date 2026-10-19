@@ -38,6 +38,8 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'packaging/update_source.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors) { throw ($errors | Out-String) }
       - run: python main.py --check
+      - name: Check build failure recovery and logs
+        run: python packaging/check_builder.py
       - name: Run an isolated child kernel and a real command
         shell: bash
         run: python -c "import runpy; runpy.run_path('packaging/build_windows.py')['source_smoke']()"

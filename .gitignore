@@ -66,6 +66,7 @@ screenshots/
 build/
 dist/
 .build-venv/
+.build-venv-broken-*/
 test-results.xml
 
 nuitka-crash-report.xml

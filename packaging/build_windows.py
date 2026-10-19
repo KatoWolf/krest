@@ -10,9 +10,13 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.15.4"
+VERSION = "0.15.5"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_support import BuildSession
 
 
 def source_smoke():
@@ -47,6 +51,8 @@ def run_checked(command, **kwargs):
 
     timeout = kwargs.pop("timeout", None)
     kwargs.pop("check", None)
+    if os.name != "nt":
+        kwargs.setdefault("start_new_session", True)
     tail = deque(maxlen=25)
     with subprocess.Popen(
         command,
@@ -67,11 +73,29 @@ def run_checked(command, **kwargs):
         reader.start()
         try:
             code = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            # Release checks start their own kernel. Do not leave that child
+            # holding DLLs/model files after a cancelled or timed-out check.
+            if os.name == "nt" and process.poll() is None:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                    check=False,
+                )
+            elif os.name != "nt":
+                import signal
+
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
             process.wait()
             reader.join(timeout=3)
-            detail = f"Command timed out after {timeout}s. Last output: " + "".join(tail)[-2500:]
+            detail = "Command interrupted or timed out. Last output: " + "".join(tail)[-2500:]
             print(
                 "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
                 flush=True,
@@ -122,6 +146,102 @@ def package_command(output, *, protect=False, spec=None):
         str(ROOT / "build" / "pyinstaller"),
         str(spec),
     ]
+
+
+def preflight(output, stage):
+    """Fail before expensive packaging when a recipient copy still holds files."""
+    import psutil
+
+    targets = [os.path.normcase(str(Path(p).resolve())) + os.sep for p in (output, stage)]
+    for process in psutil.process_iter(["exe"]):
+        try:
+            executable = os.path.normcase(str(process.info.get("exe") or ""))
+            if executable and any(executable.startswith(p) for p in targets):
+                raise RuntimeError(
+                    "Крест запущена из папки сборки (PID " + str(process.pid) + "). "
+                    "Завершите её через трей и повторите build-exe.bat."
+                )
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    if shutil.disk_usage(ROOT).free < 2 * 1024**3:
+        raise RuntimeError("Для сборки освободите хотя бы 2 ГБ на диске проекта.")
+
+
+def publish_distribution(dist, output, *, protect=False, with_models=True):
+    """Prepare and verify the ZIP before replacing either published artifact."""
+    dist, output = Path(dist), Path(output)
+    output.mkdir(exist_ok=True)
+    name = (
+        "Krest-Windows-"
+        + VERSION
+        + ("-protected" if protect else "")
+        + ("" if with_models else "-online-setup")
+        + ".zip"
+    )
+    archive, target = output / name, output / "Krest"
+    suffix = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    temporary = output / (name + "." + suffix + ".partial")
+    previous = output / ("Krest-previous-" + suffix)
+    backup = output / (name + ".previous-" + suffix)
+    moved_old = moved_zip = moved_new = False
+    try:
+        print("Создаю ZIP и проверяю целостность файлов…", flush=True)
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as result:
+            for path in sorted(dist.rglob("*")):
+                if path.is_file():
+                    result.write(path, Path("Krest") / path.relative_to(dist))
+        with zipfile.ZipFile(temporary) as result:
+            bad = result.testzip()
+            if bad:
+                raise RuntimeError("Повреждён файл в новом ZIP: " + bad)
+            if "Krest/Krest.exe" not in result.namelist():
+                raise RuntimeError("В архиве отсутствует Krest.exe")
+        if target.exists():
+            target.rename(previous)
+            moved_old = True
+        if archive.exists():
+            archive.rename(backup)
+            moved_zip = True
+        dist.rename(target)
+        moved_new = True
+        temporary.rename(archive)
+    except BaseException as exc:
+        # Roll back only our own completed moves, in reverse order. Never delete
+        # an earlier working release or a profile stored beside its executable.
+        try:
+            if moved_new:
+                target.rename(dist)
+            if moved_zip:
+                backup.rename(archive)
+            if moved_old:
+                previous.rename(target)
+        except OSError as rollback:
+            raise RuntimeError(
+                "Не удалось вернуть прежнюю сборку автоматически. Она сохранена в "
+                + str(previous)
+                + "; архив: "
+                + str(backup)
+            ) from rollback
+        if isinstance(exc, OSError):
+            raise RuntimeError(
+                "Не удалось записать новую сборку. Прежние файлы сохранены. "
+                "Закройте Крест из dist через трей, проверьте свободное место "
+                "и доступ к папке. Причина: " + str(exc)
+            ) from exc
+        raise
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            print("Временный ZIP не удалось удалить:", temporary)
+    if moved_zip:
+        try:
+            backup.unlink()
+        except OSError:
+            print("Предыдущий ZIP сохранён:", backup)
+    if moved_old:
+        print("Предыдущая сборка сохранена:", previous)
+    return target, archive
 
 
 def audit_distribution(dist):
@@ -190,8 +310,8 @@ def smoke_test(dist, *, with_models=True):
             )
 
 
-def copy_models(dist):
-    # Copy discovered models only, never the whole user's model/project directory.
+def prepare_models():
+    # Resolve/download before packaging, so network errors fail early.
     sys.path.insert(0, str(ROOT))
     from model_setup import prepare
     from configuration import ConfigManager
@@ -204,6 +324,12 @@ def copy_models(dist):
     )
     if not all(found.values()):
         raise RuntimeError("Для готового ZIP необходимы обе модели: Vosk и Silero")
+    return found
+
+
+def copy_models(dist, found=None):
+    # Copy discovered models only, never the whole user's model/project directory.
+    found = prepare_models() if found is None else found
     folder = Path(dist) / "model"
     for key, filename in (("vosk_path", "vosk"), ("silero_path", "model_silero.pt")):
         folder.mkdir(exist_ok=True)
@@ -214,6 +340,22 @@ def copy_models(dist):
             shutil.copytree(source, folder / filename)
         else:
             shutil.copy2(source, folder / filename)
+
+
+def check_build_runtime():
+    """Catch missing DLLs and incompatible installations before a long EXE build."""
+    with tempfile.TemporaryDirectory(prefix="krest-builder-check-") as folder:
+        run_checked(
+            [
+                sys.executable,
+                str(ROOT / "main.py"),
+                "--release-import-check",
+                "--config",
+                str(Path(folder) / "config.json"),
+            ],
+            cwd=ROOT,
+            timeout=180,
+        )
 
 
 def main():
@@ -250,6 +392,10 @@ def main():
         raise SystemExit("Сборка требует Windows и Python 3.11/3.12 x64")
     if args.license and not args.protect:
         raise SystemExit("Лицензия используется только с --protect")
+    preflight(output / "Krest", stage / "Krest")
+    print("Проверяю библиотеки до упаковки…", flush=True)
+    check_build_runtime()
+    found_models = prepare_models() if args.with_models else None
     env = dict(os.environ, KREST_BUILD_ROOT=str(ROOT), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     if args.protect:
         if importlib.util.find_spec("pyarmor") is None:
@@ -275,34 +421,31 @@ def main():
     spec = stage.parent / "krest.spec"
     shutil.copy2(ROOT / "packaging/krest.spec", spec)
     command = package_command(stage, protect=args.protect, spec=spec)
+    print("[1/4] Упаковываю программу…", flush=True)
     run_checked(command, cwd=ROOT, env=env)
     dist = stage / "Krest"
+    print("[2/4] Подготавливаю модели голоса…", flush=True)
     if args.with_models:
-        copy_models(dist)
+        copy_models(dist, found_models)
     audit_distribution(dist)
+    print("[3/4] Проверяю готовую программу, ядро, библиотеки и голос…", flush=True)
     smoke_test(dist, with_models=args.with_models)
-    output.mkdir(exist_ok=True)
-    target = output / "Krest"
-    if target.exists():
-        import time
-
-        previous = output / (
-            "Krest-previous-" + time.strftime("%Y%m%d-%H%M%S") + "-" + str(time.time_ns() % 1000000)
-        )
-        target.rename(previous)
-        print("Предыдущая сборка сохранена: " + str(previous))
-    shutil.move(str(dist), str(target))
-    archive = output / (
-        "Krest-Windows-"
-        + VERSION
-        + ("-protected" if args.protect else "")
-        + ("" if args.with_models else "-online-setup")
-        + ".zip"
+    (dist / "build-info.json").write_text(
+        json.dumps(
+            {
+                "version": VERSION,
+                "python": sys.version.split()[0],
+                "with_models": args.with_models,
+                "protected": args.protect,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
     )
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as result:
-        for path in target.rglob("*"):
-            if path.is_file():
-                result.write(path, path.relative_to(output))
+    print("[4/4] Выпускаю папку программы и ZIP…", flush=True)
+    target, archive = publish_distribution(
+        dist, output, protect=args.protect, with_models=args.with_models
+    )
     print("::notice::EXE, skills, child kernel and native runtime imports passed.")
     if args.with_models:
         print(
@@ -321,11 +464,12 @@ if __name__ == "__main__":
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
-        main()
-    except Exception as exc:
+        with BuildSession(ROOT):
+            main()
+    except (Exception, KeyboardInterrupt) as exc:
         message = str(exc)[-2000:]
         print(
             "::error::" + message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
             flush=True,
         )
-        raise
+        raise SystemExit(1)

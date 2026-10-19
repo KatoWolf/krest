@@ -499,6 +499,7 @@ def audio_callback(indata, frames, time_info, status):
         data,
         _last_audio_at - max(0, lag - len(data) / (2 * SAMPLE_RATE)),
         bool(status and getattr(status, "input_overflow", False)),
+        rms=rms,
     )
     metrics["dropped"] = q.dropped
 

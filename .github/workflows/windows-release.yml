@@ -27,18 +27,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install CPU speech runtime
-        run: python -m pip install "torch>=2.2,<3" --index-url https://download.pytorch.org/whl/cpu
-      - name: Install application and packaging dependencies
-        run: python -m pip install -r requirements-windows.txt -r requirements-voice.txt -r requirements-build.txt -r requirements-dev.txt
-      - name: Check sources
-        run: python -m ruff check .
-      - name: Check command catalog
-        run: python main.py --check
-      - name: Check native libraries and background UI Automation before packaging
-        run: python -c "import runpy, sys; runpy.run_path('packaging/build_windows.py')['run_checked']([sys.executable, 'main.py', '--release-import-check'], timeout=90)"
-      - name: Package EXE and check the packaged runtime
-        run: python packaging/build_windows.py
+      - name: Build through the user's launcher and check the packaged runtime
+        shell: cmd
+        run: call build-exe.bat
+      - name: Check reuse of the prepared builder
+        shell: cmd
+        run: call build-exe.bat --plan
       - uses: actions/upload-artifact@v4
         with:
           name: Krest-Windows-EXE
@@ -51,3 +45,5 @@ jobs:
           path: |
             build/pyinstaller/krest/warn-*.txt
             build/pyinstaller/krest/xref-*.html
+            build/build-last.log
+            build/build-previous.log

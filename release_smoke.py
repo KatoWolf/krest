@@ -13,6 +13,7 @@ def check_kernel(config_path):
     check_idle_protocol()
     check_idle_storage()
     check_runtime_efficiency()
+    check_capture_efficiency()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -373,6 +374,33 @@ def check_audio_conversion():
         if abs(len(values) - 16000) > 1 or not np.all(np.abs(values) == 1200):
             raise RuntimeError("Преобразование микрофона теряет звук или время между блоками")
     print("Преобразование 44,1/48 кГц: длительность и голос в противофазе сохранены.", flush=True)
+
+
+def check_capture_efficiency():
+    """Measured callbacks reuse their RMS; split callbacks still measure each frame."""
+    from speech_stream import AudioFrames
+    from speech_tools import pcm_levels
+
+    calls = 0
+
+    def meter(frame):
+        nonlocal calls
+        calls += 1
+        return pcm_levels(frame)
+
+    queue = AudioFrames(levels=meter)
+    frame = b"\xe8\x03" * 480  # 30 ms, amplitude 1000
+    queue.put(frame, 1.0, rms=1000)
+    packet = queue.take()[0]
+    if calls or packet[:3] != (frame, 1000, 1.0):
+        raise RuntimeError("Голос повторно обрабатывает уже измеренный звуковой блок")
+    queue.put(frame[:400], 2.0, rms=1000)
+    queue.put(frame[400:], 2.0175, rms=1000)
+    if calls != 1 or queue.take()[0][:2] != (frame, 1000):
+        raise RuntimeError("Дробление блока микрофона изменило уровень звука")
+    queue.put(frame, 3.0, overflow=True, rms=1000)
+    if queue.generation != 1 or queue.take()[0][3] != 1:
+        raise RuntimeError("Обработка микрофона потеряла отметку пропуска звука")
 
 
 def check_idle_protocol():

@@ -19,13 +19,16 @@ class AudioFrames:
         self.ready = threading.Event()
         self.levels = levels
 
-    def put(self, data, captured, overflow=False):
+    def put(self, data, captured, overflow=False, *, rms=None):
         with self.lock:
             if overflow:
                 self.frames.clear()
                 self.tail = b""
                 self.generation += 1
                 self.dropped += 1
+            # A normal callback already measured this exact 30 ms frame for
+            # the UI meter. Reuse it only when no re-framing is necessary.
+            measured = rms if not self.tail and len(data) == self.size else None
             data = self.tail + data
             count = len(data) // self.size
             # Keep the newest sound; never accumulate seconds of stale commands.
@@ -36,7 +39,8 @@ class AudioFrames:
             for index in range(max(0, count - self.capacity), count):
                 frame = data[index * self.size : (index + 1) * self.size]
                 at = captured - (len(data) - (index + 1) * self.size) / (self.size / self.seconds)
-                self.frames.append((frame, self.levels(frame)[0], at, self.generation))
+                level = measured if measured is not None else self.levels(frame)[0]
+                self.frames.append((frame, level, at, self.generation))
             self.tail = data[count * self.size :]
             if self.frames:
                 self.ready.set()
