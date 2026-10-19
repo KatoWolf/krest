@@ -14,6 +14,7 @@ def check_kernel(config_path):
     check_idle_storage()
     check_runtime_efficiency()
     check_capture_efficiency()
+    check_game_detection()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -401,6 +402,35 @@ def check_capture_efficiency():
     queue.put(frame, 3.0, overflow=True, rms=1000)
     if queue.generation != 1 or queue.take()[0][3] != 1:
         raise RuntimeError("Обработка микрофона потеряла отметку пропуска звука")
+
+
+def check_game_detection():
+    """Known games need no process-path queries; Steam still recognizes unknown names."""
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    from performance import PerformancePolicy
+
+    with TemporaryDirectory(prefix="krest-game-check-") as folder:
+        root = Path(folder)
+        policy = PerformancePolicy(lambda: {}, root / "activity.json")
+        policy.game_folders[str(root).casefold()] = "Тестовая игра"
+        known = SimpleNamespace(info={"name": "cs2.exe"}, exe=Mock())
+        other = SimpleNamespace(
+            info={"name": "game.exe"}, exe=Mock(return_value=str(root / "bin/game.exe"))
+        )
+        helper = SimpleNamespace(info={"name": "steam.exe"}, exe=Mock())
+        with patch("performance.psutil.process_iter", return_value=[helper, other, known]):
+            if policy._detect_game({"cs2.exe"}) != ("cs2.exe", "cs2.exe"):
+                raise RuntimeError("Известная игра не обнаружена")
+            if any(proc.exe.called for proc in (helper, other, known)):
+                raise RuntimeError("Известная игра вызывает лишнее чтение путей процессов")
+        with patch("performance.psutil.process_iter", return_value=[helper, other]):
+            if policy._detect_game(set()) != ("Тестовая игра", "game.exe"):
+                raise RuntimeError("Игра из библиотеки Steam не обнаружена по папке")
+            if helper.exe.called or other.exe.call_count != 1:
+                raise RuntimeError("Проверка Steam читает пути фоновых процессов")
 
 
 def check_idle_protocol():

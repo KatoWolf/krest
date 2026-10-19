@@ -1,4 +1,7 @@
 @echo off
+chcp 65001 >nul
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
 rem Called from a launcher; returns a validated executable and optional py arguments.
 set "KREST_PYTHON="
 set "KREST_PY_ARGS="

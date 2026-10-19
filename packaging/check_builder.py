@@ -1,6 +1,8 @@
 """Failure recovery with temporary artifacts; no models or external accounts."""
 
 from pathlib import Path
+from contextlib import redirect_stdout
+import io
 import os
 import shutil
 import subprocess
@@ -93,7 +95,8 @@ class ReleaseRecovery(unittest.TestCase):
         )
 
     def test_failed_child_is_logged_and_exit_status_retained(self):
-        with BuildSession(self.root):
+        # Keep an expected ::error:: out of GitHub's annotation stream.
+        with redirect_stdout(io.StringIO()), BuildSession(self.root):
             with self.assertRaises(subprocess.CalledProcessError) as error:
                 builder.run_checked(
                     [sys.executable, "-c", "print('builder failure'); raise SystemExit(7)"]
