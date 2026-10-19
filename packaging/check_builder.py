@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -112,6 +113,22 @@ class ReleaseRecovery(unittest.TestCase):
         backups = list(folder.glob(".build-venv-broken-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "keep.txt").read_text(), "old cache")
+        # A caller running inside that cache would keep python.exe locked during
+        # repair. Exercise the actual batch selector with a venv as first choice.
+        packaging = folder / "packaging"
+        packaging.mkdir()
+        shutil.copy2(Path(__file__).with_name("find_python.bat"), packaging)
+        # .venv is the selector's first candidate, independent of machines which
+        # also have Krest's per-user Python installed.
+        (folder / ".build-venv").rename(folder / ".venv")
+        script = folder / "check.bat"
+        script.write_text(
+            '@echo off\ncall "%~dp0packaging\\find_python.bat"\n'
+            "if errorlevel 1 exit /b 1\n"
+            '"%KREST_PYTHON%" %KREST_PY_ARGS% -c "import sys; assert sys.prefix == sys.base_prefix"\n',
+            encoding="utf-8",
+        )
+        subprocess.run(["cmd", "/d", "/c", str(script)], check=True, timeout=60)
 
 
 if __name__ == "__main__":

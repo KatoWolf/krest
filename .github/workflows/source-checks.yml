@@ -29,7 +29,7 @@ jobs:
         run: |
           call packaging\find_python.bat
           if errorlevel 1 exit /b 1
-          "%KREST_PYTHON%" %KREST_PY_ARGS% -c "import sys; assert sys.version_info[:2] in ((3,11),(3,12))"
+          "%KREST_PYTHON%" %KREST_PY_ARGS% -c "import sys; assert sys.version_info[:2] in ((3,11),(3,12)) and sys.prefix == sys.base_prefix"
       - name: Parse Windows update launcher
         if: runner.os == 'Windows'
         shell: pwsh

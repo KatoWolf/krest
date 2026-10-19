@@ -139,6 +139,10 @@ def main():
     # find_python may legitimately have selected an otherwise working build venv.
     base = Path(getattr(sys, "_base_executable", sys.executable))
     if sys.prefix != sys.base_prefix:
+        if Path(sys.prefix).resolve() == (ROOT / ".build-venv").resolve():
+            raise RuntimeError(
+                "Запустите build-exe.bat: он освободит окружение сборки для ремонта."
+            )
         return subprocess.call([str(base), str(Path(__file__).resolve()), *sys.argv[1:]])
     if os.name != "nt" or sys.version_info[:2] not in ((3, 11), (3, 12)):
         raise RuntimeError("Для сборки нужен Windows и Python 3.11/3.12 x64.")
