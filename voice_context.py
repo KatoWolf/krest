@@ -51,6 +51,7 @@ class VoiceContext:
                 "dislike_track",
             }:
                 target = {"scope": "music", **(previous or {})}
+                target.pop("direction", None)
         if isinstance(value, dict) and isinstance(value.get("voice_context"), dict):
             target.update(value["voice_context"])
         if target.get("scope") == "music" and not any(

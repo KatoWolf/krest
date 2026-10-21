@@ -950,6 +950,11 @@ def check_expansion():
     context.remember("skills.media.volume_down", "тише", previous=command["target"])
     if context.resolve("ещё немного")["command"] != "тише на пять" or context.valid(command):
         raise RuntimeError("Dialogue replayed a stale target or lost volume direction")
+    context.remember(
+        "skills.media.next_track", "следующий трек", previous=context.snapshot()["target"]
+    )
+    if context.resolve("ещё немного"):
+        raise RuntimeError("Track change retained an unrelated earlier volume action")
     settings["owner_name"] = "Another profile"
     if context.resolve("сделай потише"):
         raise RuntimeError("Dialogue leaked across profiles")
