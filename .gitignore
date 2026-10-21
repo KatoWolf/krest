@@ -90,5 +90,6 @@ tools/ci_test_report.py
 
 .voice-indicator.lock
 autonomy.sqlite3*
+component_health.json
 autonomy/
 received/

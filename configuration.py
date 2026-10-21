@@ -100,6 +100,9 @@ DEFAULT_CONFIG = {
         "speech_threshold": 200,
         "speech_auto_threshold": True,
         "voice_fast_commands": True,
+        "voice_context": True,
+        "self_recovery": True,
+        "voice_context_seconds": 10,
         "voice_headphones": False,
         "voice_headphones_auto": True,
         "speech_confidence": 60,
@@ -441,6 +444,7 @@ def validate(data):
     for section, key, lo, hi in [
         ("app_settings", "voice_volume", 0, 100),
         ("app_settings", "active_timeout", 1, 60),
+        ("app_settings", "voice_context_seconds", 3, 20),
         ("app_settings", "speech_pause_ms", 300, 2000),
         ("app_settings", "speech_threshold", 20, 5000),
         ("app_settings", "speech_confidence", 0, 100),

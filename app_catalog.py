@@ -76,14 +76,23 @@ def launch(name, settings):
             raise ValueError("Программа была удалена или путь изменился")
         os.startfile(str(path))
     message = "Запрос на запуск передан Windows: " + item["name"]
+    from media_control import app_name
+
+    context = {}
+    player = app_name(item["name"])
+    if player in {"Яндекс Музыка", "Spotify", "AIMP", "VLC"}:
+        context = {"scope": "music", "name": player}
+    elif item["kind"] == "exe":
+        context = {"scope": "volume", "process": Path(item["target"]).name}
     if item["kind"] == "exe":
         return {
             "success": True,
             "message": message,
             "verification": "pending",
             "check": {"kind": "process", "path": item["target"]},
+            "voice_context": context,
         }
-    return message
+    return {"success": True, "message": message, "voice_context": context}
 
 
 def validate_apps(data):

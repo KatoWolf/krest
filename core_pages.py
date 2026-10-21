@@ -109,6 +109,26 @@ class CorePages:
         )
         card = self.card(
             self.page_bodies["kernel"],
+            "Проверка и восстановление подключений",
+            "Свежий звук микрофона, подтверждение соединения ботов и доступность плеера. "
+            "Восстанавливается отдельный компонент; неподтверждённые действия не повторяются.",
+        )
+        ttk.Checkbutton(
+            card,
+            text="Автоматически восстанавливать остановившиеся компоненты",
+            variable=self.settings_vars["self_recovery"],
+        ).pack(anchor="w", pady=6)
+        self.component_report = tk.StringVar(value="Проверка ещё не запускалась")
+        self._buttons(
+            card,
+            [
+                ("Проверить", lambda: self._check_components("check")),
+                ("Проверить и восстановить", lambda: self._check_components("repair")),
+            ],
+        )
+        self.label(card, textvariable=self.component_report, wraplength=680).pack(fill="x", pady=8)
+        card = self.card(
+            self.page_bodies["kernel"],
             "Журнал выполнения",
             "Повторное выполнение запускается только по вашему нажатию. Проверьте результат прерванного действия перед повтором.",
         )
@@ -173,6 +193,26 @@ class CorePages:
                 self.runtime.submit(row["command"])
                 self._refresh_jobs()
 
+    def _refresh_component_report(self):
+        if hasattr(self, "component_report"):
+            data = self.runtime.health.snapshot()
+            lines = [r["text"] for r in data.get("components", {}).values()]
+            history = data.get("history", [])[-4:]
+            if history:
+                lines.append("Последние изменения:")
+                lines.extend(
+                    datetime.fromtimestamp(r["time"]).strftime("%H:%M") + " · " + r["text"]
+                    for r in reversed(history)
+                )
+            text = ("Проверка выполняется…\n" if data.get("checking") else "") + (
+                "\n".join(lines) or "Проверка ещё не запускалась"
+            )
+            if text != self.component_report.get():
+                self.component_report.set(text)
+
+    def _check_components(self, action):
+        self._background(lambda: self.runtime.health.call(action), self.status_var.set)
+
     def _refresh_core(self):
         cached = getattr(self.runtime, "cached", None)
         if cached:
@@ -189,6 +229,7 @@ class CorePages:
         else:
             text = "Встроенный режим разработки. Постоянное ядро запускается через main.py."
         self.kernel_info.set(text)
+        self._refresh_component_report()
         self.health_tree.delete(*self.health_tree.get_children())
         labels = {
             "ready": "Готов",

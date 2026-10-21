@@ -49,6 +49,51 @@ def duty_health(state):
 
 
 @skill(
+    keywords=["подготовь обслуживание", "займись компьютером пока меня нет"],
+    description="Поставить копирование, проверку версий, подключения и настроенную сортировку в очередь AFK",
+    category="Дежурство",
+)
+def maintenance(state):
+    return state.runtime.autonomy.call("maintenance")["text"]
+
+
+@skill(
+    keywords=["проверь резервные копии"],
+    description="Проверить сохранённые версии пробным восстановлением при AFK",
+    category="Дежурство",
+)
+def verify_backups(state):
+    return state.runtime.autonomy.call("enqueue", kind="backup_audit")["text"]
+
+
+@skill(
+    keywords=["проверь подключения", "диагностика подключений"],
+    description="Проверить реальное состояние микрофона, управляемых ботов и плеера",
+    category="Система",
+)
+def check_connections(state):
+    return state.runtime.health.call("check")
+
+
+@skill(
+    keywords=["почини подключения", "восстанови подключения"],
+    description="Проверить подключения и ограниченно восстановить неисправные компоненты",
+    category="Система",
+)
+def repair_connections(state):
+    return state.runtime.health.call("repair")
+
+
+@skill(
+    keywords=["отчет о подключениях", "отчёт о подключениях"],
+    description="Прочитать последние результаты проверки и восстановления подключений",
+    category="Система",
+)
+def connections_report(state):
+    return state.runtime.health.call("report")
+
+
+@skill(
     patterns=[r"запусти правило (?P<name>.+)"],
     examples=["запусти правило архив документов"],
     description="Поставить настроенное правило дежурства в очередь по имени",

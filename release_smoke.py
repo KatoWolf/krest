@@ -15,6 +15,7 @@ def check_kernel(config_path):
     check_runtime_efficiency()
     check_capture_efficiency()
     check_game_detection()
+    check_expansion()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -806,7 +807,7 @@ def check_duty():
         root = Path(temp)
         config = ConfigManager(root / "config.json")
         options = config.snapshot()
-        options["autonomy"].update(profile_backup=False, health_checks=False)
+        options["autonomy"].update(profile_backup=False, health_checks=False, backup_audit=False)
         config.save_config(options)
         permission = [False]
         gate = SimpleNamespace(
@@ -833,6 +834,15 @@ def check_duty():
         versions = duty.store.versions(source)
         if record["status"] != "completed" or len(versions) != 1:
             raise RuntimeError("Backup did not persist its verified result: " + record["result"])
+        verify = duty.call(
+            "enqueue", kind="verify_version", values={"version_id": versions[0]["id"]}
+        )["id"]
+        duty.run_once()
+        if (
+            duty.store.get(verify)["status"] != "completed"
+            or source.read_bytes() != b"original content"
+        ):
+            raise RuntimeError("Backup rehearsal failed or changed the original")
         restore = duty.call("enqueue", kind="restore", values={"version_id": versions[0]["id"]})[
             "id"
         ]
@@ -868,3 +878,101 @@ def check_duty():
         if target.read_bytes() != big.read_bytes():
             raise RuntimeError("Interrupted copy did not resume correctly")
     print("AFK queue, verified backup, restore and interrupted copy passed.", flush=True)
+
+
+def check_expansion():
+    """Portable contracts shipped with the release, using disposable state only."""
+    import copy
+    import os
+    import sqlite3
+    import subprocess
+    import sys
+    from contextlib import closing
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    import threading
+
+    from configuration import ConfigManager, DEFAULT_CONFIG
+    from voice_context import VoiceContext
+    from backup_service import create_backup, rehearse_backup
+    from component_health import ComponentHealth
+    from process_lease import DownloadLease
+
+    settings = copy.deepcopy(DEFAULT_CONFIG)
+    context = VoiceContext(lambda: settings)
+    context.remember(
+        "skills.media.next_track",
+        "следующий трек",
+        {"voice_context": {"scope": "music", "player": "YandexMusic.exe"}},
+    )
+    command = context.resolve("сделай потише")
+    if (
+        not command
+        or not context.valid(command)
+        or command["target"]["player"] != "YandexMusic.exe"
+    ):
+        raise RuntimeError("Dialogue lost the selected player")
+    for phrase in ("помоги убить врага", "не переключи трек", "выключи компьютер", "ещё немного"):
+        if context.resolve(phrase):
+            raise RuntimeError("Dialogue inferred an unsupported action: " + phrase)
+    context.remember("skills.media.volume_down", "тише", previous=command["target"])
+    if context.resolve("ещё немного")["command"] != "тише на пять" or context.valid(command):
+        raise RuntimeError("Dialogue replayed a stale target or lost volume direction")
+    settings["owner_name"] = "Another profile"
+    if context.resolve("сделай потише"):
+        raise RuntimeError("Dialogue leaked across profiles")
+    old = context.generation
+    context.clear()
+    context.remember("skills.discord_voice.mute_microphone", "мут")
+    context.remember(
+        "skills.media.next_track",
+        "следующий трек",
+        {"voice_context": {"scope": "music", "player": "late.exe"}},
+        revision=old,
+    )
+    if context.resolve("включи обратно")["command"] != "включи микро":
+        raise RuntimeError("A slow old command replaced the newer dialogue target")
+    with TemporaryDirectory(prefix="krest-rehearsal-") as folder:
+        root = Path(folder)
+        config = ConfigManager(root / "config.json")
+        config.save_config(config.snapshot())
+        original = config.filepath.read_bytes()
+        with closing(sqlite3.connect(root / "memory.sqlite3")) as db, db:
+            db.execute("CREATE TABLE example(value TEXT)")
+            db.execute("INSERT INTO example VALUES ('kept')")
+        backup = root / "backup.zip"
+        create_backup(config, backup)
+        rehearse_backup(backup, temporary_root=root)
+        if config.filepath.read_bytes() != original or list(root.glob("krest-restore-check-*")):
+            raise RuntimeError("Backup rehearsal changed the profile or left staged files")
+        rt = SimpleNamespace(
+            settings=config.snapshot,
+            stop_event=threading.Event(),
+            integrations=SimpleNamespace(
+                MODULES={"demo": ("demo.py", "Demo")},
+                refresh=lambda: None,
+                details=lambda _: {"running": True, "bridge": {}, "restarts": 0},
+            ),
+        )
+        health = ComponentHealth(rt, root)
+        health.check(("bots",), repair=False)
+        if health.snapshot()["components"]["bot:demo.py"]["state"] != "unknown":
+            raise RuntimeError("Running bot was mistaken for a confirmed connection")
+    if os.name == "nt" and not getattr(sys, "frozen", False):
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        try:
+            lease = DownloadLease(process)
+            lease.close()
+            process.wait(timeout=5)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    print(
+        "Voice context, backup rehearsal, connection evidence and download lifetime passed.",
+        flush=True,
+    )

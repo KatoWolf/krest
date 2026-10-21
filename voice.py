@@ -321,7 +321,16 @@ def telemetry():
     if _remote is not None:
         return _remote.cached["voice"]["telemetry"]
     engine = _engine
-    return dict(engine.metrics, speaking=bool(engine.is_speaking)) if engine else {}
+    if engine is None:
+        return {}
+    import time
+
+    last_audio = getattr(engine, "_last_audio_at", 0)
+    return dict(
+        engine.metrics,
+        speaking=bool(engine.is_speaking),
+        audio_age_seconds=round(time.monotonic() - last_audio, 2) if last_audio else None,
+    )
 
 
 def recognition():

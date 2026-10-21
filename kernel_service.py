@@ -161,8 +161,10 @@ class Kernel:
             "scenario": rt.scenarios.status,
             "companion": rt.companion.snapshot(),
             "hearing": rt.hearing.snapshot(),
+            "health": rt.health.snapshot(),
+            "voice_context": rt.voice_context.snapshot(),
             "warframe": rt.warframe.status(),
-            "downloads": rt.download_status,
+            "downloads": rt.downloads_summary(),
             "autonomy": {
                 "activity": rt.autonomy.gate.snapshot(),
                 "paused": rt.autonomy.paused,
@@ -187,6 +189,8 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "health":
+            return rt.health.call(args["action"])
         if method == "autonomy":
             return rt.autonomy.call(**args)
         if method == "autonomy.receive":

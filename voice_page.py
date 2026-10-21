@@ -32,6 +32,19 @@ class VoicePages:
             info, "После команды появится измерение задержки", wraplength=680
         )
         self.voice_trace.pack(anchor="w", pady=8)
+        ttk.Checkbutton(
+            info,
+            text="Короткий диалог после команды без повторного обращения",
+            variable=self.settings_vars["voice_context"],
+        ).pack(anchor="w", pady=6)
+        self.label(
+            info,
+            "«Крест, открой Яндекс Музыку» → «сделай потише» → «ещё немного». "
+            "Контекст действует 10 секунд после действия. «Хватит» закрывает его. "
+            "Новая команда с обращением выбирает цель заново.",
+            muted=True,
+            wraplength=680,
+        ).pack(anchor="w")
         self.label(
             info,
             "Можно сказать: «Крест, переключи трек и поставь таймер на две минуты». "

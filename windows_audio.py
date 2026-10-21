@@ -69,6 +69,39 @@ def set_app_volume(name, percent):
 
 
 @com_context
+def adjust_app_volume(name, delta, *, friendly=""):
+    """Read and change the same COM session; never fall back to master volume."""
+    from pycaw.pycaw import AudioUtilities
+    from media_control import app_name
+
+    found = []
+    for session in AudioUtilities.GetAllSessions():
+        if session.Process:
+            process = session.Process.name()
+            if (name and process.casefold() == name.casefold()) or (
+                not name and friendly and app_name(process) == friendly
+            ):
+                found.append((session, process))
+    if len(found) != 1:
+        raise ValueError(
+            "Не могу однозначно выбрать звук приложения; включите в нём воспроизведение. Найдено сессий: "
+            + str(len(found))
+        )
+    session, process = found[0]
+    control = session.SimpleAudioVolume
+    level = max(0, min(100, round(control.GetMasterVolume() * 100) + int(delta)))
+    control.SetMasterVolume(level / 100, None)
+    if abs(control.GetMasterVolume() * 100 - level) > 1:
+        raise ValueError("Приложение не подтвердило изменение громкости")
+    return {
+        "success": True,
+        "message": f"{app_name(process)}: громкость {level}%.",
+        "verification": "confirmed",
+        "voice_context": {"process": process},
+    }
+
+
+@com_context
 def output_devices():
     if os.name != "nt":
         raise ValueError("Устройства звука доступны в Windows")

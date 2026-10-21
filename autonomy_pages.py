@@ -41,6 +41,12 @@ class AutonomyPages:
             text="Копия настроек",
             command=lambda: self._duty_call("enqueue", kind="profile_backup"),
         ).pack(side="left")
+        ttk.Button(
+            card,
+            text="Подготовить обслуживание при AFK",
+            style="Accent.TButton",
+            command=lambda: self._duty_call("maintenance"),
+        ).pack(anchor="w", pady=10)
         self.label(
             card,
             "Начатая установка обновления завершается даже после вашего возвращения. Следующая ждёт AFK.",
@@ -145,6 +151,7 @@ class AutonomyPages:
             ("В очередь", "rule.run"),
             ("Удалить правило", "rule.delete"),
             ("Восстановить", "restore"),
+            ("Проверить восстановление", "verify_version"),
         ]:
             button = ttk.Button(
                 row, text=label, command=lambda a=action: self._duty_selected_action(a)
@@ -190,6 +197,10 @@ class AutonomyPages:
                     "unpack",
                     "download",
                     "software",
+                    "software_prepare",
+                    "verify_profile",
+                    "backup_audit",
+                    "downloads",
                     "health",
                 )
             ],
@@ -260,6 +271,10 @@ class AutonomyPages:
             ("enabled", "Дежурство включено"),
             ("profile_backup", "Ежедневно сохранять настройки Крест · последние 7 копий"),
             ("health_checks", "Проверять управляемые подключения каждые 30 минут простоя"),
+            (
+                "backup_audit",
+                "Ежедневно пробовать восстановить до 5 сохранённых версий во временную папку",
+            ),
             ("learning", "Создавать правила по повторяющимся поручениям"),
             ("telegram_unpack", "Автоматически распаковывать ZIP, полученные через Telegram-пульт"),
         ]:
@@ -303,7 +318,7 @@ class AutonomyPages:
             visible |= {"source", "destination"}
         if kind == "download":
             visible |= {"url", "destination"}
-        if kind == "software":
+        if kind in {"software", "software_prepare"}:
             visible.add("package")
         if kind == "offload":
             visible |= {"age_days", "min_free_gb"}
@@ -321,6 +336,10 @@ class AutonomyPages:
             "software": "Только выбранная установленная программа. Winget обновляет её без перезагрузки ПК. Начатую установку не прерываем; приложения с открытыми документами лучше закрыть заранее.",
             "unpack": "ZIP распакуется в отдельную папку. Пути за пределами архива, ссылки и зашифрованные архивы отклоняются.",
             "health": "Проверка подключений Крест. Используются существующие ограниченные попытки восстановления; ключи и доступы не изменяются.",
+            "software_prepare": "Скачать текущий установщик выбранного пакета winget без установки. Путь и хеши появятся в результате. При возвращении загрузка прервётся; при следующем AFK winget повторит её. Установка — отдельное поручение.",
+            "verify_profile": "Последняя копия настроек распакуется во временную папку. Крест проверит JSON и целостность баз, затем удалит временные файлы.",
+            "backup_audit": "До 5 сохранённых версий за проход: пробное восстановление и проверка SHA-256. Набор меняется каждый день; текущие файлы остаются на месте.",
+            "downloads": "Разобрать настроенные папки загрузок после AFK. Автосортировка должна быть включена в разделе файлов. Незавершённые и нестабильные файлы пропускаются.",
         }
         self.duty_hint.set(
             hints.get(
@@ -488,7 +507,7 @@ class AutonomyPages:
             available = (
                 (kind == "jobs" and action in {"cancel", "retry", "priority"})
                 or (kind == "rules" and action.startswith("rule."))
-                or (kind == "versions" and action == "restore")
+                or (kind == "versions" and action in {"restore", "verify_version"})
             )
             if available:
                 button.configure(state="normal" if row else "disabled")
@@ -499,8 +518,8 @@ class AutonomyPages:
         row = self.duty_rows.get(kind, {}).get(ident)
         if not row:
             return
-        if action == "restore":
-            self._duty_call("enqueue", kind="restore", values={"version_id": ident})
+        if action in {"restore", "verify_version"}:
+            self._duty_call("enqueue", kind=action, values={"version_id": ident})
         else:
             self._duty_call(
                 action,

@@ -16,11 +16,16 @@ class ActionVerifier:
         self.closed = threading.Event()
 
     def record(self, skill, value):
-        if not isinstance(value, dict) or not value.get("verification"):
+        if not isinstance(value, dict):
+            return
+        status = value.get("verification") or (
+            "failed" if value.get("status") == "error" or value.get("success") is False else ""
+        )
+        if not status:
             return
         row = {
             "skill": skill,
-            "status": value["verification"],
+            "status": status,
             "text": value.get("message", ""),
             "time": time.time(),
         }

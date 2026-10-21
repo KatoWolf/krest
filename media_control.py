@@ -164,6 +164,7 @@ async def _control(action, preferred="", seconds=10):
             "success": True,
             "message": "Уже на паузе." if action == "pause" else "Музыка уже играет.",
             "verification": "confirmed",
+            "voice_context": {"scope": "music", "player": session.source_app_user_model_id},
         }
     if action == "seek":
         if not getattr(playback.controls, "is_playback_position_enabled", False):
@@ -191,6 +192,7 @@ async def _control(action, preferred="", seconds=10):
         _last_source, _last_used = session.source_app_user_model_id, time.monotonic()
     result = {
         "success": True,
+        "voice_context": {"scope": "music", "player": session.source_app_user_model_id},
         "message": {
             "play": "Продолжила воспроизведение.",
             "pause": "Поставила на паузу.",
@@ -249,7 +251,10 @@ def rating(action, preferred=""):
     data = query(preferred)
     if not data["title"]:
         raise MediaError("Плеер не сообщил название трека: отметку не меняю.")
-    return change_rating(data, action)
+    result = change_rating(data, action)
+    if isinstance(result, dict):
+        result["voice_context"] = {"scope": "music", "player": data["app_id"]}
+    return result
 
 
 def diagnostics(preferred=""):

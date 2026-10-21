@@ -93,7 +93,9 @@ def create_backup(config, destination, guard=None):
     return str(destination)
 
 
-def inspect_backup(path):
+def inspect_backup(path, guard=None):
+    guard = guard or (lambda: None)
+    guard()
     with zipfile.ZipFile(path) as archive:
         items = archive.infolist()
         if (
@@ -112,7 +114,15 @@ def inspect_backup(path):
             or "config.json" not in manifest["files"]
         ):
             raise ValueError("Состав копии не соответствует манифесту")
-        result = {name: archive.read(name) for name in manifest["files"]}
+        result = {}
+        for name in manifest["files"]:
+            guard()
+            with archive.open(name) as stream:
+                blocks = []
+                while block := stream.read(1024 * 1024):
+                    guard()
+                    blocks.append(block)
+                result[name] = b"".join(blocks)
         for name, raw in result.items():
             if hashlib.sha256(raw).hexdigest() != manifest["files"][name]:
                 raise ValueError("Контрольная сумма не совпала: " + name)
@@ -127,6 +137,49 @@ def inspect_backup(path):
 
             validate_state(json.loads(result["warframe_state.json"]))
         return result
+
+
+def rehearse_backup(path, guard=None, temporary_root=None):
+    """Restore to disposable storage, then open/check every restored database."""
+    guard = guard or (lambda: None)
+    contents = inspect_backup(path, guard)
+    with tempfile.TemporaryDirectory(prefix="krest-restore-check-", dir=temporary_root) as folder:
+        root = Path(folder)
+        for name, raw in contents.items():
+            guard()
+            restored = root / name  # inspect_backup only allows fixed basenames.
+            with restored.open("xb") as target:
+                for offset in range(0, len(raw), 1024 * 1024):
+                    guard()
+                    target.write(raw[offset : offset + 1024 * 1024])
+            if hashlib.sha256(restored.read_bytes()).digest() != hashlib.sha256(raw).digest():
+                raise ValueError("Ошибка пробного восстановления: " + name)
+            if name.endswith(".sqlite3"):
+                interruption = []
+
+                def progress():
+                    try:
+                        guard()
+                    except Exception as exc:
+                        interruption.append(exc)
+                        return 1
+                    return 0
+
+                with closing(sqlite3.connect(restored)) as db:
+                    db.set_progress_handler(progress, 1000)
+                    try:
+                        result = db.execute("PRAGMA integrity_check").fetchall()
+                    except sqlite3.OperationalError:
+                        if interruption:
+                            raise interruption[0]
+                        raise
+                    if result != [("ok",)]:
+                        raise ValueError("Повреждена база в копии: " + name)
+            elif name.endswith(".json"):
+                if not isinstance(json.loads(restored.read_text(encoding="utf-8")), (dict, list)):
+                    raise ValueError("Некорректный JSON в копии: " + name)
+        guard()
+    return f"Пробное восстановление пройдено: {len(contents)} файлов; JSON и базы открываются. Рабочие данные не изменялись."
 
 
 def restore_backup(path, config):

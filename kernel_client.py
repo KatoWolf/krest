@@ -341,6 +341,10 @@ class RemoteRuntime:
             snapshot=lambda: self.cached.get("hearing", {}),
             call=lambda action: self.client.call("hearing", action=action),
         )
+        self.health = SimpleNamespace(
+            snapshot=lambda: self.cached.get("health", {}),
+            call=lambda action: self.client.call("health", action=action),
+        )
         self.autonomy = SimpleNamespace(
             snapshot=lambda: self.client.call("autonomy", action="snapshot"),
             call=lambda action, **args: self.client.call(

@@ -52,6 +52,19 @@ class CommandDictionary:
 def quick_phrases(manager, settings, learned=()):
     wake = settings.get("app_settings", {}).get("wake_word", "крест").casefold()
     phrases = set()
+    phrases.update(
+        {
+            "сделай потише",
+            "потише",
+            "сделай погромче",
+            "погромче",
+            "еще немного",
+            "еще чуть чуть",
+            "еще громче",
+            "еще тише",
+            "включи обратно",
+        }
+    )
     from command_sequence import SAFE
 
     for entry in manager.catalog():

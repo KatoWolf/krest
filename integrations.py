@@ -239,6 +239,9 @@ class IntegrationManager:
             )
             if connected:
                 self.errors.pop(filename, None)
+                self.bridge[filename].pop("disconnected_since", None)
+            else:
+                self.bridge[filename].setdefault("disconnected_since", time.time())
         elif kind == "auth_required":
             self.errors[filename] = message
             self.bridge[filename].update(ready=False, auth_required=True, diagnostic=message)
@@ -314,8 +317,13 @@ class IntegrationManager:
                 and bridge.get("monitored")
                 and not bridge.get("auth_required")
                 and cfg.get("auto_restart", True)
-                and now_wall - bridge.get("last_health", now_wall)
-                > bridge.get("health_timeout", 120)
+                and settings.get("app_settings", {}).get("self_recovery", True)
+                and (
+                    now_wall - bridge.get("last_health", now_wall)
+                    > bridge.get("health_timeout", 120)
+                    or now_wall - bridge.get("disconnected_since", now_wall)
+                    > max(120, bridge.get("health_timeout", 120))
+                )
                 and filename not in self._recovering
             ):
                 now = time.monotonic()
@@ -348,6 +356,7 @@ class IntegrationManager:
                         if (
                             code
                             and cfg.get("auto_restart", True)
+                            and settings.get("app_settings", {}).get("self_recovery", True)
                             and not self._closed
                             and not self.bridge.get(filename, {}).get("auth_required")
                         ):
@@ -398,6 +407,9 @@ class IntegrationManager:
                 .get("services", {})
                 .get(filename, {})
                 .get("auto_restart", True)
+                or not self.app.config_mgr.snapshot()
+                .get("app_settings", {})
+                .get("self_recovery", True)
             ):
                 return
             try:
@@ -408,7 +420,13 @@ class IntegrationManager:
     def _repair_stalled(self, filename, generation):
         try:
             with self._lock:
-                if self._closed or self._generation.get(filename, 0) != generation:
+                settings = self.app.config_mgr.snapshot()
+                if (
+                    self._closed
+                    or self._generation.get(filename, 0) != generation
+                    or not settings.get("app_settings", {}).get("self_recovery", True)
+                    or not settings.get("services", {}).get(filename, {}).get("auto_restart", True)
+                ):
                     return
                 self.restart(filename)
         except Exception as exc:

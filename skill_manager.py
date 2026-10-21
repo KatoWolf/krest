@@ -281,6 +281,9 @@ class SkillManager:
             }
             with use_state(state), voice.capture() as messages:
                 value = entry.func(**kwargs)
+            runtime = getattr(state, "runtime", None)
+            if runtime is not None and hasattr(runtime, "_job_local"):
+                runtime._job_local.action_value = value
             verifier = getattr(getattr(state, "runtime", None), "verifier", None)
             if verifier is not None:
                 verifier.record(entry.id, value)

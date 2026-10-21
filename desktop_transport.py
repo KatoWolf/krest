@@ -101,6 +101,21 @@ def close():
         _clients.clear()
 
 
+def reset_idle(domain):
+    """Discard only the named helper and never interrupt a live click/request."""
+    with _lock:
+        client = _clients.get(domain)
+    if client is None:
+        return True
+    if not client.lock.acquire(blocking=False):
+        return False
+    try:
+        client.close()
+        return True
+    finally:
+        client.lock.release()
+
+
 atexit.register(close)
 
 

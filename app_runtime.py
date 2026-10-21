@@ -90,6 +90,12 @@ class AssistantRuntime:
         from companion_session import CompanionSession
 
         self.companion = CompanionSession(self, Path(data_dir))
+        from voice_context import VoiceContext
+
+        self.voice_context = VoiceContext(self.settings)
+        from component_health import ComponentHealth
+
+        self.health = ComponentHealth(self, Path(data_dir))
         self.understanding = VoiceUnderstanding(self.manager, self.memory, self.companion)
         from hearing_practice import HearingPractice
 
@@ -202,7 +208,6 @@ class AssistantRuntime:
             threading.Thread(target=self._scheduler, daemon=True, name="krest-scheduler"),
             threading.Thread(target=self._file_index_worker, daemon=True, name="krest-file-index"),
             threading.Thread(target=self._clipboard_worker, daemon=True, name="krest-clipboard"),
-            threading.Thread(target=self._downloads, daemon=True, name="krest-downloads"),
             threading.Thread(target=self._catalog_worker, daemon=True, name="krest-catalog"),
         ]
         for thread in self._threads:
@@ -409,6 +414,10 @@ class AssistantRuntime:
             voice.speak("Не расслышала. Повтори, пожалуйста.")
 
     def _prepare_command(self, text, source="text", confidence=None):
+        self._job_local.context_target = None
+        self._job_local.action_value = None
+        self._job_local.executed_command = ""
+        self._job_local.context_revision = None
         cfg = self.settings().get("app_settings", {})
         if source == "voice":
             from speech_recognition import decode_voice_command
@@ -435,13 +444,22 @@ class AssistantRuntime:
                 )
 
         if source == "voice":
+            token = (getattr(self._job_local, "recognition", None) or {}).get("context")
+            if not wake and token is None:
+                token = self.voice_context.resolve(command)
+            contextual = bool(not wake and token and self.voice_context.valid(token))
             window_accepted = (getattr(self._job_local, "recognition", None) or {}).get(
                 "listening_window", False
             )
-            if not wake and not window_accepted and time.monotonic() > self._active_until:
+            if (
+                not wake
+                and not contextual
+                and not window_accepted
+                and time.monotonic() > self._active_until
+            ):
                 observed("Без обращения — команда не выполнена")
                 return CommandResult(False, False, "")
-            if not wake:
+            if not wake and not contextual:
                 from command_understanding import exact_command
                 from command_sequence import plan_sequence
 
@@ -506,6 +524,12 @@ class AssistantRuntime:
                 self._voice_retry(wake)
                 self.events.put(("result", result))
                 return result
+            if contextual:
+                command = token["command"]
+                self._job_local.context_target = dict(token["target"])
+            elif wake:
+                self.voice_context.clear()
+            self._job_local.context_revision = self.voice_context.generation
             if not command and wake:
                 self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
                 observed("Ожидаю команду")
@@ -518,6 +542,8 @@ class AssistantRuntime:
             # conversation after a successful action never opens another one.
             self._active_until = 0
         else:
+            if source == "text":
+                self.voice_context.clear()
             command = command if wake else text
         if self.state.is_sleeping and normalize_command(
             command, self.settings().get("command_aliases", {})
@@ -616,6 +642,7 @@ class AssistantRuntime:
                 getattr(self._job_local, "feedback_turn", None), "executing", command, 300
             )
             with self.undo.capture(command):
+                self._job_local.executed_command = command
                 if followup is not None:
                     with self._dialog_lock:
                         followup = self.context.handle(followup)
@@ -645,6 +672,17 @@ class AssistantRuntime:
         if source == "voice":
             if result.success:
                 self.companion.remember_topic(result.skill_id)
+                self.voice_context.remember(
+                    result.skill_id,
+                    getattr(self._job_local, "executed_command", ""),
+                    getattr(self._job_local, "action_value", None),
+                    getattr(self._job_local, "context_target", None),
+                    revision=getattr(self._job_local, "context_revision", None),
+                )
+            elif (
+                getattr(self._job_local, "context_revision", None) == self.voice_context.generation
+            ):
+                self.voice_context.clear()
         self.last_result = result
         if result.text and not result.responded:
             if source == "voice" and not result.handled:
@@ -653,6 +691,8 @@ class AssistantRuntime:
                 voice.speak(result.text)
         if result.skill_id.startswith("skills.media."):
             self.publish_notice(result.text, "Музыка", "low", speak=False)
+            if not result.success:
+                self.health.request(("music",))
         self.events.put(("result", result))
         return result
 
@@ -738,6 +778,7 @@ class AssistantRuntime:
                         self.publish_notice("После игры: " + row["text"], "Напоминание", "high")
                 self.automation.tick()
                 self.companion.tick()
+                self.health.tick()
                 status = {
                     "is_playing": bool(self.performance.game),
                     "game": self.performance.game,
@@ -816,80 +857,17 @@ class AssistantRuntime:
                 logger.warning("Каталог программ будет обновлён повторно: %s", exc)
             self.stop_event.wait(60)
 
-    def _downloads(self):
-        from downloads import DownloadSorter
-
-        sorters = {}
-        last_run = 0
-        previous = None
-        last_error = ""
-        was_paused = False
-        while not self.stop_event.is_set():
-            settings = self.settings()
-            cfg = settings.get("app_settings", {})
-            enabled = cfg.get("downloads_auto_sort", False) and settings.get("skills", {}).get(
-                "system_mon", True
+    def downloads_summary(self):
+        if not self.settings().get("app_settings", {}).get("downloads_auto_sort"):
+            return "Автосортировка выключена"
+        activity = self.autonomy.gate.snapshot()
+        if self.autonomy.paused or not activity.get("allowed"):
+            return "Сортировка ожидает AFK: " + (
+                "дежурство приостановлено"
+                if self.autonomy.paused
+                else activity.get("reason", "ПК используется")
             )
-            policy = settings.get("file_policy", {})
-            folders = tuple(
-                dict.fromkeys([cfg.get("downloads_path", ""), *policy.get("folders", [])])
-            )
-            signature = (enabled, folders)
-            if signature != previous:
-                sorters = {folder: DownloadSorter(policy) for folder in folders}
-                last_run = 0
-                previous = signature
-                last_error = ""
-            if enabled:
-                # Recheck even when an unrelated scheduler task is slow. The
-                # shared detector scans processes at most once per five seconds.
-                self.performance.refresh_activity()
-            pause_reason = self.performance.file_pause_reason if enabled else ""
-            if enabled and not self.autonomy.permitted():
-                was_paused = True
-                self.download_status = (
-                    "Сортировка ожидает AFK: " + self.autonomy.gate.snapshot()["reason"]
-                )
-            elif pause_reason:
-                was_paused = True
-                self.download_status = "Сортировка приостановлена: " + pause_reason
-            elif enabled and (was_paused or time.monotonic() - last_run >= 30):
-                was_paused = False
-                last_run = time.monotonic()
-                self.download_status = "Проверяю папку загрузок…"
-                try:
-                    result = {"moved_count": 0, "skipped_count": 0, "errors": []}
-                    for folder in folders:
-                        sorter = sorters[folder]
-                        sorter.policy = policy
-                        try:
-
-                            class SortStop:
-                                def is_set(inner):
-                                    return self.stop_event.is_set() or not self.autonomy.permitted()
-
-                            item = sorter.scan(folder, stop=SortStop())
-                            result["moved_count"] += item["moved_count"]
-                            result["skipped_count"] += item["skipped_count"]
-                            result["errors"].extend(item["errors"])
-                        except (OSError, ValueError) as exc:
-                            result["errors"].append(str(exc))
-                    self.download_status = f"Проверено в {time.strftime('%H:%M:%S')} · перемещено: {result['moved_count']} · ожидают: {result['skipped_count']}"
-                    if result["moved_count"]:
-                        self.publish_notice("Загрузки: " + self.download_status, "Файлы", "low")
-                    error = "; ".join(result["errors"][:3])
-                    if error:
-                        self.download_status += " · ошибки: " + error
-                except (OSError, ValueError) as exc:
-                    error = str(exc)
-                    self.download_status = "Сортировка: " + error
-                if error and error != last_error:
-                    self.events.put(("error", "Автосортировка: " + error))
-                last_error = error
-            elif not enabled:
-                was_paused = False
-                self.download_status = "Автосортировка выключена"
-            self.stop_event.wait(1)
+        return self.download_status
 
     def publish_notice(
         self, text, source="Система", priority="normal", speak=True, kind="", target=None
@@ -1019,6 +997,7 @@ class AssistantRuntime:
                 voice.wait_for_audio(0.03)
                 if self._arm_requested.is_set():
                     self._arm_requested.clear()
+                    self.voice_context.clear()
                     self._active_until = time.monotonic() + self.settings().get(
                         "app_settings", {}
                     ).get("active_timeout", 6)
@@ -1035,6 +1014,7 @@ class AssistantRuntime:
                 telemetry = voice.telemetry()
                 now_connected = bool(telemetry.get("connected"))
                 if telemetry.get("recovery") or not now_connected:
+                    self.voice_context.clear()
                     turn.clear(telemetry.get("recovery") or "Микрофон переподключается")
                 else:
                     turn.observe(telemetry.get("partial", ""), listening_until=self._active_until)
@@ -1077,6 +1057,7 @@ class AssistantRuntime:
             # Includes background chat: no job, player, microphone or screenshot side effect.
             self.autonomy.gate.touch()
             self._active_until = 0
+            self.voice_context.clear()
             if feedback_turn is not None:
                 self.feedback.update(
                     feedback_turn, "listening", "Проверка слуха — действие не выполняется", 3
@@ -1087,6 +1068,7 @@ class AssistantRuntime:
         addressed, command = decode_voice_command(self.manager, text, settings)
         recognition = dict(recognition)
         recognition.pop("listening_window", None)
+        recognition.pop("context", None)
         if addressed:
             self.autonomy.gate.touch()
             voice.stop_speaking()
@@ -1106,6 +1088,7 @@ class AssistantRuntime:
                     self._voice_retry(True)
                     return False
                 self._active_until = time.monotonic() + cfg.get("active_timeout", 6)
+                self.voice_context.clear()
                 turn = feedback_turn if feedback_turn is not None else self.feedback.begin()
                 self.feedback.update(
                     turn, "listening", "Слушаю команду", cfg.get("active_timeout", 6)
@@ -1126,6 +1109,16 @@ class AssistantRuntime:
                 voice.speak(policy(settings, bool(self.performance.game))["listen"])
                 return True
         elif time.monotonic() > self._active_until:
+            context = self.voice_context.resolve(command)
+            if context and not self.state.is_sleeping:
+                recognition["context"] = context
+                return self.submit(
+                    text,
+                    "voice",
+                    recognition.get("confidence"),
+                    recognition=recognition,
+                    feedback_turn=feedback_turn,
+                )
             # Game chat never enters the job queue or touches its SQLite journal.
             self.events.put(
                 (
@@ -1220,6 +1213,7 @@ class AssistantRuntime:
         self.start_voice()
 
     def stop_voice(self):
+        self.voice_context.clear()
         self._voice_stop.set()
         self._arm_requested.clear()
         self._active_until = 0

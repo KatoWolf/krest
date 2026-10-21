@@ -1406,7 +1406,7 @@ class ControlCenterApp(
         card = self.card(
             self.page_bodies["settings"],
             "Автосортировка загрузок",
-            "Проверка каждые 30 секунд. Файлы должны оставаться неизменными минимум две минуты; папки и незавершённые загрузки пропускаются. Пауза на время игры снимается автоматически после её закрытия.",
+            "Проверка в общей очереди дежурства каждые три минуты AFK. Файлы должны оставаться неизменными минимум две минуты; папки и незавершённые загрузки пропускаются. При возвращении, игре, просмотре или звонке — пауза.",
         )
         folder_details = self.advanced(card, "Изменить папку загрузок")
         self.field(folder_details, "Папка загрузок", self.settings_vars["downloads_path"])
@@ -2012,6 +2012,8 @@ class ControlCenterApp(
                 self._update_timers()
             if visible and self.current_page in ("actions", "timers"):
                 self._update_reminders(update_rows=self.current_page == "timers")
+            if visible and self.current_page == "kernel":
+                self._refresh_component_report()
             self._duty_refresh()
             if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()

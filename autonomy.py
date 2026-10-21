@@ -22,6 +22,7 @@ DEFAULT_AUTONOMY = {
     "min_free_memory_mb": 1024,
     "profile_backup": True,
     "health_checks": True,
+    "backup_audit": True,
     "telegram_unpack": False,
 }
 KINDS = {
@@ -32,6 +33,11 @@ KINDS = {
     "unpack": "Распаковка ZIP",
     "download": "Загрузка файла",
     "software": "Обновление программы",
+    "software_prepare": "Скачать установщик без установки",
+    "verify_profile": "Пробное восстановление настроек",
+    "verify_version": "Проверка восстановления файла",
+    "backup_audit": "Проверка сохранённых версий",
+    "downloads": "Разобрать загрузки",
     "health": "Проверка подключений",
     "profile_backup": "Копия настроек Крест",
     "restore": "Восстановление версии",
@@ -48,6 +54,7 @@ def validate_settings(cfg):
         "learning",
         "profile_backup",
         "health_checks",
+        "backup_audit",
         "telegram_unpack",
     ):
         if type(cfg.get(key)) is not bool:
@@ -111,12 +118,12 @@ def validate_task(kind, values):
             raise ValueError("Нужна ссылка HTTP(S) без логина и пароля")
         destination = clean_path(str(values.get("destination", "")))
         payload.update(url=url, destination=str(destination))
-    elif kind == "software":
+    elif kind in {"software", "software_prepare"}:
         package = str(values.get("package", "")).strip()
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{1,149}", package):
             raise ValueError("Укажите точный ID пакета winget, например 7zip.7zip")
         payload["package"] = package
-    elif kind == "restore":
+    elif kind in {"restore", "verify_version"}:
         ident = str(values.get("version_id", ""))
         if not re.fullmatch("[a-f0-9]{32}", ident):
             raise ValueError("Выберите сохранённую версию")
@@ -151,6 +158,7 @@ class AutonomousDuty:
         self._default_due = {}
         self._last_error = 0
         self.files = FileJobs(self.store, self.guard, self.progress)
+        self._download_sorters = {}
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -215,6 +223,27 @@ class AutonomousDuty:
             return self.report()
         if action == "software.list":
             return installed_software()
+        if action == "maintenance":
+            kinds = ["profile_backup", "backup_audit", "health"]
+            if self.runtime.settings().get("app_settings", {}).get("downloads_auto_sort"):
+                kinds.append("downloads")
+            ids = []
+            for kind in kinds:
+                pending = next(
+                    (
+                        r
+                        for r in self.store.jobs()
+                        if r["kind"] == kind and r["status"] in {"waiting", "running", "retry"}
+                    ),
+                    None,
+                )
+                ids.append(pending["id"] if pending else self.store.enqueue(kind, KINDS[kind], {}))
+            self._stamp = 0
+            return {
+                "text": "Обслуживание поставлено в очередь после AFK: "
+                + ", ".join(KINDS[k] for k in kinds),
+                "ids": ids,
+            }
         if action in {"pause", "resume"}:
             self.paused = action == "pause"
             with self.runtime.config_manager._lock:
@@ -342,18 +371,21 @@ class AutonomousDuty:
         now = time.time()
         self.store.schedule()
         cfg = self.runtime.settings().get("autonomy", DEFAULT_AUTONOMY)
+        app = self.runtime.settings().get("app_settings", {})
+        cfg = dict(cfg, downloads=bool(app.get("downloads_auto_sort")))
+        pending_kinds = {
+            r["kind"] for r in self.store.jobs() if r["status"] in {"waiting", "running", "retry"}
+        }
         for kind, key, period in [
             ("profile_backup", "profile_backup", 86400),
             ("health", "health_checks", 1800),
+            ("backup_audit", "backup_audit", 86400),
+            ("downloads", "downloads", 180),
         ]:
             if cfg.get(key):
                 # Stable time buckets deduplicate across restarts and AFK sessions.
                 ident = "auto-" + kind + "-" + str(int(now // period))
-                pending = any(
-                    r["kind"] == kind and r["status"] in {"waiting", "running", "retry"}
-                    for r in self.store.jobs()
-                )
-                if self.store.get(ident) is None and not pending:
+                if self.store.get(ident) is None and kind not in pending_kinds:
                     self.store.enqueue(
                         kind, KINDS[kind], {}, rule_id="builtin", unique=ident, priority=-1
                     )
@@ -440,8 +472,25 @@ class AutonomousDuty:
             return self._download(job)
         if kind == "software":
             return self._software(job)
+        if kind in {"software_prepare", "verify_profile", "verify_version", "backup_audit"}:
+            from duty_maintenance import (
+                prepare_software,
+                verify_profile,
+                verify_version,
+                audit_versions,
+            )
+
+            if kind == "verify_profile":
+                return verify_profile(self)
+            return {
+                "software_prepare": prepare_software,
+                "verify_version": verify_version,
+                "backup_audit": audit_versions,
+            }[kind](self, job)
+        if kind == "downloads":
+            return self._sort_downloads()
         if kind == "profile_backup":
-            from backup_service import create_backup, inspect_backup
+            from backup_service import create_backup, rehearse_backup
 
             destination = self.root / "autonomy" / "profile"
             destination.mkdir(parents=True, exist_ok=True)
@@ -450,7 +499,7 @@ class AutonomousDuty:
             path = destination / (job["id"] + ".zip")
             create_backup(self.runtime.config_manager, path, guard=self.guard)
             self.guard()
-            inspect_backup(path)
+            report = rehearse_backup(path, self.guard, destination)
             for old in sorted(
                 destination.glob("auto-profile_backup-*.zip"),
                 key=lambda p: p.stat().st_mtime,
@@ -459,8 +508,10 @@ class AutonomousDuty:
                 self.guard()
                 if not old.is_symlink():
                     old.unlink()
-            return "Копия настроек проверена: " + str(path)
+            return report + " Копия: " + str(path)
         if kind == "health":
+            if hasattr(self.runtime, "health"):
+                return self.runtime.health.check(guard=self.guard)
             details = []
             if hasattr(self.runtime, "integrations"):
                 self.guard()
@@ -487,6 +538,57 @@ class AutonomousDuty:
                 or "Проверка подключений завершена. Ошибок управляемых процессов не обнаружено."
             )
         raise ValueError("Неизвестная задача")
+
+    def _sort_downloads(self):
+        from downloads import DownloadSorter
+
+        performance = getattr(self.runtime, "performance", None)
+        if performance is not None:
+            performance.refresh_activity()
+            if performance.file_pause_reason:
+                raise Paused("Сортировка приостановлена: " + performance.file_pause_reason)
+        settings = self.runtime.settings()
+        cfg = settings.get("app_settings", {})
+        if not cfg.get("downloads_auto_sort") or not settings.get("skills", {}).get(
+            "system_mon", True
+        ):
+            return "Автосортировка выключена; включите её в разделе файлов."
+        policy = settings.get("file_policy", {})
+        folders = list(
+            dict.fromkeys(
+                f for f in [cfg.get("downloads_path", ""), *policy.get("folders", [])] if f
+            )
+        )
+        self._download_sorters = {
+            f: self._download_sorters.get(f) or DownloadSorter(policy) for f in folders
+        }
+        result = {"moved": 0, "skipped": 0, "errors": []}
+
+        class Stop:
+            def is_set(inner):
+                return (
+                    self.stop.is_set()
+                    or not self.permitted()
+                    or bool(performance and performance.file_pause_reason)
+                    or bool(self.current and self.current["id"] in self._cancel)
+                )
+
+        for folder, sorter in self._download_sorters.items():
+            self.guard()
+            sorter.policy = policy
+            try:
+                item = sorter.scan(folder, stop=Stop())
+                result["moved"] += item["moved_count"]
+                result["skipped"] += item["skipped_count"]
+                result["errors"].extend(item["errors"][:3])
+            except (ValueError, OSError) as exc:
+                result["errors"].append(str(exc))
+        self.guard()
+        text = f"Загрузки: перемещено {result['moved']}; ожидают стабильного файла {result['skipped']}."
+        self.runtime.download_status = text
+        if result["errors"]:
+            raise ValueError(text + " " + "; ".join(result["errors"][:3]))
+        return text
 
     def _download(self, job):
         import requests

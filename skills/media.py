@@ -9,7 +9,21 @@ import media_control
 
 
 def preferred_player():
+    target = _context_target()
+    if target.get("player"):
+        return target["player"]
+    if target.get("name"):
+        rows = media_control.query(all_sessions=True)
+        matches = [r for r in rows if r["app_name"] == target["name"]]
+        if len(matches) != 1:
+            raise media_control.MediaError("Не могу однозначно найти аудиосессию " + target["name"])
+        return matches[0]["app_id"]
     return get_state().config_getter().get("media", {}).get("preferred_app", "")
+
+
+def _context_target():
+    runtime = getattr(get_state(), "runtime", None)
+    return getattr(getattr(runtime, "_job_local", None), "context_target", None) or {}
 
 
 def _action(action, seconds=10):
@@ -198,6 +212,13 @@ def _relative_volume(step, sign):
     value = _number(step) if step else 10
     if value is None or not 1 <= value <= 100:
         return {"status": "error", "message": "Укажите шаг громкости от одного до ста."}
+    target = _context_target()
+    if target.get("scope") == "music" or target.get("process"):
+        from windows_audio import adjust_app_volume
+
+        name = target.get("process")
+        friendly = target.get("name") or media_control.app_name(target.get("player", ""))
+        return adjust_app_volume(name or "", sign * value, friendly=friendly)
     return _volume("relative", sign * value)
 
 
@@ -311,22 +332,43 @@ def _open(url, name):
     return "Открываю " + name + "."
 
 
+def _desktop_or_web(name, url):
+    settings = get_state().config_getter()
+    found = [
+        row
+        for row in settings.get("applications", [])
+        if media_control.app_name(row["name"]) == name
+    ]
+    if len(found) > 1:
+        return {
+            "status": "error",
+            "message": "В каталоге несколько версий "
+            + name
+            + "; запустите нужную по точному имени программы.",
+        }
+    if found:
+        from app_catalog import launch
+
+        return launch(found[0]["name"], settings)
+    return _open(url, name)
+
+
 @skill(
     keywords=["открой яндекс музыку", "включи яндекс музыку", "запусти яндекс музыку"],
-    description="Открыть Яндекс Музыку в браузере",
+    description="Открыть установленную Яндекс Музыку из каталога; при отсутствии — сайт",
     category="Media",
 )
 def open_yandex_music(text=""):
-    return _open("https://music.yandex.ru", "Яндекс Музыку")
+    return _desktop_or_web("Яндекс Музыка", "https://music.yandex.ru")
 
 
 @skill(
     keywords=["открой спотифай", "включи спотифай", "запусти спотифай", "open spotify"],
-    description="Открыть Spotify в браузере",
+    description="Открыть установленный Spotify из каталога; при отсутствии — сайт",
     category="Media",
 )
 def open_spotify(text=""):
-    return _open("https://open.spotify.com", "Spotify")
+    return _desktop_or_web("Spotify", "https://open.spotify.com")
 
 
 @skill(
