@@ -55,6 +55,21 @@ def lane_for(entry):
         return "plugins"
     if ident in FILES:
         return "files"
+    if module == "smart_tools":
+        if name in {
+            "pack_selection",
+            "last_screenshot",
+            "selected_objects",
+            "route_archives",
+            "route_all_archives",
+            "watch_file",
+            "watch_folder",
+            "open_selection",
+            "reveal_selection",
+        }:
+            return "files"
+        if name in {"except_discord", "remember_sound", "enable_sound", "disable_sound"}:
+            return "volume"
     if module == "assistant_tools" and name in {
         "context_folder",
         "find_local_file",

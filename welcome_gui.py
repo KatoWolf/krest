@@ -21,6 +21,7 @@ from appearance_pages import AppearancePages
 from experience_pages import ExperiencePages
 from personal_pages import PersonalPages
 from autonomy_pages import AutonomyPages
+from smart_pages import SmartPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -44,6 +45,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    SmartPages,
     AutonomyPages,
     PersonalPages,
     ExperiencePages,
@@ -87,14 +89,18 @@ class ControlCenterApp(
         ("clipboard", "Буфер обмена"),
         ("sessions", "Игровые сессии"),
         ("autonomy", "Дежурство"),
+        ("smart_files", "Обработка загрузок"),
+        ("watches", "Наблюдение"),
+        ("sound", "Звуковой диспетчер"),
+        ("habits", "Привычки"),
     ]
 
     NAV_GROUPS = [
         ("actions", "Главная", ("actions", "voice")),
         ("skills", "Команды", ("skills", "favorites")),
-        ("music", "Музыка", ("music",)),
+        ("music", "Музыка", ("music", "sound")),
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
-        ("autonomy", "Дежурство", ("autonomy",)),
+        ("autonomy", "Автоматизация", ("autonomy", "smart_files", "watches", "habits")),
         ("inbox", "Уведомления", ("inbox", "logs")),
         (
             "bots",
@@ -1592,6 +1598,12 @@ class ControlCenterApp(
                 "daily_time",
                 "alias_name",
                 "alias_target",
+                "workflow_source",
+                "workflow_destination",
+                "workflow_pattern",
+                "workflow_unpack",
+                "workflow_duplicates",
+                "sound_profile",
             )
             if hasattr(self, key)
         }
@@ -2015,6 +2027,7 @@ class ControlCenterApp(
             if visible and self.current_page == "kernel":
                 self._refresh_component_report()
             self._duty_refresh()
+            self._smart_refresh()
             if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             license_state = licensing.status(self.config_mgr.snapshot())

@@ -44,6 +44,8 @@ def validate_rules(rules, scenarios):
             not isinstance(rule.get("path"), str) or not Path(rule["path"]).is_absolute()
         ):
             raise ValueError("Нужен абсолютный путь отслеживаемого файла")
+        if not isinstance(rule.get("match", ""), str) or len(rule.get("match", "")) > 500:
+            raise ValueError("Некорректный фильтр события")
         days = rule.get("weekdays", list(range(7)))
         if not isinstance(days, list) or any(type(v) is not int or v not in range(7) for v in days):
             raise ValueError("Некорректные дни недели правила")
@@ -67,10 +69,20 @@ class EventAutomation:
         now = time.time() if now is None else now
         with self._lock:
             self.runtime.memory.event(kind, payload or {})
+            if hasattr(self.runtime, "smart"):
+                self.runtime.smart.habits.event(kind, payload)
             for rule in self.runtime.settings().get("event_rules", []):
                 if not rule.get("enabled") or rule["event"] != kind:
                     continue
                 if kind == "file_changed" and rule["path"] != (payload or {}).get("path"):
+                    continue
+                if (
+                    rule.get("match")
+                    and rule["match"].casefold()
+                    != str(
+                        (payload or {}).get("process" if kind.startswith("game_") else "device", "")
+                    ).casefold()
+                ):
                     continue
                 if datetime.fromtimestamp(now).weekday() not in rule.get(
                     "weekdays", list(range(7))
@@ -125,6 +137,10 @@ class EventAutomation:
         self._briefing(now)
 
     def _audio_tick(self, now):
+        # The dispatcher already has a bounded device snapshot. It emits the
+        # same events, so the scheduler must not enumerate COM devices again.
+        if self.runtime.settings().get("sound_dispatcher", {}).get("enabled"):
+            return
         rules = self.runtime.settings().get("event_rules", [])
         if (
             not any(r.get("enabled") and r["event"].startswith("headphones_") for r in rules)

@@ -118,6 +118,18 @@ def output_devices():
 def set_default_output(device_id):
     if device_id not in {d["id"] for d in output_devices()}:
         raise ValueError("Выбранное устройство больше не доступно")
+    return set_default_device(device_id)
+
+
+@com_context
+def set_default_device(device_id):
+    from pycaw.pycaw import AudioUtilities
+
+    available = {
+        d.id for d in AudioUtilities.GetAllDevices() if getattr(d.state, "value", d.state) == 1
+    }
+    if device_id not in available:
+        raise ValueError("Выбранное устройство больше не доступно")
     import ctypes
     import comtypes
     from ctypes import wintypes
@@ -154,11 +166,10 @@ def set_default_output(device_id):
     )
     for role in range(3):
         policy.SetDefaultEndpoint(device_id, role)
-    from pycaw.pycaw import AudioUtilities
-
-    if AudioUtilities.GetSpeakers().id != device_id:
+    flow = 1 if str(device_id).startswith("{0.0.1.") else 0
+    if AudioUtilities.GetDeviceEnumerator().GetDefaultAudioEndpoint(flow, 0).GetId() != device_id:
         raise ValueError("Windows не подтвердила смену основного устройства")
-    return "Устройство воспроизведения изменено"
+    return "Устройство звука изменено"
 
 
 @com_context

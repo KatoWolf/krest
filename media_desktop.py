@@ -70,6 +70,16 @@ def _handle(raw):
             from discord_voice import perform
 
             result = perform(payload.get("action", ""))
+        elif operation == "file_context":
+            from object_actions import explorer_selection
+
+            result = explorer_selection()
+        elif operation == "audio_dispatch":
+            from audio_dispatcher import native_snapshot, native_apply
+
+            if payload.get("action") not in {"snapshot", "apply"}:
+                raise MediaError("Неизвестное действие звукового диспетчера")
+            result = native_snapshot() if payload["action"] == "snapshot" else native_apply(data)
         elif operation == "probe":
             with uia_apartment():
                 from pywinauto import Desktop

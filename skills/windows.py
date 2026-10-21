@@ -548,13 +548,18 @@ def restart_windows():
     description="Отменить запланированное выключение или перезапуск",
     category="Windows",
 )
-def cancel_shutdown_windows():
+def cancel_shutdown_windows(state=None):
     import subprocess
 
+    cancelled = ""
+    if state is not None and hasattr(state.runtime, "smart"):
+        cancelled = state.runtime.smart.watches.cancel_power()
     result = subprocess.run(
         ["shutdown.exe", "/a"], capture_output=True, text=True, errors="replace", timeout=5
     )
     if result.returncode:
+        if cancelled:
+            return cancelled + ". В Windows активного таймера выключения нет."
         raise RuntimeError("Нет запланированного выключения или Windows отклонила отмену")
     return "Запланированное выключение или перезапуск отменены."
 

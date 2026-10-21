@@ -18,6 +18,7 @@ FILES = {
     "jobs.sqlite3",
     "inbox.sqlite3",
     "warframe_state.json",
+    "smart_automation.sqlite3",
 }
 MAX_TOTAL = 64 * 1024 * 1024
 
@@ -42,12 +43,18 @@ def create_backup(config, destination, guard=None):
         cfg["event_rules"] = [dict(rule, enabled=False) for rule in cfg.get("event_rules", [])]
         cfg["app_settings"]["downloads_auto_sort"] = False
         cfg["audio_focus"]["enabled"] = False
+        cfg["sound_dispatcher"]["enabled"] = False
         cfg["autonomy"]["enabled"] = False
         atomic_write_json(staging / "config.json", cfg)
         for filename in FILES - {"config.json"}:
             guard()
             source = root / filename
             if not source.exists() or source.is_symlink():
+                continue
+            if filename == "smart_automation.sqlite3":
+                from smart_store import export_settings
+
+                export_settings(source, staging / filename, guard)
                 continue
             if source.stat().st_size > MAX_TOTAL:
                 raise ValueError("Файл слишком большой для резервной копии: " + filename)

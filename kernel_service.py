@@ -189,6 +189,8 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "smart":
+            return rt.smart.call(**args)
         if method == "health":
             return rt.health.call(args["action"])
         if method == "autonomy":

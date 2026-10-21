@@ -9,6 +9,10 @@ QUICK_SKILLS = SHORT_AUDIO_SKILLS | {
     "skills.media.tell_current_playing_track",
     "skills.media.like_track",
     "skills.media.unlike_track",
+    "skills.smart_tools.except_discord",
+    "skills.smart_tools.watches_status",
+    "skills.smart_tools.cancel_watches",
+    "skills.smart_tools.last_screenshot",
 }
 
 

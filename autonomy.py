@@ -38,6 +38,7 @@ KINDS = {
     "verify_version": "Проверка восстановления файла",
     "backup_audit": "Проверка сохранённых версий",
     "downloads": "Разобрать загрузки",
+    "download_rules": "Обработать загрузки по правилам",
     "health": "Проверка подключений",
     "profile_backup": "Копия настроек Крест",
     "restore": "Восстановление версии",
@@ -373,6 +374,8 @@ class AutonomousDuty:
         cfg = self.runtime.settings().get("autonomy", DEFAULT_AUTONOMY)
         app = self.runtime.settings().get("app_settings", {})
         cfg = dict(cfg, downloads=bool(app.get("downloads_auto_sort")))
+        smart = getattr(self.runtime, "smart", None)
+        cfg["download_rules"] = bool(smart and smart.downloads.enabled())
         pending_kinds = {
             r["kind"] for r in self.store.jobs() if r["status"] in {"waiting", "running", "retry"}
         }
@@ -381,6 +384,7 @@ class AutonomousDuty:
             ("health", "health_checks", 1800),
             ("backup_audit", "backup_audit", 86400),
             ("downloads", "downloads", 180),
+            ("download_rules", "download_rules", 180),
         ]:
             if cfg.get(key):
                 # Stable time buckets deduplicate across restarts and AFK sessions.
@@ -489,6 +493,8 @@ class AutonomousDuty:
             }[kind](self, job)
         if kind == "downloads":
             return self._sort_downloads()
+        if kind == "download_rules":
+            return self.runtime.smart.downloads.run(self)
         if kind == "profile_backup":
             from backup_service import create_backup, rehearse_backup
 
@@ -554,6 +560,10 @@ class AutonomousDuty:
         ):
             return "Автосортировка выключена; включите её в разделе файлов."
         policy = settings.get("file_policy", {})
+        # Files covered by a workflow stay in place until its verified copy
+        # and optional extraction finish; the old sorter must not race it.
+        smart = getattr(self.runtime, "smart", None)
+        reserved = smart.downloads.rules() if smart else []
         folders = list(
             dict.fromkeys(
                 f for f in [cfg.get("downloads_path", ""), *policy.get("folders", [])] if f
@@ -575,7 +585,18 @@ class AutonomousDuty:
 
         for folder, sorter in self._download_sorters.items():
             self.guard()
-            sorter.policy = policy
+            sorter.policy = dict(
+                policy,
+                exclusions=[
+                    *policy.get("exclusions", []),
+                    *[
+                        pattern.strip()
+                        for r in reserved
+                        if r["enabled"] and Path(r["source"]) == Path(folder)
+                        for pattern in r["pattern"].split(";")
+                    ],
+                ],
+            )
             try:
                 item = sorter.scan(folder, stop=Stop())
                 result["moved"] += item["moved_count"]

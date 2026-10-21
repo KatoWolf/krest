@@ -18,6 +18,8 @@ class AudioFocus:
         self.last_tick = 0
         self.error = ""
         self.recovered = False
+        self.call_active = False
+        self.manual_except = None
 
     def port(self):
         if self.backend is None:
@@ -28,7 +30,11 @@ class AudioFocus:
 
     def _apply(self):
         cfg = self.settings().get("audio_focus", {})
-        factor = min(self.reasons.values(), default=1) if cfg.get("enabled") else 1
+        factor = (
+            min(self.reasons.values(), default=1)
+            if cfg.get("enabled") or self.call_active or self.manual_except is not None
+            else 1
+        )
         if factor == 1 and not self.owned and (self.recovered or not self.path.exists()):
             # No pending restore and no ducking: avoid COM enumeration and an
             # empty journal write on every tick, even with the mixer enabled.
@@ -65,7 +71,11 @@ class AudioFocus:
                 self.ignored.add(key)
         for key, current in sessions.items():
             row = self.owned.get(key)
-            selected = current["name"].casefold() in names
+            selected = (
+                current["name"].casefold() in names
+                if self.manual_except is None
+                else current["name"].casefold() not in self.manual_except
+            )
             if not row and (factor == 1 or not selected or key in self.ignored):
                 continue
             row = row or {"before": current["volume"], "applied": current["volume"]}
@@ -99,7 +109,11 @@ class AudioFocus:
             self.last_tick = time.monotonic()
             cfg = self.settings().get("audio_focus", {})
             self.reasons.pop("profile", None)
-            mode = ("game" if gaming else "normal") if self.mode == "auto" else self.mode
+            mode = (
+                ("call" if self.call_active else "game" if gaming else "normal")
+                if self.mode == "auto"
+                else self.mode
+            )
             if mode in ("game", "call"):
                 self.reasons["profile"] = cfg.get(mode + "_percent", 35) / 100
             try:
@@ -110,12 +124,19 @@ class AudioFocus:
     def set_mode(self, mode, gaming=False):
         if mode not in ("auto", "normal", "game", "call"):
             raise ValueError("Неизвестный профиль звука")
-        self.mode = mode
-        self.tick(gaming, True)
-        if not self.settings().get("audio_focus", {}).get("enabled"):
-            return "Включите автоматический микшер в «Программы и звук» и выберите приложения."
-        if self.error:
-            raise ValueError(self.error)
+        with self.lock:
+            restoring = mode == "normal" and bool(self.owned or self.manual_except)
+            self.mode = mode
+            if mode == "normal":
+                self.manual_except = None
+                self.reasons.pop("except", None)
+            self.tick(gaming, True)
+            if self.error:
+                raise ValueError(self.error)
+            if restoring:
+                return "Обычная громкость восстановлена; ручные изменения сохранены."
+            if not self.settings().get("audio_focus", {}).get("enabled") and not self.call_active:
+                return "Включите автоматический микшер в «Программы и звук» и выберите приложения."
         return (
             "Профиль звука: "
             + {"auto": "автоматический", "normal": "обычный", "game": "игра", "call": "звонок"}[
@@ -147,6 +168,7 @@ class AudioFocus:
 
     def close(self):
         with self.lock:
+            self.manual_except = None
             self.reasons.clear()
             try:
                 self._apply()

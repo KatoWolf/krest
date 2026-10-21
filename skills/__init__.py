@@ -2,6 +2,7 @@
 
 BUILTIN_MODULES = (
     "autonomy",
+    "smart_tools",
     "assistant_tools",
     "personal_tools",
     "basic",

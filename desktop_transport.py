@@ -85,12 +85,14 @@ class DesktopPipe:
                 ) from exc
 
 
-def request(payload):
+def request(payload, timeout=12):
     # Separate Discord from music: a stalled player must not block the microphone.
-    domain = "discord" if payload["operation"] == "discord_voice" else "music"
+    domain = {"discord_voice": "discord", "file_context": "files", "audio_dispatch": "audio"}.get(
+        payload["operation"], "music"
+    )
     with _lock:
         client = _clients.setdefault(domain, DesktopPipe())
-    return client.call(payload)
+    return client.call(payload, timeout=timeout)
 
 
 def close():

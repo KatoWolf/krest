@@ -115,6 +115,9 @@ class AssistantRuntime:
         from autonomy import AutonomousDuty
 
         self.autonomy = AutonomousDuty(self, data_dir)
+        from smart_tools import SmartTools
+
+        self.smart = SmartTools(self, data_dir)
         self._threads = []
         self._voice_thread = None
         self._voice_control = threading.Lock()
@@ -213,6 +216,7 @@ class AssistantRuntime:
         for thread in self._threads:
             thread.start()
         self.autonomy.start()
+        self.smart.start()
         self.warframe.start()
         cfg = self.settings()
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
@@ -667,6 +671,10 @@ class AssistantRuntime:
 
     def _finish_command(self, result, learning, source, wake, observed):
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
+        if result.success:
+            self.smart.habits.observe(
+                getattr(self._job_local, "executed_command", ""), result.skill_id, source
+            )
         if result.success and learning:
             self.understanding.remember(learning)
         if source == "voice":
@@ -1225,6 +1233,7 @@ class AssistantRuntime:
         voice.stop_speaking()
 
     def close(self):
+        self.smart.close()
         self.autonomy.close()
         self.verifier.closed.set()
         self.audio_focus.close()

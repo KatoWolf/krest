@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "schema_version": 2,
     "autonomy": DEFAULT_AUTONOMY,
     "autonomy_idle_revision": 1,
+    "smart_tools": {"learn_routines": True},
+    "sound_dispatcher": {"enabled": False, "auto_calls": True, "restore_devices": True},
     "warframe": DEFAULT_WARFRAME,
     "owner_name": "",
     "profile": {"onboarding_completed": False, "personality": "friendly"},
@@ -217,6 +219,14 @@ def merge(default, values):
 
 
 def validate(data):
+    for section, names in {
+        "smart_tools": ("learn_routines",),
+        "sound_dispatcher": ("enabled", "auto_calls", "restore_devices"),
+    }.items():
+        if not isinstance(data.get(section), dict) or any(
+            type(data[section].get(k)) is not bool for k in names
+        ):
+            raise ValueError("Некорректные переключатели автоматизации: " + section)
     clips = data["clipboard"]
     if (
         type(clips["enabled"]) is not bool

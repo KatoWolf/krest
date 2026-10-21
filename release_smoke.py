@@ -16,6 +16,7 @@ def check_kernel(config_path):
     check_capture_efficiency()
     check_game_detection()
     check_expansion()
+    check_smart_automation()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -117,6 +118,10 @@ def check_kernel(config_path):
             ("крест статус дежурства", "skills.autonomy.duty_status"),
             ("крест останови дежурство", "skills.autonomy.duty_pause"),
             ("крест продолжи дежурство", "skills.autonomy.duty_resume"),
+            ("крест упакуй это", "skills.smart_tools.pack_selection"),
+            ("крест следи за загрузками сюда", "skills.smart_tools.watch_folder"),
+            ("крест сообщи когда скачается варф", "skills.smart_tools.watch_game"),
+            ("крест приглуши все кроме дискорда", "skills.smart_tools.except_discord"),
         ):
             parsed = client.call("command.parse", text=phrase)
             if parsed["skill"] != expected:
@@ -128,6 +133,9 @@ def check_kernel(config_path):
         duty = client.call("autonomy", action="snapshot")
         if duty["jobs"] or duty["activity"]["allowed"]:
             raise RuntimeError("Дежурство не должно запускаться в безопасном режиме")
+        smart = client.call("smart", action="snapshot")
+        if smart["watches"] or smart["downloads"]:
+            raise RuntimeError("Новый профиль содержит чужие наблюдения или правила")
         task = client.call("autonomy", action="enqueue", kind="profile_backup")
         client.call("autonomy", action="cancel", id=task["id"])
         duty = client.call("autonomy", action="snapshot")
@@ -677,6 +685,15 @@ def check_dependencies():
             raise RuntimeError("Помощник плеера не вернул результат UI Automation")
         from desktop_transport import close
 
+        context = request("file_context")
+        if not isinstance(context.get("paths"), list) or not isinstance(context.get("folder"), str):
+            raise RuntimeError("Проводник не вернул корректный контекст файлов")
+        from desktop_transport import request as desktop_request
+
+        sound = desktop_request({"operation": "audio_dispatch", "action": "snapshot"}, timeout=10)
+        if sound.get("error") or not isinstance(sound.get("result", {}).get("devices"), list):
+            raise RuntimeError("Не работает чтение звуковых устройств: " + str(sound.get("error")))
+
         close()
         print("UI Automation: повторные запросы к помощнику проверены без нажатий.", flush=True)
         check_menu_surface()
@@ -821,6 +838,175 @@ def check_menu_surface():
         print("Меню: шрифт, кнопки и границы прокрутки проверены.", flush=True)
     finally:
         root.destroy()
+
+
+def check_smart_automation():
+    """Ship meaningful new-feature regressions with source and frozen builds."""
+    import copy
+    import os
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    import threading
+    import zipfile
+
+    from configuration import ConfigManager
+    from skill_manager import SkillManager
+    from autonomy import AutonomousDuty
+    from autonomy_files import Paused
+    from audio_focus import AudioFocus
+    from smart_tools import SmartTools
+
+    with TemporaryDirectory(prefix="krest-automation-") as folder:
+        root = Path(folder)
+        config = ConfigManager(root / "config.json")
+        cfg = config.snapshot()
+        cfg["autonomy"].update(profile_backup=False, health_checks=False, backup_audit=False)
+        config.save_config(cfg)
+        gate = SimpleNamespace(
+            allowed=True,
+            permitted=lambda: gate.allowed,
+            snapshot=lambda: {"allowed": gate.allowed, "reason": "test"},
+            close=lambda: None,
+        )
+        notices = []
+        rt = SimpleNamespace(
+            settings=config.snapshot,
+            config_manager=config,
+            command_stop=threading.Event(),
+            stop_event=threading.Event(),
+            performance=SimpleNamespace(game=""),
+            publish_notice=lambda text, *a, **kw: notices.append(text),
+            manager=SkillManager(config.snapshot),
+        )
+        rt.autonomy = AutonomousDuty(rt, root, gate=gate)
+        sound = {
+            "devices": [{"id": "speaker", "name": "Speakers"}],
+            "output": "speaker",
+            "input": "",
+            "call": False,
+            "sessions": [
+                {"id": "music", "name": "YandexMusic.exe", "volume": 0.8},
+                {"id": "discord", "name": "Discord.exe", "volume": 0.6},
+            ],
+        }
+
+        def write_volume(ident, value):
+            next(s for s in sound["sessions"] if s["id"] == ident)["volume"] = value
+
+        rt.audio_focus = AudioFocus(
+            config.snapshot,
+            root / "sound.json",
+            backend=(lambda: copy.deepcopy(sound["sessions"]), write_volume),
+        )
+        rt.smart = SmartTools(rt, root)
+        try:
+            source, destination = root / "Downloads", root / "Ready"
+            source.mkdir()
+            destination.mkdir()
+            path = source / "example.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("folder/file.txt", b"verified")
+            os.utime(path, (1, 1))
+            rt.smart.objects.probe = lambda: {"paths": [str(path)], "folder": str(source)}
+            rt.smart.objects.pack()
+            with zipfile.ZipFile(next((root / "archives").glob("*.zip"))) as archive:
+                if archive.read(path.name) != path.read_bytes():
+                    raise RuntimeError("Упаковка выбранного файла изменила содержимое")
+            rt.smart.downloads.add(source, destination)
+            gate.allowed = False
+            try:
+                rt.smart.downloads.run(rt.autonomy)
+            except Paused:
+                pass
+            else:
+                raise RuntimeError("Правило загрузок обошло AFK")
+            gate.allowed = True
+            rt.smart.downloads.run(rt.autonomy)
+            if list(destination.iterdir()):
+                raise RuntimeError("Правило обработало нестабильную загрузку")
+            rt.smart.downloads.observed = {
+                k: (v[0], v[1] - 121) for k, v in rt.smart.downloads.observed.items()
+            }
+            rt.smart.downloads.run(rt.autonomy)
+            if (
+                next(destination.glob("example-*/folder/file.txt")).read_bytes() != b"verified"
+                or not path.exists()
+            ):
+                raise RuntimeError("ZIP не распакован или потерян исходник")
+            before = len(list(destination.iterdir()))
+            rt.smart.downloads.run(rt.autonomy)
+            if before != len(list(destination.iterdir())):
+                raise RuntimeError("Правило повторно обработало готовый файл")
+
+            manifest = root / "appmanifest_230410.acf"
+            manifest.write_text('"appid" "230410" "StateFlags" "516"', encoding="utf-8")
+            watch = rt.smart.watches.add("steam", manifest, "Warframe")["id"]
+            rt.smart.watches.tick(10)
+            if rt.smart.store.get("watches", watch)["status"] != "watching":
+                raise RuntimeError("Пауза Steam принята за завершение")
+            manifest.write_text('"appid" "230410" "StateFlags" "4"', encoding="utf-8")
+            rt.smart.watches.tick(20)
+            rt.smart.watches.tick(30)
+            count = len(notices)
+            rt.smart.watches.tick(40)
+            if (
+                rt.smart.store.get("watches", watch)["status"] != "completed"
+                or len(notices) != count
+            ):
+                raise RuntimeError("Наблюдение не завершилось или повторило уведомление")
+
+            def audio_backend(action, data):
+                if action == "snapshot":
+                    return copy.deepcopy(sound)
+                for row in data["sessions"]:
+                    write_volume(row["id"], row["volume"])
+                return {"confirmed": True}
+
+            rt.smart.audio.backend = audio_backend
+            rt.smart.call("settings", section="sound_dispatcher", options={"enabled": True})
+            rt.smart.audio.capture("normal")
+            sound["call"] = True
+            rt.smart.audio.tick(100)
+            if (
+                abs(sound["sessions"][0]["volume"] - 0.16) > 0.001
+                or sound["sessions"][1]["volume"] != 0.6
+            ):
+                raise RuntimeError("Приглушение звонка изменило Discord или не изменило музыку")
+            sound["call"] = False
+            rt.smart.audio.tick(110)
+            rt.smart.audio.tick(120)
+            if sound["sessions"][0]["volume"] != 0.8:
+                raise RuntimeError("Громкость после звонка не восстановилась")
+            learner = rt.smart.habits
+            for index in range(3):
+                now = time.monotonic()
+                learner.event("game_started", {"process": "CS2"}, now=now)
+                learner.active["wall"] = 10000 + index * 1000
+                learner.observe("открой яндекс музыку", "skills.media.open_yandex_music", "voice")
+                learner.observe("громкость 30", "skills.media.set_exact_volume", "voice")
+                learner.observe("выключи компьютер", "skills.windows.shutdown_windows", "voice")
+                learner.tick(now + 181)
+            proposal = rt.smart.store.rows("habits")[0]
+            if (
+                proposal["status"] != "suggested"
+                or len(proposal["steps"]) != 2
+                or config.snapshot()["event_rules"]
+            ):
+                raise RuntimeError(
+                    "Привычка включилась без просмотра или захватила лишнее действие"
+                )
+            learner.activate(proposal["id"])
+            if config.snapshot()["event_rules"][-1]["match"] != "CS2":
+                raise RuntimeError("Автоматизация потеряла точную игру")
+        finally:
+            rt.smart.close()
+            rt.audio_focus.close()
+            rt.autonomy.close()
+    print(
+        "Selected files, AFK workflows, Steam watches, audio restore and reviewed habits passed.",
+        flush=True,
+    )
 
 
 def check_duty():
