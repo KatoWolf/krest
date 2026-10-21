@@ -10,13 +10,14 @@ from storage import atomic_write_json, read_json
 MODES = {"auto", "balanced", "game", "economy"}
 # Steam also installs desktop software. A manifest or a process under
 # steamapps/common alone does not establish that a game is running.
-DESKTOP_APP_IDS = {"431960", "993090", "228980", "250820"}
+DESKTOP_APP_IDS = {"431960", "993090", "228980", "250820", "400040"}
 DESKTOP_FOLDERS = {
     "wallpaper_engine",
     "wallpaper engine",
     "lossless scaling",
     "steamworks shared",
     "steamvr",
+    "sharex",
 }
 BACKGROUND_PROCESSES = {
     "steam.exe",
@@ -30,6 +31,7 @@ BACKGROUND_PROCESSES = {
     "vrserver.exe",
     "vrcompositor.exe",
     "vrmonitor.exe",
+    "sharex.exe",
 }
 
 
@@ -139,7 +141,8 @@ class PerformancePolicy:
                 str(game.get("appid", "")) in DESKTOP_APP_IDS
                 or str(game.get("type", "")).casefold()
                 in {"application", "software", "tool", "dlc"}
-                or str(game["install_dir"]).casefold() in DESKTOP_FOLDERS
+                or str(game["install_dir"]).strip().casefold() in DESKTOP_FOLDERS
+                or str(game.get("name", "")).strip().casefold() in DESKTOP_FOLDERS
             ):
                 continue
             parent = Path(game["library"]) / "steamapps" / "common"

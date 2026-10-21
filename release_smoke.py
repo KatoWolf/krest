@@ -432,6 +432,37 @@ def check_game_detection():
                 raise RuntimeError("Игра из библиотеки Steam не обнаружена по папке")
             if helper.exe.called or other.exe.call_count != 1:
                 raise RuntimeError("Проверка Steam читает пути фоновых процессов")
+        # A screenshot utility installed via Steam is still desktop software,
+        # including its ffmpeg child. It must not keep the AFK gate in game mode.
+        policy.update_games(
+            [
+                {
+                    "appid": "400040",
+                    "name": "ShareX",
+                    "installed": True,
+                    "library": str(root),
+                    "install_dir": "ShareX",
+                }
+            ]
+        )
+        sharex = SimpleNamespace(
+            info={"name": "ShareX.exe"},
+            exe=Mock(return_value=str(root / "steamapps/common/ShareX/ShareX.exe")),
+        )
+        encoder = SimpleNamespace(
+            info={"name": "ffmpeg.exe"},
+            exe=Mock(return_value=str(root / "steamapps/common/ShareX/ffmpeg.exe")),
+        )
+        with patch("performance.psutil.process_iter", return_value=[sharex, encoder]):
+            policy.game = "ShareX"  # Also clear an earlier cached classification.
+            policy.refresh_activity(force=True)
+            if policy.game or policy.defer_files or policy._detect_game({"sharex.exe"}) != ("", ""):
+                raise RuntimeError("ShareX ошибочно блокирует дежурство как игра")
+            if sharex.exe.called or encoder.exe.called:
+                raise RuntimeError("Утилита Steam добавила лишнее чтение путей")
+        with patch("performance.psutil.process_iter", return_value=[sharex, known]):
+            if policy._detect_game({"cs2.exe"}) != ("cs2.exe", "cs2.exe"):
+                raise RuntimeError("Исключение ShareX скрыло настоящую игру")
 
 
 def check_idle_protocol():
