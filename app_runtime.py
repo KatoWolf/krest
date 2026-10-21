@@ -913,16 +913,20 @@ class AssistantRuntime:
             "cancel_scenario_draft",
         )
 
-    def start_voice(self):
-        if self.stop_event.is_set():
-            return
-        if self._voice_thread and self._voice_thread.is_alive():
-            return
-        self._voice_stop.clear()
-        self._voice_thread = threading.Thread(
-            target=self._voice_loop, daemon=True, name="krest-listen"
-        )
-        self._voice_thread.start()
+    def start_voice(self, *, recovery=False):
+        # Serialize intent with the stop button. A delayed recovery must not
+        # clear a pause the user requested while diagnosis was running.
+        with self._request_lock:
+            if self.stop_event.is_set() or (recovery and self._voice_stop.is_set()):
+                return False
+            if self._voice_thread and self._voice_thread.is_alive():
+                return False
+            self._voice_stop.clear()
+            self._voice_thread = threading.Thread(
+                target=self._voice_loop, daemon=True, name="krest-listen"
+            )
+            self._voice_thread.start()
+            return True
 
     def _voice_loop(self):
         from audio_scheduling import recognition_priority
@@ -1213,10 +1217,11 @@ class AssistantRuntime:
         self.start_voice()
 
     def stop_voice(self):
-        self.voice_context.clear()
-        self._voice_stop.set()
-        self._arm_requested.clear()
-        self._active_until = 0
+        with self._request_lock:
+            self.voice_context.clear()
+            self._voice_stop.set()
+            self._arm_requested.clear()
+            self._active_until = 0
         voice.stop_speaking()
 
     def close(self):

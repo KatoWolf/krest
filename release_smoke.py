@@ -990,6 +990,23 @@ def check_expansion():
         health.check(("bots",), repair=False)
         if health.snapshot()["components"]["bot:demo.py"]["state"] != "unknown":
             raise RuntimeError("Running bot was mistaken for a confirmed connection")
+        from app_runtime import AssistantRuntime
+        from unittest.mock import patch
+
+        previous = SimpleNamespace(is_alive=lambda: False)
+        rt._voice_thread = previous
+        rt._voice_stop = threading.Event()
+        rt._request_lock = threading.RLock()
+        rt._arm_requested = threading.Event()
+        rt.voice_context = context
+        rt._voice_loop = lambda: None
+        rt.start_voice = lambda **kw: AssistantRuntime.start_voice(rt, **kw)
+        with patch("voice.stop_speaking"):
+            # User presses Stop after diagnosis, immediately before recovery.
+            health._allow_repair = lambda key: AssistantRuntime.stop_voice(rt) or True
+            health.check(("voice",))
+        if rt._voice_thread is not previous or not rt._voice_stop.is_set():
+            raise RuntimeError("Recovery re-enabled a microphone just paused by its owner")
     if os.name == "nt" and not getattr(sys, "frozen", False):
         process = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(30)"],

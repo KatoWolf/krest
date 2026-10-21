@@ -121,10 +121,18 @@ class ComponentHealth:
         data = voice.telemetry()
         if not rt._voice_thread.is_alive():
             if repair and self._allow_repair("voice"):
-                rt.start_voice()
-                self._record(
-                    "voice", "recovering", "Голос: перезапущен поток; ожидаю свежий звук микрофона."
-                )
+                if rt.start_voice(recovery=True):
+                    self._record(
+                        "voice",
+                        "recovering",
+                        "Голос: перезапущен поток; ожидаю свежий звук микрофона.",
+                    )
+                else:
+                    self._record(
+                        "voice",
+                        "stopped",
+                        "Голос: восстановление отменено — состояние изменилось во время проверки.",
+                    )
             else:
                 self._record(
                     "voice",
