@@ -480,6 +480,11 @@ class SmartPages:
         tree = getattr(self, name, None)
         if tree is None or not tree.winfo_exists():
             return
+        if not hasattr(tree, "_smart_max_height"):
+            tree._smart_max_height = int(tree.cget("height"))
+        height = min(tree._smart_max_height, max(1, len(rows)))
+        if int(tree.cget("height")) != height:
+            tree.configure(height=height)
         keys = {ident for ident, _ in rows}
         for ident in tree.get_children():
             if ident not in keys:
