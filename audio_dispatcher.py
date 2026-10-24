@@ -93,6 +93,8 @@ class AudioDispatcher:
         if profile not in PROFILE_NAMES:
             raise ValueError("Неизвестный звуковой профиль")
         with self.lock, self.runtime.audio_focus.lock:
+            if not self.runtime.audio_focus.recovered:
+                self.runtime.audio_focus._apply()
             current = self.port("snapshot")
             if not current["devices"]:
                 raise ValueError("Windows не обнаружила доступных устройств звука")
@@ -135,33 +137,38 @@ class AudioDispatcher:
         current = current or self.port("snapshot")
         focus = self.runtime.audio_focus
         with focus.lock:
-            reasons = dict(focus.reasons)
-            focus.reasons.clear()
-            try:
+            if not focus.recovered:
                 focus._apply()
-                groups = {}
-                for session in current["sessions"]:
-                    groups.setdefault(session["name"].casefold(), []).append(session)
-                changes = [
-                    {"id": sessions[0]["id"], "volume": volume}
-                    for name, volume in row["levels"].items()
-                    if len(sessions := groups.get(name, [])) == 1
-                    and (not only_new or sessions[0]["id"] not in self.seen_sessions)
-                ]
-                available = {d["id"] for d in current["devices"]}
-                cfg = self.runtime.settings().get("sound_dispatcher", {})
-                devices = [
-                    row[k]
-                    for k in ("output", "input")
-                    if not only_new
-                    and cfg.get("restore_devices", True)
-                    and row.get(k) in available
-                    and current.get(k) != row[k]
-                ]
-                self.port("apply", {"sessions": changes, "devices": devices})
-            finally:
-                focus.reasons.update(reasons)
-                focus._apply()
+            groups = {}
+            for session in current["sessions"]:
+                groups.setdefault(session["name"].casefold(), []).append(session)
+            changes = [
+                {"id": sessions[0]["id"], "volume": volume}
+                for name, volume in row["levels"].items()
+                if len(sessions := groups.get(name, [])) == 1
+                and (not only_new or sessions[0]["id"] not in self.seen_sessions)
+                and abs(
+                    focus.owned.get(sessions[0]["id"], {}).get("before", sessions[0]["volume"])
+                    - volume
+                )
+                > 0.005
+            ]
+            available = {d["id"] for d in current["devices"]}
+            cfg = self.runtime.settings().get("sound_dispatcher", {})
+            devices = [
+                row[k]
+                for k in ("output", "input")
+                if not only_new
+                and cfg.get("restore_devices", True)
+                and row.get(k) in available
+                and current.get(k) != row[k]
+            ]
+            if changes or devices:
+                focus.release_sessions(None if devices else [s["id"] for s in changes])
+                try:
+                    self.port("apply", {"sessions": changes, "devices": devices})
+                finally:
+                    focus._apply()
         self.seen_sessions = {s["id"] for s in current["sessions"]}
         self.status = "Звук: " + PROFILE_NAMES[profile]
         return self.status
@@ -181,6 +188,7 @@ class AudioDispatcher:
         with self.lock:
             try:
                 current = self.port("snapshot")
+                was_call = focus.call_active
                 self.call_streak = self.call_streak + 1 if current["call"] else 0
                 self.no_call_streak = self.no_call_streak + 1 if not current["call"] else 0
                 # End-of-call hysteresis prevents volume pumping between capture gaps.
@@ -231,16 +239,15 @@ class AudioDispatcher:
                     and any(s["id"] not in self.seen_sessions for s in current["sessions"])
                 ):
                     self.apply(self.profile, current, only_new=True)
-                focus.tick(bool(self.runtime.performance.game), force=True)
+                focus.tick(bool(self.runtime.performance.game), force=was_call != focus.call_active)
             except Exception as exc:
                 self.status = "Звуковой диспетчер: " + str(exc)[:200]
 
 
 def native_apply(data):
-    from windows_audio import focus_set, set_default_device
+    from windows_audio import focus_set_many, set_default_device
 
     for device in data.get("devices", []):
         set_default_device(device)
-    for row in data.get("sessions", []):
-        focus_set(row["id"], float(row["volume"]))
+    focus_set_many(data.get("sessions", []))
     return {"confirmed": True}

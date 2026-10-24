@@ -191,13 +191,29 @@ def focus_sessions():
 
 @com_context
 def focus_set(ident, volume):
-    from pycaw.pycaw import AudioUtilities
+    return focus_set_many.__wrapped__([{"id": ident, "volume": volume}])
 
+
+@com_context
+def focus_set_many(changes):
+    """Enumerate once for a profile, and do not write unchanged volumes."""
+    from pycaw.pycaw import AudioUtilities
+    import math
+
+    targets = {row["id"]: float(row["volume"]) for row in changes}
+    if any(not math.isfinite(value) or not 0 <= value <= 1 for value in targets.values()):
+        raise ValueError("Некорректная громкость аудиосессии")
+    if not targets:
+        return
     for session in AudioUtilities.GetAllSessions():
-        if session.InstanceIdentifier == ident:
+        ident = session.InstanceIdentifier
+        if ident in targets:
+            volume = targets[ident]
             control = session.SimpleAudioVolume
-            control.SetMasterVolume(max(0, min(1, float(volume))), None)
+            if abs(control.GetMasterVolume() - volume) > 0.005:
+                control.SetMasterVolume(volume, None)
             if abs(control.GetMasterVolume() - volume) > 0.011:
                 raise ValueError("Приложение не подтвердило громкость")
-            return
-    raise ValueError("Аудиосессия закрыта")
+            targets.pop(ident)
+    if targets:
+        raise ValueError("Аудиосессия закрыта")

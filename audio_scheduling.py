@@ -1,4 +1,8 @@
-"""Give the recognition thread Windows' bounded audio scheduling, not the whole app."""
+"""Keep inference out of Windows' real-time audio scheduling class.
+
+PortAudio schedules the capture callback. Decoding and synthesis are ordinary
+CPU work and must not compete with the audio engine at MMCSS Audio priority.
+"""
 
 from contextlib import contextmanager
 import sys
@@ -12,32 +16,47 @@ def status():
 
 
 @contextmanager
-def recognition_priority():
-    handle = None
-    api = None
+def _thread_priority(priority, label):
+    api = handle = previous = None
+    changed = False
+    old_status = status()
     _local.status = "standard"
     if sys.platform == "win32":
         try:
             import ctypes
             from ctypes import wintypes
 
-            api = ctypes.WinDLL("avrt", use_last_error=True)
-            api.AvSetMmThreadCharacteristicsW.argtypes = [
-                wintypes.LPCWSTR,
-                ctypes.POINTER(wintypes.DWORD),
-            ]
-            api.AvSetMmThreadCharacteristicsW.restype = wintypes.HANDLE
-            api.AvRevertMmThreadCharacteristics.argtypes = [wintypes.HANDLE]
-            api.AvRevertMmThreadCharacteristics.restype = wintypes.BOOL
-            index = wintypes.DWORD()
-            handle = api.AvSetMmThreadCharacteristicsW("Audio", ctypes.byref(index))
-            if handle:
-                _local.status = "windows_audio"
+            api = ctypes.WinDLL("kernel32", use_last_error=True)
+            api.GetCurrentThread.argtypes = []
+            api.GetCurrentThread.restype = wintypes.HANDLE
+            api.GetThreadPriority.argtypes = [wintypes.HANDLE]
+            api.GetThreadPriority.restype = ctypes.c_int
+            api.SetThreadPriority.argtypes = [wintypes.HANDLE, ctypes.c_int]
+            api.SetThreadPriority.restype = wintypes.BOOL
+            handle = api.GetCurrentThread()
+            previous = api.GetThreadPriority(handle)
+            if previous != 0x7FFFFFFF:
+                changed = previous != priority and bool(api.SetThreadPriority(handle, priority))
+                if previous == priority or changed:
+                    _local.status = label
         except (OSError, AttributeError):
-            pass  # MMCSS can be unavailable; ordinary capture still works.
+            pass
     try:
         yield status()
     finally:
-        if handle:
-            api.AvRevertMmThreadCharacteristics(handle)
-        _local.status = "standard"
+        if changed:
+            api.SetThreadPriority(handle, previous)
+        _local.status = old_status
+
+
+def recognition_priority():
+    return _thread_priority(0, "windows_normal")
+
+
+@contextmanager
+def synthesis_priority(gaming):
+    if gaming:
+        with _thread_priority(-1, "windows_background"):
+            yield
+    else:
+        yield

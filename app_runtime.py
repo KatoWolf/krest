@@ -772,6 +772,7 @@ class AssistantRuntime:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
                 game = self.performance.game
+                voice.set_game_mode(bool(game))
                 self.game_sessions.tick(game)
                 if game != getattr(self, "_package_game", ""):
                     self.manager.packages.event(
@@ -834,7 +835,12 @@ class AssistantRuntime:
         scanned_at = -1e9
         while not self.stop_event.is_set():
             try:
-                if os.name == "nt" and time.monotonic() - scanned_at >= 600:
+                self.performance.refresh_activity()
+                if (
+                    os.name == "nt"
+                    and not self.performance.game
+                    and time.monotonic() - scanned_at >= 600
+                ):
                     scanned_at = time.monotonic()
                     rows = scan_apps()
                     if rows and not self.stop_event.is_set():

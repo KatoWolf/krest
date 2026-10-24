@@ -20,6 +20,30 @@ class AudioFocus:
         self.recovered = False
         self.call_active = False
         self.manual_except = None
+        self._saved_ledger = None
+
+    def _persist(self, ledger):
+        # Keep write-ahead recovery, but do not replace/fsync an unchanged file
+        # every time a game or a call is polled.
+        snapshot = {key: dict(row) for key, row in ledger.items()}
+        if snapshot != self._saved_ledger:
+            atomic_write_json(self.path, snapshot)
+            self._saved_ledger = snapshot
+
+    def release_sessions(self, identifiers=None):
+        """Restore only profile targets; leave other playing sessions ducked."""
+        with self.lock:
+            keys = set(self.owned) if identifiers is None else set(identifiers)
+            if keys & self.owned.keys():
+                read, write = self.port()
+                current = {row["id"]: row for row in read()}
+                for key in keys & self.owned.keys():
+                    row = self.owned[key]
+                    if key in current and self._matches(current[key]["volume"], row):
+                        write(key, row["before"])
+                    self.owned.pop(key)
+                    self._persist(self.owned)
+            self.ignored.difference_update(keys)
 
     def port(self):
         if self.backend is None:
@@ -61,7 +85,7 @@ class AudioFocus:
                     write(key, row["before"])
                     current["volume"] = row["before"]
             # Leave the previous ledger intact if even one restore fails.
-            atomic_write_json(self.path, {})
+            self._persist({})
             self.recovered = True
         names = {v.strip().casefold() for v in cfg.get("applications", "").split(",") if v.strip()}
         for key, row in list(self.owned.items()):
@@ -85,7 +109,7 @@ class AudioFocus:
                 # process/backend fails halfway through SetMasterVolume.
                 row = {"before": row["before"], "applied": target, "previous": current["volume"]}
                 self.owned[key] = row
-                atomic_write_json(self.path, self.owned)
+                self._persist(self.owned)
                 write(key, target)
             row.pop("previous", None)
             row["applied"] = target
@@ -95,7 +119,7 @@ class AudioFocus:
                 self.owned[key] = row
         if factor == 1:
             self.ignored.clear()
-        atomic_write_json(self.path, self.owned)
+        self._persist(self.owned)
         self.error = ""
 
     @staticmethod

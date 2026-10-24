@@ -290,8 +290,9 @@ def check_models(settings):
     if samples.size < 240 or not np.isfinite(samples).all() or not np.any(samples):
         raise RuntimeError("Синтез в сборке не вернул корректный звук")
     print("Vosk (включая русский путь) и синтез Silero проверены без микрофона и динамиков.")
-    from speech_check import check
+    from speech_check import check, check_partial_cost
 
+    check_partial_cost(engine, samples)
     check(engine)
     check_idle_audio(engine)
     check_audio_conversion()
@@ -360,6 +361,11 @@ def check_runtime_efficiency():
         focus.tick(gaming=True, force=True)
         if sessions[0]["volume"] != 0.4:
             raise RuntimeError("Микшер не приглушил музыку после простоя")
+        journal = focus.path.stat().st_mtime_ns
+        for _ in range(10):
+            focus.tick(gaming=True, force=True)
+        if focus.path.stat().st_mtime_ns != journal:
+            raise RuntimeError("Неизменённое приглушение переписывает журнал восстановления")
         focus.tick(force=True)
         if sessions[0]["volume"] != 0.8:
             raise RuntimeError("Микшер не восстановил громкость")
@@ -664,10 +670,15 @@ def check_dependencies():
         if idle < 0 or not isinstance(busy, str):
             raise RuntimeError("Проверка AFK не вернула состояние Windows")
         print("AFK: native input, media, audio/capture and fullscreen probes verified.", flush=True)
-        from audio_scheduling import recognition_priority, status
+        from audio_scheduling import recognition_priority, synthesis_priority, status
 
         with recognition_priority() as scheduling:
+            if scheduling != "windows_normal":
+                raise RuntimeError("Не удалось установить обычный приоритет распознавания")
             print("Планировщик распознавания: " + scheduling, flush=True)
+        with synthesis_priority(True):
+            if status() != "windows_background":
+                raise RuntimeError("Не удалось понизить приоритет синтеза в игре")
         if status() != "standard":
             raise RuntimeError("Приоритет потока не освобождён после проверки")
         from concurrent.futures import ThreadPoolExecutor
@@ -891,7 +902,10 @@ def check_smart_automation():
             ],
         }
 
+        sound_writes = []
+
         def write_volume(ident, value):
+            sound_writes.append((ident, value))
             next(s for s in sound["sessions"] if s["id"] == ident)["volume"] = value
 
         rt.audio_focus = AudioFocus(
@@ -973,9 +987,16 @@ def check_smart_automation():
                 or sound["sessions"][1]["volume"] != 0.6
             ):
                 raise RuntimeError("Приглушение звонка изменило Discord или не изменило музыку")
+            rt.smart.audio.capture("call")
+            rt.smart.audio.tick(106)
+            sound_writes.clear()
+            sound["sessions"].append({"id": "browser", "name": "browser.exe", "volume": 0.9})
+            rt.smart.audio.tick(112)
+            if sound_writes:
+                raise RuntimeError("Посторонняя аудиосессия повторно изменила громкость музыки")
             sound["call"] = False
-            rt.smart.audio.tick(110)
-            rt.smart.audio.tick(120)
+            rt.smart.audio.tick(122)
+            rt.smart.audio.tick(132)
             if sound["sessions"][0]["volume"] != 0.8:
                 raise RuntimeError("Громкость после звонка не восстановилась")
             learner = rt.smart.habits

@@ -511,8 +511,8 @@ class VoicePages:
             text += "\n" + data["recovery"]
         if data.get("headphones"):
             text += "\nНаушники: слышу команды во время ответа"
-        if data.get("scheduler") == "windows_audio":
-            text += " · Приоритет аудио Windows"
+        if data.get("game_audio"):
+            text += "\nИгра: озвучка в один поток, прослушивание команд включено"
         if peak >= 32700:
             text += " · Перегрузка: уменьшите усиление"
         if data.get("dropped"):

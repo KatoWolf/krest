@@ -29,6 +29,18 @@ _remote = None
 _vosk_repairs = {}
 _recovered_vosk = ""
 _vosk_recovery_source = ""
+_game_mode = False
+
+
+def set_game_mode(gaming):
+    """Keep the game budget across voice pause/reconnect without loading models."""
+    global _game_mode
+    gaming = bool(gaming)
+    if gaming != _game_mode:
+        _game_mode = gaming
+        engine = _engine
+        if engine is not None:
+            engine.set_game_mode(gaming)
 
 
 def set_remote(remote):
@@ -178,6 +190,7 @@ def enable():
             # A changed voice model is reloaded by the TTS worker, never by capture.
             engine.model_tts = None
         _model_signature = signature
+        engine.set_game_mode(_game_mode)
         engine.configure(_settings)
         from audio_scheduling import status
 
@@ -221,6 +234,9 @@ def enable():
         if not active:
             engine.start_microphone()
         _engine = engine
+        # Game detection can change while the models/device are opening.
+        # Publish first so a concurrent transition also reaches this engine.
+        engine.set_game_mode(_game_mode)
 
 
 def tts_progress(text):

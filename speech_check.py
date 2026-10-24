@@ -103,7 +103,12 @@ def check(engine):
         )
         if not any(row["ok"] for row in rows):
             raise RuntimeError("Сборка не распознала ни одной контрольной команды")
-        check_game_audio(engine, manager)
+        previous_game_mode = engine._gaming
+        engine.set_game_mode(True)
+        try:
+            check_game_audio(engine, manager)
+        finally:
+            engine.set_game_mode(previous_game_mode)
     finally:
         engine.stream = original_stream
         engine.clear_audio_queue()
@@ -148,6 +153,8 @@ def check_game_audio(engine, manager):
             )
         else:
             samples = engine.synthesize(phrase)
+        if engine._gaming and engine.torch.get_num_threads() != 1:
+            raise RuntimeError("Озвучка в игре использует больше одного потока")
         audio = np.concatenate([samples * 0.65, np.zeros(24000 * 2)])
         audio += np.random.default_rng(73).normal(0, noise, audio.shape)
         # Calibrate in quiet, then change the background while talking.
@@ -228,3 +235,42 @@ def check_game_audio(engine, manager):
         if accepted != ([expected] if expected else []):
             print("Speech decisions: " + str(decisions), flush=True)
             raise RuntimeError("Голос в игровом профиле: " + str(phrase) + " → " + str(transcripts))
+
+
+def check_partial_cost(engine, samples):
+    """Compare the old/new polling on identical audio and retain final confidence."""
+    import json
+    import numpy as np
+    from audio_devices import PCMConverter
+
+    raw = PCMConverter(24000).convert((np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes())
+    raw += bytes(32000)
+    rows = []
+    for detailed in (False, True, False):
+        decoder = engine.vosk.KaldiRecognizer(engine.model_vosk, 16000)
+        decoder.SetWords(True)
+        decoder.SetPartialWords(detailed)
+        decoder.AcceptWaveform(bytes(8000))
+        decoder.Reset()
+        results = []
+        cpu = time.process_time()
+        for index, offset in enumerate(range(0, len(raw), 960)):
+            if decoder.AcceptWaveform(raw[offset : offset + 960]):
+                results.append(json.loads(decoder.Result()))
+            if index % 3 == 2:
+                decoder.PartialResult()
+        results.append(json.loads(decoder.FinalResult()))
+        elapsed = time.process_time() - cpu
+        text = " ".join(r.get("text", "") for r in results).strip()
+        words = [w for r in results for w in r.get("result", [])]
+        if not text or not words or any("conf" not in word for word in words):
+            raise RuntimeError("Vosk потеряла итоговый текст или уверенность распознавания")
+        rows.append((elapsed, text))
+    if len({text for _, text in rows}) != 1:
+        raise RuntimeError("Оптимизация промежуточных результатов изменила итоговое распознавание")
+    improved = (rows[0][0] + rows[2][0]) / 2
+    print(
+        f"::notice::Vosk partial polling: {improved:.3f}s CPU with text only; "
+        f"{rows[1][0]:.3f}s with unused word details. Identical final transcript/confidence fields.",
+        flush=True,
+    )

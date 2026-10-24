@@ -123,6 +123,7 @@ _failed_microphones = {}
 _last_nonzero_audio_at = 0
 _refresh_audio_requested = False
 _quick_phrases = set()
+_gaming = False
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -312,7 +313,9 @@ def initialize_recognition(path):
         rec = vosk.KaldiRecognizer(model_vosk, SAMPLE_RATE)
         rec.SetWords(True)
         if hasattr(rec, "SetPartialWords"):
-            rec.SetPartialWords(True)
+            # Word timestamps/confidence are needed only for the final result.
+            # Partial word alignment every 90 ms is expensive and never used.
+            rec.SetPartialWords(False)
         # Pay initial decoder graph costs before opening the microphone.
         rec.AcceptWaveform(bytes(SAMPLE_RATE // 2))
         rec.Reset()
@@ -339,9 +342,7 @@ def initialize_tts(path):
             import torch as backend
 
             torch = backend
-            torch.set_num_threads(
-                int(_settings_getter().get("app_settings", {}).get("tts_threads", 2))
-            )
+            torch.set_num_threads(_tts_threads())
             try:
                 torch.set_num_interop_threads(1)
             except RuntimeError:
@@ -372,10 +373,16 @@ def synthesize(text):
     """The same bounded CPU synthesis path is used by runtime and release checks."""
     if model_tts is None or torch is None:
         raise RuntimeError("Silero ещё не готова")
+    from audio_scheduling import synthesis_priority
+
+    threads = _tts_threads()
+    if torch.get_num_threads() != threads:
+        torch.set_num_threads(threads)
+    metrics["tts_threads"] = threads
     # v4 uses xenia; some older drop-in packages offer kseniya instead.
     speakers = getattr(model_tts, "speakers", ())
     speaker = "kseniya" if "xenia" not in speakers and "kseniya" in speakers else "xenia"
-    with torch.no_grad():
+    with synthesis_priority(_gaming), torch.no_grad():
         samples = model_tts.apply_tts(
             text=text,
             speaker=speaker,
@@ -406,13 +413,24 @@ def configure(settings_getter):
     global _settings_getter, _audio_cfg
     _audio_cfg = {}
     _settings_getter = settings_getter
-    settings = _settings_getter().get("app_settings", {})
-    if torch is not None:
-        torch.set_num_threads(int(settings.get("tts_threads", 2)))
+    # Apply the thread budget in the synthesis worker, not on the GUI/capture
+    # thread while a response may already be running.
     with _recognizer_lock:
         clear_audio_queue()
         _reset_recognizer()
     refresh_output()
+
+
+def set_game_mode(gaming):
+    global _gaming
+    _gaming = bool(gaming)
+    metrics["game_audio"] = _gaming
+
+
+def _tts_threads():
+    if _gaming:
+        return 1
+    return max(1, min(4, int(_settings_getter().get("app_settings", {}).get("tts_threads", 2))))
 
 
 def refresh_output():
