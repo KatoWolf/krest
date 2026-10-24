@@ -215,5 +215,7 @@ def focus_set_many(changes):
             if abs(control.GetMasterVolume() - volume) > 0.011:
                 raise ValueError("Приложение не подтвердило громкость")
             targets.pop(ident)
+            if not targets:
+                return
     if targets:
         raise ValueError("Аудиосессия закрыта")
