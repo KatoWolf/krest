@@ -22,6 +22,7 @@ from experience_pages import ExperiencePages
 from personal_pages import PersonalPages
 from autonomy_pages import AutonomyPages
 from smart_pages import SmartPages
+from brain_pages import BrainPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -45,6 +46,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    BrainPages,
     SmartPages,
     AutonomyPages,
     PersonalPages,
@@ -82,6 +84,7 @@ class ControlCenterApp(
         ("logs", "Журнал"),
         ("license", "Premium"),
         ("kernel", "Состояние ядра"),
+        ("brain", "Мозг"),
         ("memory", "Память"),
         ("events", "События"),
         ("programs", "Программы и звук"),
@@ -107,7 +110,11 @@ class ControlCenterApp(
             "Подключения",
             ("bots", "steam", "api", "discord_account", "discord_bot", "scripts"),
         ),
-        ("kernel", "Система", ("kernel", "programs", "clipboard", "maintenance", "security")),
+        (
+            "kernel",
+            "Система",
+            ("kernel", "brain", "programs", "clipboard", "maintenance", "security"),
+        ),
         ("sessions", "Игры", ("sessions",) + tuple(code for code, _ in PAGE_NAMES)),
         ("settings", "Настройки", ("settings", "appearance", "license")),
     ]
@@ -686,6 +693,8 @@ class ControlCenterApp(
             self._refresh_inbox()
         if code == "kernel":
             self._refresh_core()
+        if code == "brain":
+            self._brain_refresh(force=True)
         if code == "memory":
             self._refresh_memory()
         if code == "events":
@@ -2028,6 +2037,7 @@ class ControlCenterApp(
                 self._refresh_component_report()
             self._duty_refresh()
             self._smart_refresh()
+            self._brain_refresh()
             if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             license_state = licensing.status(self.config_mgr.snapshot())

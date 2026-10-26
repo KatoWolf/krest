@@ -14,7 +14,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.17.1"
+VERSION = "0.18.0"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_support import BuildSession
 

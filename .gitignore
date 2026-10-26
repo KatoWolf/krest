@@ -93,5 +93,6 @@ autonomy.sqlite3*
 component_health.json
 autonomy/
 smart_automation.sqlite3*
+action_brain.sqlite3*
 archives/
 received/

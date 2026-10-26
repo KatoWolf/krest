@@ -13,6 +13,7 @@ LANES = (
     "plugins",
     "sequence",
     "undo",
+    "control",
 )
 
 FILES = {
@@ -49,6 +50,8 @@ def lane_for(entry):
     if entry is None:
         return "general"
     ident, module, name = entry.id, entry.module, entry.func.__name__
+    if module == "brain" and name != "defer_action":
+        return "control"
     if ident == "skills.workflows.undo_action":
         return "undo"
     if entry.func.__module__.startswith(("plugins.", "krest_imported_", "krest_package_")):

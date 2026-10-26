@@ -357,6 +357,9 @@ class RemoteRuntime:
             ),
             snapshot=lambda: self.client.call("smart", action="snapshot"),
         )
+        self.brain = SimpleNamespace(
+            call=lambda action, **args: self.client.call("brain", action=action, **args)
+        )
         root = client.config_path.parent
         self.center = NotificationCenter(root / "inbox.sqlite3")
         self.jobs = JobStore(root / "jobs.sqlite3", recover=False)

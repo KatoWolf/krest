@@ -102,8 +102,10 @@ class AssistantRuntime:
         self.hearing = HearingPractice(self.manager, settings)
         self.state.skill_manager = self.manager
         self.events = queue.Queue()
-        self.requests = queue.Queue(maxsize=30)
-        self._queues = {name: queue.Queue(maxsize=12) for name in LANES}
+        from command_queue import CommandQueue
+
+        self.requests = CommandQueue(maxsize=30)
+        self._queues = {name: CommandQueue(maxsize=12) for name in LANES}
         self._queues["general"] = self.requests
         self._queue_ready = {name: threading.Event() for name in LANES}
         self._running = {}
@@ -118,6 +120,9 @@ class AssistantRuntime:
         from smart_tools import SmartTools
 
         self.smart = SmartTools(self, data_dir)
+        from action_brain import ActionBrain
+
+        self.brain = ActionBrain(self, data_dir)
         self._threads = []
         self._voice_thread = None
         self._voice_control = threading.Lock()
@@ -349,9 +354,21 @@ class AssistantRuntime:
         with self._jobs_lock:
             self._active_jobs[ident] = token
         try:
-            result = self._execute(text, source, confidence)
+            self._job_local.plan_id = ident
+            self._job_local.source = source
+            self.brain.start(ident, text, source, round((started - submitted) * 1000))
+            if self.brain.expired(text, source, started - submitted):
+                token.set()
+                result = CommandResult(
+                    True,
+                    False,
+                    "Команда устарела в очереди. Повтори её, чтобы действие относилось к текущему состоянию.",
+                )
+            else:
+                result = self._execute(text, source, confidence)
             status = "completed" if result.success else "cancelled" if token.is_set() else "failed"
             self.jobs.transition(ident, status, result.text)
+            self.brain.finish(ident, result, status=status)
             stage = "success" if result.success else "error"
             if source == "voice" and self._active_until > time.monotonic() and not result.skill_id:
                 stage = "listening"
@@ -382,6 +399,11 @@ class AssistantRuntime:
             return result
         except Exception as exc:
             self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
+            self.brain.finish(
+                ident,
+                CommandResult(True, False, str(exc)),
+                status="cancelled" if token.is_set() else "failed",
+            )
             self.feedback.update(turn, "error", str(exc), 4)
             raise
         finally:
@@ -390,6 +412,8 @@ class AssistantRuntime:
             self._job_local.token = None
             self._job_local.recognition = None
             self._job_local.feedback_turn = None
+            self._job_local.plan_id = None
+            self._job_local.source = None
 
     @property
     def command_stop(self):
@@ -407,6 +431,11 @@ class AssistantRuntime:
             and job["status"] == "queued"
             and self.jobs.transition(ident, "cancelled", "Отменено до выполнения")
         ):
+            with self._request_lock:
+                for target in self._queues.values():
+                    target.remove_job(ident)
+                self._submitted_at.pop(ident, None)
+                self._feedback_turns.pop(ident, None)
             return "Задание отменено до выполнения"
         return "Задание уже завершено или не поддерживает остановку"
 
@@ -563,7 +592,7 @@ class AssistantRuntime:
             self.events.put(("result", result))
             return result
         learning = None
-        if source in ("voice", "text"):
+        if source in ("voice", "text") or source.startswith("brain:"):
             from command_sequence import plan_sequence
 
             plan = plan_sequence(self.manager, command)
@@ -617,9 +646,12 @@ class AssistantRuntime:
             command, learning = interpreted.command, interpreted.learning or learning
         observed("Передано на выполнение")
         normalized = normalize_command(command, self.settings().get("command_aliases", {}))
+        from command_understanding import exact_command
+
+        command = exact_command(self.manager, command) or normalized
         # Context actions also mutate timers. Defer them until cancellation has
         # been checked and the resource lock / undo capture have been acquired.
-        followup = normalized if source != "scenario" else None
+        followup = normalized if source != "scenario" and not source.startswith("brain:") else None
         return command, followup, learning, wake, observed
 
     def _execute(self, text, source="text", confidence=None):
@@ -632,36 +664,77 @@ class AssistantRuntime:
         from command_sequence import SequencePlan
 
         if isinstance(command, SequencePlan):
+            self.brain.plan(getattr(self._job_local, "plan_id", None), command.steps)
             result = self._execute_sequence(command)
         else:
+            found = self.manager.match(command)
+            self.brain.plan(
+                getattr(self._job_local, "plan_id", None),
+                [{"command": command, "skill": found[0].id if found else ""}],
+            )
             result = self._execute_action(command, followup)
         with self._dialog_lock:
             return self._finish_command(result, learning, source, wake, observed)
 
-    def _execute_action(self, command, followup=None):
-        with self._lane_locks[self._command_lane(command)]:
+    def _execute_action(self, command, followup=None, *, step_index=0):
+        from command_lanes import lane_for
+
+        # This command has already passed speech normalization and planning.
+        # Do not run the whole speech/sequence parser again to choose a lock.
+        found = self.manager.match(command)
+        with self._lane_locks[lane_for(found[0] if found else None)]:
             if self.command_stop.is_set():
                 return CommandResult(True, False, "Задание отменено до отправки действия")
+            source = getattr(self._job_local, "source", "") or ""
+            if problem := self.brain.guard(source):
+                return CommandResult(True, False, problem)
+            ident = getattr(self._job_local, "plan_id", None)
+            self.brain.step(ident, step_index)
             self.feedback.update(
                 getattr(self._job_local, "feedback_turn", None), "executing", command, 300
             )
             with self.undo.capture(command):
                 self._job_local.executed_command = command
+                self._job_local.action_value = None
                 if followup is not None:
                     with self._dialog_lock:
                         followup = self.context.handle(followup)
-                return (
+                result = (
                     CommandResult(True, followup.success, followup.text)
                     if followup is not None
                     else self.manager.execute(command, self.state)
                 )
+                self.brain.step(ident, step_index, result=result)
+                return result
 
     def _execute_sequence(self, plan):
         replies = []
         with voice.defer_output():
             for i, step in enumerate(plan.steps, 1):
-                result = self._execute_action(step["command"])
+                result = self._execute_action(step["command"], step_index=i - 1)
                 replies.append(f"{i}. {result.text}")
+                if result.success and result.verification == "pending":
+                    checked = self.verifier.wait(result.verification_id, self.command_stop)
+                    self.brain.step(
+                        getattr(self._job_local, "plan_id", None), i - 1, verification=checked
+                    )
+                    if checked["status"] != "confirmed":
+                        return CommandResult(
+                            True,
+                            False,
+                            "\n".join(replies)
+                            + f"\nШаг {i} не подтверждён; следующие действия остановлены. "
+                            + checked["text"],
+                            "sequence",
+                        )
+                elif result.success and result.verification in {"unconfirmed", "failed"}:
+                    return CommandResult(
+                        True,
+                        False,
+                        "\n".join(replies)
+                        + f"\nШаг {i} не подтверждён; следующие действия остановлены.",
+                        "sequence",
+                    )
                 if not result.success:
                     replies.append(
                         f"Цепочка остановлена на шаге {i}; следующие команды не выполнялись."
@@ -788,6 +861,7 @@ class AssistantRuntime:
                 self.automation.tick()
                 self.companion.tick()
                 self.health.tick()
+                self.brain.tick()
                 status = {
                     "is_playing": bool(self.performance.game),
                     "game": self.performance.game,

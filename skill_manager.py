@@ -57,6 +57,8 @@ class CommandResult:
     text: str
     skill_id: str = ""
     responded: bool = False
+    verification: str = ""
+    verification_id: str = ""
 
 
 def format_result(value):
@@ -285,8 +287,9 @@ class SkillManager:
             if runtime is not None and hasattr(runtime, "_job_local"):
                 runtime._job_local.action_value = value
             verifier = getattr(getattr(state, "runtime", None), "verifier", None)
+            verification_id = ""
             if verifier is not None:
-                verifier.record(entry.id, value)
+                verification_id = verifier.record(entry.id, value) or ""
             output = "\n".join(messages)
             if not output and value is not None and not isinstance(value, bool):
                 output = format_result(value) if isinstance(value, (dict, list)) else str(value)
@@ -311,7 +314,13 @@ class SkillManager:
 
                 output = action_reply(entry.id, output, state)
             return CommandResult(
-                True, success, output or "Команда выполнена.", entry.id, bool(messages)
+                True,
+                success,
+                output or "Команда выполнена.",
+                entry.id,
+                bool(messages),
+                value.get("verification", "") if isinstance(value, dict) else "",
+                verification_id,
             )
         except Exception as exc:
             logger.exception("Ошибка навыка %s", entry.id)

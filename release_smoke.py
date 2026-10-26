@@ -4,6 +4,71 @@ import time
 import uuid
 
 
+def check_action_brain():
+    """Use isolated stores and a dry submitter; never control desktop applications."""
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from types import SimpleNamespace
+    import threading
+    from action_brain import ActionBrain
+    from command_queue import CommandQueue
+    from configuration import ConfigManager
+    from platform_store import JobStore
+    from skill_manager import SkillManager
+
+    pending = CommandQueue(maxsize=3)
+    pending.put(("later", "scenario", None, "one"))
+    pending.put(("now", "voice", None, "two"))
+    if pending.get_nowait()[0] != "now":
+        raise RuntimeError("Голос потерял приоритет в очереди")
+    pending.task_done()
+    if not pending.remove_job("one") or pending.unfinished_tasks:
+        raise RuntimeError("Отмена команды не освобождает очередь")
+    with TemporaryDirectory(prefix="krest-brain-") as folder:
+        root = Path(folder)
+        config = ConfigManager(root / "config.json")
+        manager = SkillManager(config.snapshot)
+        manager.availability = lambda *args: "Доступен"
+        submitted = []
+        rt = SimpleNamespace(
+            manager=manager,
+            settings=config.snapshot,
+            performance=SimpleNamespace(game="dota2.exe", active="game"),
+            autonomy=SimpleNamespace(
+                paused=False,
+                gate=SimpleNamespace(snapshot=lambda: {"allowed": False}),
+            ),
+            stop_event=threading.Event(),
+            jobs=JobStore(root / "jobs.sqlite3"),
+            command_status=lambda: ("", len(submitted)),
+            submit=lambda text, **kw: submitted.append((text, kw)) or True,
+        )
+        brain = ActionBrain(rt, root)
+        plan = brain.preview("таймер на две минуты и время")
+        if len(plan["steps"]) != 2 or brain.snapshot()["plans"]:
+            raise RuntimeError("Предпросмотр мозга создал действия")
+        brain.add_goal("таймер на две минуты", "after_game")
+        brain.tick(10)
+        if submitted:
+            raise RuntimeError("Поручение выполнилось до завершения игры")
+        rt.performance.game = ""
+        brain.tick(20)
+        brain.tick(30)
+        if len(submitted) != 1:
+            raise RuntimeError("Поручение не отправлено ровно один раз")
+        recovered = ActionBrain(rt, root)
+        if recovered.goals or recovered.snapshot()["goals"][0]["status"] != "interrupted":
+            raise RuntimeError("Неопределённое действие повторяется после перезапуска")
+        if not brain.expired("крест переключи трек", "voice", 11):
+            raise RuntimeError("Просроченная команда плеера не остановлена")
+        if brain.expired("крест таймер на две минуты", "voice", 11):
+            raise RuntimeError("Постоянное поручение ошибочно отброшено")
+    print(
+        "Action brain: pure preview, queue priority, one-shot conditions and recovery passed.",
+        flush=True,
+    )
+
+
 def check_kernel(config_path):
     from kernel_client import KernelClient
     from process_lock import ProcessLock
@@ -17,6 +82,7 @@ def check_kernel(config_path):
     check_game_detection()
     check_expansion()
     check_smart_automation()
+    check_action_brain()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -136,6 +202,17 @@ def check_kernel(config_path):
         smart = client.call("smart", action="snapshot")
         if smart["watches"] or smart["downloads"]:
             raise RuntimeError("Новый профиль содержит чужие наблюдения или правила")
+        brain = client.call("brain", action="snapshot")
+        if brain["goals"] or brain["plans"]:
+            raise RuntimeError("Новый профиль получил чужие поручения")
+        plan = client.call("brain", action="preview", text="таймер на две минуты и время")
+        if len(plan["steps"]) != 2 or client.call("brain", action="snapshot")["plans"]:
+            raise RuntimeError("Предпросмотр мозга изменил состояние или потерял шаги")
+        client.call("brain", action="add", text="сохрани настройки в очередь", condition="idle")
+        goal = client.call("brain", action="snapshot")["goals"][0]
+        client.call("brain", action="cancel", id=goal["id"])
+        if client.call("brain", action="snapshot")["goals"][0]["status"] != "cancelled":
+            raise RuntimeError("RPC мозга не отменяет поручение")
         task = client.call("autonomy", action="enqueue", kind="profile_backup")
         client.call("autonomy", action="cancel", id=task["id"])
         duty = client.call("autonomy", action="snapshot")
