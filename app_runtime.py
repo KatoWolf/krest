@@ -367,7 +367,6 @@ class AssistantRuntime:
             else:
                 result = self._execute(text, source, confidence)
             status = "completed" if result.success else "cancelled" if token.is_set() else "failed"
-            self.jobs.transition(ident, status, result.text)
             self.brain.finish(ident, result, status=status)
             stage = "success" if result.success else "error"
             if source == "voice" and self._active_until > time.monotonic() and not result.skill_id:
@@ -375,6 +374,9 @@ class AssistantRuntime:
             if not result.handled and not result.text:
                 stage = "idle"
             self.feedback.update(turn, stage, result.text, 6 if stage == "listening" else 3)
+            # A terminal job is observable over RPC immediately. Publish its
+            # decision and indicator first, so readers cannot see stale progress.
+            self.jobs.transition(ident, status, result.text)
             trace = {
                 "heard": text,
                 "skill": result.skill_id,
@@ -398,13 +400,15 @@ class AssistantRuntime:
                 self.events.put(("command_trace", trace))
             return result
         except Exception as exc:
-            self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
-            self.brain.finish(
-                ident,
-                CommandResult(True, False, str(exc)),
-                status="cancelled" if token.is_set() else "failed",
-            )
             self.feedback.update(turn, "error", str(exc), 4)
+            try:
+                self.brain.finish(
+                    ident,
+                    CommandResult(True, False, str(exc)),
+                    status="cancelled" if token.is_set() else "failed",
+                )
+            finally:
+                self.jobs.transition(ident, "cancelled" if token.is_set() else "failed", str(exc))
             raise
         finally:
             with self._jobs_lock:
