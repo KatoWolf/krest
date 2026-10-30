@@ -47,6 +47,7 @@ class Kernel:
         self.sequence = 0
         self.events = deque(maxlen=1000)
         self._events_lock = threading.RLock()
+        self._events_changed = threading.Condition(self._events_lock)
         self._ready = False
         self.started = time.time()
         self._activation_lock = threading.RLock()
@@ -106,6 +107,9 @@ class Kernel:
             self.open_ui(quick=True)
         elif kind == "voice_arm":
             self.runtime.arm_voice()
+        elif kind == "learn_button":
+            if self.runtime.learned.draft:
+                self.runtime.submit("запомни кнопку")
         else:
             self.runtime.automation.emit(kind, payload)
 
@@ -114,6 +118,15 @@ class Kernel:
             self.sequence += 1
             value = asdict(value) if is_dataclass(value) else value
             self.events.append({"seq": self.sequence, "kind": kind, "value": value})
+            self._events_changed.notify_all()
+
+    def wait_desktop(self, after, timeout=1):
+        with self._events_changed:
+            self._events_changed.wait_for(
+                lambda: self.sequence > after or self.stop.is_set(),
+                timeout=max(0, min(float(timeout), 1)),
+            )
+            return self.sequence
 
     def activate(self):
         with self._activation_lock:
@@ -189,6 +202,8 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "learned":
+            return rt.learned.call(**args)
         if method == "smart":
             return rt.smart.call(**args)
         if method == "health":
@@ -209,6 +224,8 @@ class Kernel:
             return {"protocol": PROTOCOL_VERSION, "pid": os.getpid(), "safe_mode": self.safe}
         if method == "snapshot":
             return self.snapshot(int(args.get("after", 0)))
+        if method == "desktop.wait":
+            return self.wait_desktop(int(args.get("after", 0)), args.get("timeout", 1))
         if method == "warframe.snapshot":
             result = rt.warframe.snapshot()
             result["status"]["overlay_error"] = self.overlay.error
@@ -419,10 +436,10 @@ class Kernel:
         self.activate()
         last_services = 0
         cfg = self.settings()
-        while not self.stop.wait(0.1):
-            while True:
+        while not self.stop.is_set():
+            for index in range(100):
                 try:
-                    kind, value = self.runtime.events.get_nowait()
+                    kind, value = self.runtime.events.get(timeout=0.5 if index == 0 else 0)
                     self.event(kind, value)
                     if kind == "notification":
                         self.tray.notify(value)

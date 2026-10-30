@@ -83,6 +83,9 @@ def check_kernel(config_path):
     check_expansion()
     check_smart_automation()
     check_action_brain()
+    from release_learning_check import check_recipes
+
+    check_recipes()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project
@@ -205,6 +208,13 @@ def check_kernel(config_path):
         brain = client.call("brain", action="snapshot")
         if brain["goals"] or brain["plans"]:
             raise RuntimeError("Новый профиль получил чужие поручения")
+        seq = client.call("snapshot")["sequence"]
+        if client.call("desktop.wait", after=seq, timeout=0) < seq:
+            raise RuntimeError("Поток событий меню потерял последовательность")
+        if client.call("learned", action="snapshot")["rows"]:
+            raise RuntimeError("Новый профиль получил чужие обученные действия")
+        client.call("learned", action="begin", name="Проверка обучения")
+        client.call("learned", action="cancel")
         plan = client.call("brain", action="preview", text="таймер на две минуты и время")
         if len(plan["steps"]) != 2 or client.call("brain", action="snapshot")["plans"]:
             raise RuntimeError("Предпросмотр мозга изменил состояние или потерял шаги")
@@ -785,6 +795,9 @@ def check_dependencies():
         close()
         print("UI Automation: повторные запросы к помощнику проверены без нажатий.", flush=True)
         check_menu_surface()
+        from release_learning_check import check_native_recipes
+
+        check_native_recipes()
     import torch
 
     if torch.tensor([1.0, 2.0]).sum().item() != 3:

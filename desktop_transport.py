@@ -12,7 +12,8 @@ _lock = threading.Lock()
 
 
 class DesktopPipe:
-    def __init__(self):
+    def __init__(self, background=False):
+        self.background = background
         self.lock = threading.Lock()
         self.process = None
         self.sequence = 0
@@ -42,7 +43,8 @@ class DesktopPipe:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | (getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) if self.background else 0),
             bufsize=1,
         )
         self.responses = queue.Queue(maxsize=2)
@@ -87,11 +89,14 @@ class DesktopPipe:
 
 def request(payload, timeout=12):
     # Separate Discord from music: a stalled player must not block the microphone.
-    domain = {"discord_voice": "discord", "file_context": "files", "audio_dispatch": "audio"}.get(
-        payload["operation"], "music"
-    )
+    domain = {
+        "discord_voice": "discord",
+        "file_context": "files",
+        "audio_dispatch": "audio",
+        "learned_action": "learned",
+    }.get(payload["operation"], "music")
     with _lock:
-        client = _clients.setdefault(domain, DesktopPipe())
+        client = _clients.setdefault(domain, DesktopPipe(background=domain == "learned"))
     return client.call(payload, timeout=timeout)
 
 

@@ -1,6 +1,7 @@
 """Command modules loaded by SkillManager."""
 
 BUILTIN_MODULES = (
+    "learned_actions",
     "brain",
     "autonomy",
     "smart_tools",

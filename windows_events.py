@@ -5,7 +5,11 @@ import threading
 
 
 class WindowsEvents:
-    HOTKEYS = {1: (0x20, "quick_panel", "Ctrl+Alt+Space"), 2: (0x56, "voice_arm", "Ctrl+Alt+V")}
+    HOTKEYS = {
+        1: (0x20, "quick_panel", "Ctrl+Alt+Space"),
+        2: (0x56, "voice_arm", "Ctrl+Alt+V"),
+        3: (0x78, "learn_button", "Ctrl+Alt+F9"),
+    }
 
     def __init__(self, callback):
         self.callback = callback

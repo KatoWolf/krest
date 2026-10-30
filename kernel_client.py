@@ -327,6 +327,9 @@ class RemoteRuntime:
         self.events = queue.Queue(maxsize=1000)
         self.stop_event = threading.Event()
         self._refresh_lock = threading.Lock()
+        self._view = (True, "actions")
+        self._view_changed = threading.Event()
+        self._last_refresh = time.monotonic()
         self.cached = client.call("snapshot")
         self.sequence = self.cached["sequence"]
         self.state = StateProxy(self)
@@ -360,6 +363,11 @@ class RemoteRuntime:
         self.brain = SimpleNamespace(
             call=lambda action, **args: self.client.call("brain", action=action, **args)
         )
+        self.learned = SimpleNamespace(
+            call=lambda action, **args: self.client.call(
+                "learned", action=action, _timeout=15, **args
+            )
+        )
         root = client.config_path.parent
         self.center = NotificationCenter(root / "inbox.sqlite3")
         self.jobs = JobStore(root / "jobs.sqlite3", recover=False)
@@ -390,12 +398,42 @@ class RemoteRuntime:
                     self.events.get_nowait()
                     self.events.put_nowait((item["kind"], value))
             self.sequence = data["sequence"]
+            self._last_refresh = time.monotonic()
+
+    def set_view(self, visible, page):
+        value = (bool(visible), str(page))
+        if value != self._view:
+            self._view = value
+            self._view_changed.set()
+
+    def refresh_interval(self):
+        visible, page = self._view
+        return 8 if not visible else 0.5 if page in {"actions", "voice"} else 1
 
     def _poll(self):
         reported = False
-        while not self.stop_event.wait(0.5):
+        supports_wait = True
+        while not self.stop_event.is_set():
             try:
-                self.refresh()
+                remaining = self.refresh_interval() - (time.monotonic() - self._last_refresh)
+                changed = self._view_changed.is_set()
+                self._view_changed.clear()
+                if supports_wait and remaining > 0 and not changed:
+                    try:
+                        sequence = self.client.call(
+                            "desktop.wait", after=self.sequence, timeout=min(1, remaining)
+                        )
+                    except RuntimeError as exc:
+                        if "Неизвестная операция ядра" not in str(exc):
+                            raise
+                        supports_wait = False
+                        continue
+                    if sequence <= self.sequence:
+                        continue
+                elif not supports_wait and self.stop_event.wait(0.5):
+                    break
+                if not self.stop_event.is_set():
+                    self.refresh()
                 reported = False
             except (OSError, ValueError, RuntimeError, http.client.HTTPException):
                 if not reported:

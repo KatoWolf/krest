@@ -23,6 +23,7 @@ from personal_pages import PersonalPages
 from autonomy_pages import AutonomyPages
 from smart_pages import SmartPages
 from brain_pages import BrainPages
+from learned_pages import LearnedPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -46,6 +47,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    LearnedPages,
     BrainPages,
     SmartPages,
     AutonomyPages,
@@ -85,6 +87,7 @@ class ControlCenterApp(
         ("license", "Premium"),
         ("kernel", "Состояние ядра"),
         ("brain", "Мозг"),
+        ("learned", "Покажи один раз"),
         ("memory", "Память"),
         ("events", "События"),
         ("programs", "Программы и звук"),
@@ -100,7 +103,7 @@ class ControlCenterApp(
 
     NAV_GROUPS = [
         ("actions", "Главная", ("actions", "voice")),
-        ("skills", "Команды", ("skills", "favorites")),
+        ("skills", "Команды", ("skills", "learned", "favorites")),
         ("music", "Музыка", ("music", "sound")),
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
         ("autonomy", "Автоматизация", ("autonomy", "smart_files", "watches", "habits")),
@@ -695,6 +698,8 @@ class ControlCenterApp(
             self._refresh_core()
         if code == "brain":
             self._brain_refresh(force=True)
+        if code == "learned":
+            self._learned_refresh(force=True)
         if code == "memory":
             self._refresh_memory()
         if code == "events":
@@ -1874,6 +1879,8 @@ class ControlCenterApp(
 
     def _poll(self):
         frame_deadline = time.monotonic() + 0.008
+        if hasattr(self.runtime, "set_view"):
+            self.runtime.set_view(self.state() in ("normal", "zoomed"), self.current_page)
         if (
             self.current_page.startswith("wf_")
             and self.state() in ("normal", "zoomed")
@@ -2038,6 +2045,7 @@ class ControlCenterApp(
             self._duty_refresh()
             self._smart_refresh()
             self._brain_refresh()
+            self._learned_refresh()
             if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             license_state = licensing.status(self.config_mgr.snapshot())

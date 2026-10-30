@@ -14,6 +14,7 @@ LANES = (
     "sequence",
     "undo",
     "control",
+    "learned",
 )
 
 FILES = {
@@ -50,6 +51,8 @@ def lane_for(entry):
     if entry is None:
         return "general"
     ident, module, name = entry.id, entry.module, entry.func.__name__
+    if module == "learned_actions":
+        return "control" if name in {"stop", "cancel"} else "learned"
     if module == "brain" and name != "defer_action":
         return "control"
     if ident == "skills.workflows.undo_action":

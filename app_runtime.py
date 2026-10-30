@@ -120,6 +120,9 @@ class AssistantRuntime:
         from smart_tools import SmartTools
 
         self.smart = SmartTools(self, data_dir)
+        from learned_actions import LearnedActions
+
+        self.learned = LearnedActions(self, self.smart.store)
         from action_brain import ActionBrain
 
         self.brain = ActionBrain(self, data_dir)
@@ -1317,6 +1320,7 @@ class AssistantRuntime:
         voice.stop_speaking()
 
     def close(self):
+        self.learned.stop.set()
         self.smart.close()
         self.autonomy.close()
         self.verifier.closed.set()

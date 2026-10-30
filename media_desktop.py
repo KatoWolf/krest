@@ -80,6 +80,10 @@ def _handle(raw):
             if payload.get("action") not in {"snapshot", "apply"}:
                 raise MediaError("Неизвестное действие звукового диспетчера")
             result = native_snapshot() if payload["action"] == "snapshot" else native_apply(data)
+        elif operation == "learned_action":
+            from learned_native import dispatch
+
+            result = dispatch(payload.get("action", ""), data)
         elif operation == "probe":
             with uia_apartment():
                 from pywinauto import Desktop

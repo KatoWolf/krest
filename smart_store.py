@@ -106,11 +106,11 @@ def export_settings(source, destination, guard):
             "CREATE TABLE records (kind TEXT, id TEXT, value TEXT, updated REAL, PRIMARY KEY(kind,id))"
         )
         for kind, ident, raw, updated in original.execute(
-            "SELECT kind,id,value,updated FROM records WHERE kind IN ('download_rules','audio_profiles','habits')"
+            "SELECT kind,id,value,updated FROM records WHERE kind IN ('download_rules','audio_profiles','habits','ui_actions')"
         ):
             guard()
             value = json.loads(raw)
-            if kind == "download_rules":
+            if kind in {"download_rules", "ui_actions"}:
                 value["enabled"] = False
             elif kind == "habits" and value["status"] == "enabled":
                 value["status"] = "dismissed"

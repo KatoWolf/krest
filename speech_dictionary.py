@@ -13,6 +13,11 @@ QUICK_SKILLS = SHORT_AUDIO_SKILLS | {
     "skills.smart_tools.watches_status",
     "skills.smart_tools.cancel_watches",
     "skills.smart_tools.last_screenshot",
+    "skills.learned_actions.capture",
+    "skills.learned_actions.save",
+    "skills.learned_actions.cancel",
+    "skills.learned_actions.stop",
+    "skills.learned_actions.undo_step",
 }
 
 
