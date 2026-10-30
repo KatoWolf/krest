@@ -432,6 +432,12 @@ class RemoteRuntime:
                         continue
                 elif not supports_wait and self.stop_event.wait(0.5):
                     break
+                # Deliver the first event immediately after idle; combine a
+                # burst of progress/voice events into the next snapshot instead
+                # of rebuilding the full state once for every notification.
+                gap = (0.2 if self._view[0] else 0.5) - (time.monotonic() - self._last_refresh)
+                if not changed and gap > 0 and self.stop_event.wait(gap):
+                    break
                 if not self.stop_event.is_set():
                     self.refresh()
                 reported = False
