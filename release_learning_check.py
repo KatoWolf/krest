@@ -236,12 +236,40 @@ def _check_native_recipes():
                     raise RuntimeError("Проверка неоднозначности нажала кнопку")
             finally:
                 win32gui.DestroyWindow(duplicate)
+            # Same executable, class and title, but a different top-level window:
+            # normalizing a focused child must not weaken the window guard.
+            other = win32gui.CreateWindow(
+                class_name,
+                "Крест · проверка обучения",
+                win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE,
+                100,
+                100,
+                500,
+                260,
+                0,
+                0,
+                instance,
+                None,
+            )
+            try:
+                win32gui.SetForegroundWindow(other)
+                try:
+                    call("perform", step=step, expected_window=hwnd)
+                except Exception as exc:
+                    if "Активное окно изменилось" not in str(exc):
+                        raise
+                else:
+                    raise RuntimeError("Смена окна не остановила действие")
+                if clicks != [101]:
+                    raise RuntimeError("Проверка смены окна выполнила нажатие")
+            finally:
+                win32gui.DestroyWindow(other)
     finally:
         reset_idle("learned")
         if win32gui.IsWindow(hwnd):
             win32gui.DestroyWindow(hwnd)
         win32gui.UnregisterClass(class_name, instance)
     print(
-        "Native recipes: Unicode selectors, moved window, single invocation, idempotent toggle and ambiguity passed.",
+        "Native recipes: Unicode selectors, moved window, single invocation, idempotent toggle, ambiguity and focus guard passed.",
         flush=True,
     )

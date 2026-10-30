@@ -13,6 +13,16 @@ def _desktop():
     return Desktop(backend="uia")
 
 
+def _foreground():
+    import win32gui
+
+    handle = win32gui.GetForegroundWindow()
+    # Some native UIA providers activate the child checkbox after Toggle().
+    # Compare its real root, not the child HWND. GA_ROOT (not GA_ROOTOWNER)
+    # keeps an owned dialog a separate window and preserves the focus guard.
+    return win32gui.GetAncestor(handle, 2) if handle else 0
+
+
 def _identity(control):
     info = control.element_info
     return dict(
@@ -117,7 +127,7 @@ def capture(data):
     from media_rating import _enable_accessibility
 
     desktop = _desktop()
-    foreground = win32gui.GetForegroundWindow()
+    foreground = _foreground()
     if win32gui.GetClassName(foreground).startswith("Chrome_"):
         _enable_accessibility(foreground)
     point = data.get("point") or win32gui.GetCursorPos()
@@ -133,7 +143,7 @@ def capture(data):
         raise ValueError("Наведите указатель на кнопку другой программы")
     if top.window_text() in data.get("exclude_titles", []):
         raise ValueError("Откройте другую программу: меню обучения не записывается")
-    if top.handle != win32gui.GetForegroundWindow():
+    if top.handle != _foreground():
         raise ValueError("Сначала откройте нужное окно на переднем плане")
     # Labels/icons inside a button may be returned by ElementFromPoint.
     for _ in range(4):
@@ -177,10 +187,11 @@ def capture(data):
 
 
 def perform(data):
-    import win32gui
-
     step = validate_step(data["step"])
-    top = _desktop().window(handle=win32gui.GetForegroundWindow()).wrapper_object()
+    foreground = _foreground()
+    if not foreground:
+        raise ValueError("Нет активного окна. Откройте нужную программу")
+    top = _desktop().window(handle=foreground).wrapper_object()
     if not same_app(_exe(top), step["exe"]):
         raise ValueError(
             "Активная программа изменилась. Откройте нужную программу и запустите действие заново"
@@ -210,7 +221,7 @@ def perform(data):
     if pattern is None:
         raise ValueError("Возможности кнопки изменились. Обучите шаг заново")
     # Re-check focus immediately before the one and only native invocation.
-    if top.handle != win32gui.GetForegroundWindow():
+    if top.handle != _foreground():
         raise ValueError("Фокус изменился; действие не отправлено")
     if operation == "toggle":
         if int(pattern.CurrentToggleState) != step["value"]:
@@ -245,11 +256,9 @@ def perform(data):
 
 def locate(data, *, activate=False):
     """Select one already-open application window, never start an executable."""
-    import win32gui
-
     step = validate_step(data["step"])
     desktop = _desktop()
-    foreground = win32gui.GetForegroundWindow()
+    foreground = _foreground()
     candidates = []
     for window in desktop.windows(class_name=step["window_class"], visible_only=False):
         try:
@@ -273,7 +282,7 @@ def locate(data, *, activate=False):
         _enable_accessibility(top.handle)
     if activate:
         top.set_focus()
-        if top.handle != win32gui.GetForegroundWindow():
+        if top.handle != _foreground():
             raise ValueError("Windows не переключила окно. Откройте его вручную")
     return {"found": _find(top, step) is not None, "window": top.handle}
 
