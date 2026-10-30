@@ -160,12 +160,22 @@ def _check_native_recipes():
         with ThreadPoolExecutor(max_workers=1) as worker:
 
             def call(action, **data):
+                before = win32gui.GetForegroundWindow()
                 future = worker.submit(request, "learned_action", data, action)
                 deadline = time.monotonic() + 15
                 while not future.done() and time.monotonic() < deadline:
                     win32gui.PumpWaitingMessages()
                     time.sleep(0.01)
-                return future.result(timeout=1)
+                try:
+                    return future.result(timeout=1)
+                except Exception as exc:
+                    after = win32gui.GetForegroundWindow()
+                    root = win32gui.GetAncestor(after, win32con.GA_ROOT) if after else 0
+                    title = win32gui.GetWindowText(after) if after else ""
+                    raise RuntimeError(
+                        f"{action} failed: target={hwnd}, foreground={before}->{after}, "
+                        f"root={root}, title={title!r}, clicks={len(clicks)}: {exc}"
+                    ) from exc
 
             def capture(control):
                 win32gui.SetForegroundWindow(hwnd)
