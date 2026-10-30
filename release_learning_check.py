@@ -69,6 +69,20 @@ def check_recipes():
 
 
 def check_native_recipes():
+    try:
+        _check_native_recipes()
+    except Exception:
+        import traceback
+
+        detail = traceback.format_exc()[-7000:]
+        print(
+            "::error::" + detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
+            flush=True,
+        )
+        raise
+
+
+def _check_native_recipes():
     """Only our disposable test window is touched; no user application is opened."""
     import os
     import time
@@ -79,6 +93,11 @@ def check_native_recipes():
     import win32gui
     from media_desktop import request
     from desktop_transport import reset_idle
+    import ctypes
+
+    # UIA hit testing uses physical pixels. Match the helper's DPI awareness
+    # before reading native rectangles in this disposable parent process.
+    ctypes.windll.user32.SetProcessDPIAware()
 
     clicks = []
 
@@ -149,8 +168,16 @@ def check_native_recipes():
                 return future.result(timeout=1)
 
             def capture(control):
+                win32gui.SetForegroundWindow(hwnd)
+                win32gui.UpdateWindow(hwnd)
+                win32gui.PumpWaitingMessages()
                 x1, y1, x2, y2 = win32gui.GetWindowRect(control)
-                return call("capture", point=[(x1 + x2) // 2, (y1 + y2) // 2])["step"]
+                try:
+                    return call("capture", point=[(x1 + x2) // 2, (y1 + y2) // 2])["step"]
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Capture failed: target={hwnd}, foreground={win32gui.GetForegroundWindow()}, rect={(x1, y1, x2, y2)}: {exc}"
+                    ) from exc
 
             step = capture(button)
             if step["operation"] != "invoke" or clicks:
