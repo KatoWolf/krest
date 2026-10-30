@@ -1,6 +1,7 @@
 """On-demand UIA access in an isolated helper, with exact unique selectors."""
 
 import os
+import time
 from learned_model import same_app, validate_step
 
 
@@ -38,6 +39,18 @@ def _pattern(control, name):
         return getattr(control, "iface_" + name)
     except Exception:
         return None
+
+
+def _confirmed(read, expected):
+    # UIA setters may return before the application updates its UI. Only read
+    # the state here; never repeat the toggle or selection during this wait.
+    until = time.monotonic() + 0.8
+    while True:
+        if read() == expected:
+            return True
+        if time.monotonic() >= until:
+            return False
+        time.sleep(0.05)
 
 
 def _matches(control, step, top):
@@ -202,16 +215,16 @@ def perform(data):
     if operation == "toggle":
         if int(pattern.CurrentToggleState) != step["value"]:
             pattern.Toggle()
-        confirmed = int(pattern.CurrentToggleState) == step["value"]
+        confirmed = _confirmed(lambda: int(pattern.CurrentToggleState), step["value"])
     elif operation == "select":
         if not pattern.CurrentIsSelected:
             pattern.Select()
-        confirmed = bool(pattern.CurrentIsSelected)
+        confirmed = _confirmed(lambda: bool(pattern.CurrentIsSelected), True)
     elif operation in {"expand", "collapse"}:
         expected = 1 if operation == "expand" else 0
         if int(pattern.CurrentExpandCollapseState) != expected:
             pattern.Expand() if expected else pattern.Collapse()
-        confirmed = int(pattern.CurrentExpandCollapseState) == expected
+        confirmed = _confirmed(lambda: int(pattern.CurrentExpandCollapseState), expected)
     else:
         pattern.Invoke()
         return {

@@ -158,7 +158,10 @@ def check_native_recipes():
             win32gui.SetWindowPos(hwnd, 0, 180, 160, 500, 260, win32con.SWP_NOZORDER)
             call("activate", step=step)
             result = call("perform", step=step, expected_window=hwnd)
-            win32gui.PumpWaitingMessages()
+            deadline = time.monotonic() + 1
+            while not clicks and time.monotonic() < deadline:
+                win32gui.PumpWaitingMessages()
+                time.sleep(0.01)
             if result["status"] != "reported" or clicks != [101]:
                 raise RuntimeError("Кнопка не выполнена один раз после перемещения окна")
             if not call("locate", step=step)["found"] or clicks != [101]:
