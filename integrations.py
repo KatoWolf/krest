@@ -44,8 +44,8 @@ def redact(text, settings):
 class IntegrationManager:
     BUILTIN_COMMANDS = {
         "ds_session.py": {"refresh", "channels", "send_message"},
-        "tg_bridge.py": {"reply"},
-        "discord_account.py": {"reply"},
+        "tg_bridge.py": {"reply", "organizer_send", "organizer_contacts"},
+        "discord_account.py": {"reply", "organizer_send", "organizer_contacts"},
     }
     MODULES = {
         "tg_user": ("tg_bridge.py", "Telegram User"),
@@ -208,6 +208,40 @@ class IntegrationManager:
             "permissions", ["notifications", "refresh"]
         )
         self.bridge.setdefault(filename, {})["last_event"] = time.time()
+        organizer = getattr(getattr(self.app, "runtime", None), "organizer", None)
+        if (
+            organizer
+            and filename in ("tg_bridge.py", "discord_account.py")
+            and not settings.get("services", {}).get(filename, {}).get("path")
+        ):
+            if kind == "organizer_incoming":
+                organizer.enqueue(
+                    "incoming",
+                    filename,
+                    {
+                        "text": str(value.get("text", ""))[:2000],
+                        "chat": str(value.get("chat", ""))[:30],
+                        "message": str(value.get("message", ""))[:80],
+                    },
+                )
+                return
+            if kind == "data" and isinstance(value.get("data"), dict):
+                if isinstance(value["data"].get("action"), dict):
+                    organizer.enqueue("receipt", filename, value["data"]["action"])
+                if isinstance(value["data"].get("organizer_contacts"), dict):
+                    result = value["data"]["organizer_contacts"]
+                    organizer.enqueue("contacts", filename, result)
+                    previous = self.bridge[filename].get("last_action", {})
+                    if result.get("done") and previous.get("id") == result.get("id"):
+                        self.bridge[filename]["last_action"] = {
+                            **previous,
+                            "status": "failed" if result.get("error") else "confirmed",
+                            "text": "Список друзей получен"
+                            if not result.get("error")
+                            else "Не удалось получить друзей",
+                            "time": time.time(),
+                        }
+                    return
         if kind == "ready":
             self.errors.pop(filename, None)
             caps = value.get("capabilities", [])
@@ -448,6 +482,8 @@ class IntegrationManager:
                     line = "[слишком длинная строка сервиса пропущена]\n"
                 if self.processes.get(filename) is proc:
                     self._event(filename, line, settings)
+                if '"type": "organizer_incoming"' in line or '"organizer_contacts":' in line:
+                    line = "[Организатор: обработано сообщение или список контактов]\n"
                 record = logging.LogRecord(
                     filename,
                     logging.INFO,

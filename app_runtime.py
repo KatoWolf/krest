@@ -123,6 +123,9 @@ class AssistantRuntime:
         from learned_actions import LearnedActions
 
         self.learned = LearnedActions(self, self.smart.store)
+        from organizer_service import Organizer
+
+        self.organizer = Organizer(self, self.smart.store, data_dir)
         from action_brain import ActionBrain
 
         self.brain = ActionBrain(self, data_dir)
@@ -225,6 +228,7 @@ class AssistantRuntime:
             thread.start()
         self.autonomy.start()
         self.smart.start()
+        self.organizer.start()
         self.warframe.start()
         cfg = self.settings()
         if not cfg.get("safe_mode") and cfg.get("app_settings", {}).get("voice_auto_start", True):
@@ -855,6 +859,7 @@ class AssistantRuntime:
                 voice.set_game_mode(bool(game))
                 self.game_sessions.tick(game)
                 if game != getattr(self, "_package_game", ""):
+                    self.organizer.wake.set()
                     self.manager.packages.event(
                         "game.started" if game else "game.stopped",
                         {"game": game or self._package_game},
@@ -1320,6 +1325,7 @@ class AssistantRuntime:
         voice.stop_speaking()
 
     def close(self):
+        self.organizer.close()
         self.learned.stop.set()
         self.smart.close()
         self.autonomy.close()

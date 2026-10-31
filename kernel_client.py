@@ -368,6 +368,11 @@ class RemoteRuntime:
                 "learned", action=action, _timeout=15, **args
             )
         )
+        self.organizer = SimpleNamespace(
+            call=lambda action, **args: self.client.call(
+                "organizer", action=action, _timeout=15, **args
+            )
+        )
         root = client.config_path.parent
         self.center = NotificationCenter(root / "inbox.sqlite3")
         self.jobs = JobStore(root / "jobs.sqlite3", recover=False)

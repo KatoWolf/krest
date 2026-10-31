@@ -24,6 +24,7 @@ from autonomy_pages import AutonomyPages
 from smart_pages import SmartPages
 from brain_pages import BrainPages
 from learned_pages import LearnedPages
+from organizer_pages import OrganizerPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -47,6 +48,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    OrganizerPages,
     LearnedPages,
     BrainPages,
     SmartPages,
@@ -88,6 +90,7 @@ class ControlCenterApp(
         ("kernel", "Состояние ядра"),
         ("brain", "Мозг"),
         ("learned", "Покажи один раз"),
+        ("organizer", "Компания"),
         ("memory", "Память"),
         ("events", "События"),
         ("programs", "Программы и звук"),
@@ -108,6 +111,7 @@ class ControlCenterApp(
         ("timers", "Дела и сценарии", ("timers", "scenarios", "events", "memory")),
         ("autonomy", "Автоматизация", ("autonomy", "smart_files", "watches", "habits")),
         ("inbox", "Уведомления", ("inbox", "logs")),
+        ("organizer", "Компания", ("organizer",)),
         (
             "bots",
             "Подключения",
@@ -528,7 +532,7 @@ class ControlCenterApp(
                 logger.exception("Предзагрузка страницы %s", code)
         self._warm_job = self.after(1500, self._warm_next_page)
 
-    BOT_PAGES = {"bots", "api", "steam", "discord_account", "discord_bot", "scripts"}
+    BOT_PAGES = {"bots", "api", "steam", "discord_account", "discord_bot", "scripts", "organizer"}
     CORE_PAGES = {
         "timers",
         "scenarios",
@@ -633,6 +637,7 @@ class ControlCenterApp(
             "timers": "Освободите голову. Крест напомнит и выполнит привычные действия.",
             "autonomy": "Поручения выполняются, когда компьютер свободен.",
             "inbox": "События, которые важно не пропустить.",
+            "organizer": "Друзья, договорённости и готовность к игре — под присмотром Крест.",
             "steam": "Игры, боты и ваши сервисы.",
             "bots": "Подключения, состояние мостов и результаты действий.",
             "kernel": "Крест работает рядом — даже когда меню закрыто.",
@@ -700,6 +705,8 @@ class ControlCenterApp(
             self._brain_refresh(force=True)
         if code == "learned":
             self._learned_refresh(force=True)
+        if code == "organizer":
+            self._org_refresh(force=True)
         if code == "memory":
             self._refresh_memory()
         if code == "events":
@@ -1397,8 +1404,15 @@ class ControlCenterApp(
                 (k for k, v in PERSONALITIES.items() if v == self.personality_var.get()), "friendly"
             )
             from companion_behavior import description
+            from organizer_messages import FEATURES
 
-            character.set(CHARACTERS[key] + "\n\n" + description({"profile": {"personality": key}}))
+            character.set(
+                CHARACTERS[key]
+                + "\n\n"
+                + description({"profile": {"personality": key}})
+                + "\n\nКомпания: "
+                + FEATURES[key]
+            )
 
         old_trace = getattr(self, "_character_trace", None)
         if old_trace:
@@ -2046,6 +2060,7 @@ class ControlCenterApp(
             self._smart_refresh()
             self._brain_refresh()
             self._learned_refresh()
+            self._org_refresh()
             if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             license_state = licensing.status(self.config_mgr.snapshot())

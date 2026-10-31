@@ -119,6 +119,18 @@ class AccountSession:
         if chat_muted(Path(self.manager.filepath).parent, "discord_account.py", channel):
             self.gate.pending.pop(channel, None)
             return
+        from organizer_bridge import inbound
+
+        if inbound(
+            Path(self.manager.filepath).parent,
+            "discord_account.py",
+            str(author.get("id", "")),
+            data.get("id", ""),
+            data.get("content", ""),
+            deferred=deferred,
+        ):
+            self.gate.pending.pop(channel, None)
+            return
         reply_cfg = reply_options(cfg, "discord_account")
         if not opts["auto_reply"]:
             return
@@ -249,7 +261,7 @@ class AccountSession:
         import aiohttp
         from account_control import AccountControl
 
-        control = AccountControl()
+        control = AccountControl("discord_account.py", Path(self.manager.filepath).parent)
 
         cfg = self.config()
         token = cfg["api_keys"]["discord_user_token"].strip()
@@ -271,6 +283,62 @@ class AccountSession:
                     f"/channels/{chat}/messages",
                     json={"content": text, "allowed_mentions": {"parse": []}},
                 )
+
+            async def organizer_reply(chat, text):
+                channel = await self.request(
+                    session, "POST", "/users/@me/channels", json={"recipient_id": chat}
+                )
+                if channel.get("type") != 1 or len(channel.get("recipients", [])) != 1:
+                    raise ValueError("Организатор отправляет сообщения только в личные чаты")
+                recipient = channel["recipients"][0]
+                if (
+                    recipient.get("bot")
+                    or str(recipient.get("id")) == self.user_id
+                    or str(recipient.get("id")) != chat
+                ):
+                    raise ValueError("Нужен личный чат с другом")
+                chat = str(channel["id"])
+                from bot_activity import chat_muted
+
+                if chat_muted(Path(self.manager.filepath).parent, "discord_account.py", chat):
+                    raise ValueError("Этот личный чат приглушён в уведомлениях")
+                self.gate.sending(chat, text)
+                try:
+                    sent = await self.request(
+                        session,
+                        "POST",
+                        f"/channels/{chat}/messages",
+                        json={"content": text, "allowed_mentions": {"parse": []}},
+                    )
+                except Exception:
+                    self.gate.failed(chat)
+                    raise
+                self.gate.delivered(chat, sent.get("id"))
+                self.own_messages.add(str(sent.get("id", "")))
+                if len(self.own_messages) > 1000:
+                    self.own_messages = {str(sent.get("id", ""))}
+                return sent.get("id", "")
+
+            async def organizer_contacts():
+                friends = await self.request(session, "GET", "/users/@me/relationships")
+                rows = []
+                for item in friends:
+                    user = item.get("user", {})
+                    if (
+                        item.get("type") == 1
+                        and not user.get("bot")
+                        and str(user.get("id", "")).isdigit()
+                    ):
+                        rows.append(
+                            dict(
+                                chat=str(user["id"]),
+                                name=str(user.get("global_name") or user.get("username") or "Друг")[
+                                    :60
+                                ],
+                                username=str(user.get("username", ""))[:60],
+                            )
+                        )
+                return rows[:200]
 
             identity = await self.request(session, "GET", "/users/@me")
             if identity.get("bot"):
@@ -341,12 +409,12 @@ class AccountSession:
                                     for c in (event.get("d") or {}).get("private_channels", [])
                                     if isinstance(c, dict) and c.get("type") == 1 and c.get("id")
                                 }
-                                control.attach(manual_reply)
+                                control.attach(manual_reply, organizer_reply, organizer_contacts)
                                 emit(
                                     "ready",
                                     "Личный аккаунт Discord подключён: "
                                     + str(identity.get("username", ""))[:80],
-                                    capabilities=["reply"],
+                                    capabilities=["reply", "organizer_send", "organizer_contacts"],
                                 )
                                 watch(self.status_loop(session, ws))
                                 watch(self.consume_messages(session, incoming))

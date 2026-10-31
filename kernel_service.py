@@ -307,6 +307,8 @@ class Kernel:
             }
         if method == "brain":
             return rt.brain.call(**args)
+        if method == "organizer":
+            return rt.organizer.call(**args)
         if method == "skill_import":
             return rt.skill_import(**args)
         if method == "match":

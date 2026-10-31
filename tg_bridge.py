@@ -159,6 +159,18 @@ async def auto_reply(client, message, deferred=False):
     if chat_muted(BASE_DIR, "tg_bridge.py", chat_id):
         reply_gate.pending.pop(str(chat_id), None)
         return
+    from organizer_bridge import inbound
+
+    if inbound(
+        BASE_DIR,
+        "tg_bridge.py",
+        chat_id,
+        getattr(message, "id", ""),
+        message.text or "",
+        deferred=deferred,
+    ):
+        reply_gate.pending.pop(str(chat_id), None)
+        return
     from bot_activity import reply_options
 
     reply_cfg = reply_options(cfg, "telegram_user")
@@ -623,7 +635,7 @@ async def _start_authorized_client(app):
 def start_tg_bridge(notifications_queue=None):
     from account_control import AccountControl
 
-    account_control = AccountControl()
+    account_control = AccountControl("tg_bridge.py", BASE_DIR)
     if not PYROGRAM_AVAILABLE:
         logger.error("Pyrogram не найден в системе. Установите pyrogram и tgcrypto.")
         return
@@ -708,8 +720,60 @@ def start_tg_bridge(notifications_queue=None):
                     reply_gate.outgoing(chat)
                     await app.send_message(int(chat), text, parse_mode=enums.ParseMode.DISABLED)
 
-                account_control.attach(manual_reply)
-                emit("ready", "Telegram подтвердил авторизацию аккаунта", capabilities=["reply"])
+                async def organizer_reply(chat, text):
+                    target = await app.get_users(int(chat))
+                    if target.is_bot or target.is_self or target.is_deleted:
+                        raise ValueError("Нужен личный контакт Telegram")
+                    reply_gate.sending(chat, text)
+                    try:
+                        sent = await app.send_message(
+                            int(chat), text, parse_mode=enums.ParseMode.DISABLED
+                        )
+                    except Exception:
+                        reply_gate.failed(chat)
+                        raise
+                    reply_gate.delivered(chat, sent.id)
+                    return sent.id
+
+                async def organizer_contacts():
+                    rows = {}
+                    for user in (await app.get_contacts())[:200]:
+                        if not user.is_bot and not user.is_self and not user.is_deleted:
+                            rows[str(user.id)] = dict(
+                                chat=str(user.id),
+                                name=(
+                                    str(user.first_name or "") + " " + str(user.last_name or "")
+                                ).strip()[:60]
+                                or "Контакт",
+                                username=str(user.username or "")[:60],
+                            )
+                    async for dialog in app.get_dialogs(limit=100):
+                        chat = dialog.chat
+                        if (
+                            chat.type == enums.ChatType.PRIVATE
+                            and not getattr(chat, "is_self", False)
+                            and chat.id != me.id
+                            and len(rows) < 200
+                        ):
+                            rows.setdefault(
+                                str(chat.id),
+                                dict(
+                                    chat=str(chat.id),
+                                    name=(
+                                        str(chat.first_name or "") + " " + str(chat.last_name or "")
+                                    ).strip()[:60]
+                                    or "Контакт",
+                                    username=str(chat.username or "")[:60],
+                                ),
+                            )
+                    return list(rows.values())
+
+                account_control.attach(manual_reply, organizer_reply, organizer_contacts)
+                emit(
+                    "ready",
+                    "Telegram подтвердил авторизацию аккаунта",
+                    capabilities=["reply", "organizer_send", "organizer_contacts"],
+                )
                 emit("health", "Готов к входящим сообщениям", connected=True)
 
                 logger.info(

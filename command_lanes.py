@@ -15,6 +15,7 @@ LANES = (
     "undo",
     "control",
     "learned",
+    "organizer",
 )
 
 FILES = {
@@ -51,6 +52,8 @@ def lane_for(entry):
     if entry is None:
         return "general"
     ident, module, name = entry.id, entry.module, entry.func.__name__
+    if module == "organizer":
+        return "control" if name in {"pause", "cancel"} else "organizer"
     if module == "learned_actions":
         return "control" if name in {"stop", "cancel"} else "learned"
     if module == "brain" and name != "defer_action":
