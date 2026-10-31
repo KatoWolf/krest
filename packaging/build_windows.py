@@ -14,7 +14,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.22.0"
+VERSION = "0.22.1"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_support import BuildSession
 
@@ -358,9 +358,42 @@ def check_build_runtime():
         )
 
 
-def main():
+def report_distribution(target, archive, *, open_folder=True):
+    """Only report a published pair; opening Explorer must not fail a good build."""
+    target, archive = Path(target).resolve(), Path(archive).resolve()
+    executable = target / "Krest.exe"
+    if not executable.is_file() or not archive.is_file():
+        raise RuntimeError("Не найдены итоговые EXE и ZIP; сборка не подтверждена")
+    report = (
+        "Последняя успешно завершённая сборка Крест\n"
+        f"Версия: {VERSION}\n"
+        f"Завершена: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Программа: {executable}\n"
+        f"ZIP для передачи: {archive}\n"
+        f"Папка результата: {target.parent}\n"
+    )
+    print("\nСБОРКА ЗАВЕРШЕНА: папка программы и ZIP проверены.", flush=True)
+    print(report, flush=True)
+    receipt = ROOT / "build" / "last-successful-build.txt"
+    try:
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(report, encoding="utf-8")
+        print("Пути сохранены также в: " + str(receipt), flush=True)
+    except OSError:
+        print("Не удалось сохранить отдельную справку о путях; они есть в журнале сборки.")
+    if open_folder and os.name == "nt" and not os.environ.get("CI"):
+        try:
+            os.startfile(str(target.parent))
+        except OSError:
+            print("Проводник не открылся. Откройте эту папку вручную: " + str(target.parent))
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--plan", action="store_true")
+    parser.add_argument("--plan", action="store_true", help="Показать план; EXE и ZIP не создаются")
+    parser.add_argument(
+        "--no-open", action="store_true", help="Не открывать папку результата после сборки"
+    )
     parser.add_argument(
         "--protect",
         action="store_true",
@@ -381,17 +414,26 @@ def main():
         action="store_false",
         help="Облегчённый ZIP: модели потребуется скачать при первом запуске",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     output = ROOT / "dist"
     stage = ROOT / "build" / "exe-stage"
     command = package_command(stage, protect=args.protect)
     if args.plan:
+        print("ТОЛЬКО ПЛАН: EXE и ZIP не создавались.")
+        print("После настоящей сборки результат будет здесь: " + str(output))
+        print("Промежуточная упаковка: " + str(stage / "Krest"))
         print(subprocess.list2cmdline(command))
         return
     if os.name != "nt" or sys.version_info[:2] not in ((3, 11), (3, 12)) or sys.maxsize <= 2**32:
         raise SystemExit("Сборка требует Windows и Python 3.11/3.12 x64")
     if args.license and not args.protect:
         raise SystemExit("Лицензия используется только с --protect")
+    print("Исходники: " + str(ROOT))
+    print("Итоговые папка программы и ZIP: " + str(output))
+    print(
+        "dist публикуется после упаковки, проверки программы и голоса; это последний этап.",
+        flush=True,
+    )
     preflight(output / "Krest", stage / "Krest")
     print("Проверяю библиотеки до упаковки…", flush=True)
     check_build_runtime()
@@ -422,7 +464,9 @@ def main():
     shutil.copy2(ROOT / "packaging/krest.spec", spec)
     command = package_command(stage, protect=args.protect, spec=spec)
     print("[1/4] Упаковываю программу…", flush=True)
+    print("Временные файлы: " + str(stage / "Krest"), flush=True)
     run_checked(command, cwd=ROOT, env=env)
+    print("Упаковка закончена. Сборка продолжается: впереди проверка и выпуск ZIP.", flush=True)
     dist = stage / "Krest"
     print("[2/4] Подготавливаю модели голоса…", flush=True)
     if args.with_models:
@@ -451,8 +495,7 @@ def main():
         print(
             "::notice::Bundled Vosk and real Silero synthesis passed from a clean profile, offline."
         )
-    print("Готово: " + str(target / "Krest.exe"))
-    print("Архив для передачи: " + str(archive))
+    report_distribution(target, archive, open_folder=not args.no_open)
     if args.protect:
         print("Код обработан PyArmor; абсолютная защита от анализа не гарантируется.")
     else:
@@ -471,5 +514,10 @@ if __name__ == "__main__":
         print(
             "::error::" + message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"),
             flush=True,
+        )
+        print("Новая сборка не завершена. Полный журнал: " + str(ROOT / "build" / "build-last.log"))
+        print(
+            "Промежуточные файлы (не готовый выпуск): "
+            + str(ROOT / "build" / "exe-stage" / "Krest")
         )
         raise SystemExit(1)

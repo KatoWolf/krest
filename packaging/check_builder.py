@@ -79,6 +79,72 @@ class ReleaseRecovery(unittest.TestCase):
         self.assertEqual((backups[0] / "keep.txt").read_text(), "previous version")
         self.assertFalse(self.stage.exists())
 
+    def test_plan_does_not_publish_or_claim_a_finished_build(self):
+        output = io.StringIO()
+        with (
+            patch.object(builder, "ROOT", self.root),
+            patch.object(builder, "publish_distribution") as publish,
+            patch.object(builder, "report_distribution") as report,
+            redirect_stdout(output),
+        ):
+            builder.main(["--plan"])
+        self.assertIn("ТОЛЬКО ПЛАН", output.getvalue())
+        self.assertIn(str(self.root / "dist"), output.getvalue())
+        self.assertNotIn("СБОРКА ЗАВЕРШЕНА", output.getvalue())
+        publish.assert_not_called()
+        report.assert_not_called()
+        self.assert_previous()
+
+    def test_report_requires_both_published_artifacts(self):
+        output = io.StringIO()
+        with patch.object(builder, "ROOT", self.root), redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError, "сборка не подтверждена"):
+                builder.report_distribution(self.old, self.archive, open_folder=False)
+        self.assertNotIn("СБОРКА ЗАВЕРШЕНА", output.getvalue())
+        self.assertFalse((self.root / "build/last-successful-build.txt").exists())
+
+    def test_success_records_absolute_paths_without_opening_when_disabled(self):
+        target, archive = builder.publish_distribution(self.stage, self.output)
+        output = io.StringIO()
+        with (
+            patch.object(builder, "ROOT", self.root),
+            patch.object(os, "startfile", create=True) as startfile,
+            redirect_stdout(output),
+        ):
+            builder.report_distribution(target, archive, open_folder=False)
+        receipt = (self.root / "build/last-successful-build.txt").read_text(encoding="utf-8")
+        self.assertIn(str(target.resolve() / "Krest.exe"), receipt)
+        self.assertIn(str(archive.resolve()), receipt)
+        self.assertIn("СБОРКА ЗАВЕРШЕНА", output.getvalue())
+        startfile.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "Windows Explorer")
+    def test_explorer_failure_does_not_turn_published_release_into_failure(self):
+        target, archive = builder.publish_distribution(self.stage, self.output)
+        output = io.StringIO()
+        with (
+            patch.object(builder, "ROOT", self.root),
+            patch.dict(os.environ, {"CI": ""}),
+            patch.object(os, "startfile", side_effect=OSError("Explorer unavailable")) as startfile,
+            redirect_stdout(output),
+        ):
+            builder.report_distribution(target, archive)
+        startfile.assert_called_once_with(str(target.parent.resolve()))
+        self.assertTrue((target / "Krest.exe").is_file())
+        self.assertTrue(archive.is_file())
+        self.assertIn("Проводник не открылся", output.getvalue())
+
+    def test_ci_never_opens_result_folder(self):
+        target, archive = builder.publish_distribution(self.stage, self.output)
+        with (
+            patch.object(builder, "ROOT", self.root),
+            patch.dict(os.environ, {"CI": "true"}),
+            patch.object(os, "startfile", create=True) as startfile,
+            redirect_stdout(io.StringIO()),
+        ):
+            builder.report_distribution(target, archive)
+        startfile.assert_not_called()
+
     def test_builder_lock_does_not_truncate_active_log(self):
         with BuildSession(self.root):
             print("Первый сборщик")

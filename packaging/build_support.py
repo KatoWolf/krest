@@ -90,6 +90,9 @@ class BuildSession:
             import traceback
 
             traceback.print_exception(kind, error, trace)
-            print("Сборка остановлена. Подробности: build/build-last.log", flush=True)
+            print(
+                "Сборка остановлена. Подробности: " + str(self.root / "build" / "build-last.log"),
+                flush=True,
+            )
         self.stack.close()
         return False

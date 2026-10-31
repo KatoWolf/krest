@@ -7,7 +7,7 @@ call packaging\find_python.bat
 if errorlevel 1 goto python_missing
 "%KREST_PYTHON%" %KREST_PY_ARGS% packaging\build_bootstrap.py %*
 if errorlevel 1 goto failed
-echo Done. Distribute the whole dist\Krest folder or the ZIP in dist.
+rem The Python builder reports verified artifacts, or explicitly reports plan-only mode.
 if defined CI exit /b 0
 pause
 exit /b 0
