@@ -20,6 +20,9 @@ class SmartTools:
         self.store = SmartStore(Path(root) / "smart_automation.sqlite3")
         self.objects = ObjectActions(runtime, root)
         self.downloads = DownloadWorkflows(runtime, self.store)
+        from incoming_files import IncomingFiles
+
+        self.incoming = IncomingFiles(runtime, self.store)
         self.watches = TaskWatch(runtime, self.store)
         self.habits = RoutineLearning(runtime, self.store)
         self.audio = AudioDispatcher(runtime, self.store)
@@ -34,7 +37,7 @@ class SmartTools:
 
     def _run(self):
         while not self.stop.wait(3):
-            for component in (self.watches, self.audio, self.habits):
+            for component in (self.watches, self.audio, self.habits, self.incoming):
                 if self.stop.is_set():
                     return
                 try:
@@ -44,6 +47,7 @@ class SmartTools:
 
     def snapshot(self):
         return {
+            "incoming": self.incoming.snapshot(),
             "downloads": self.downloads.rules(),
             "results": self.store.rows("download_items", 30),
             "watches": [{k: v for k, v in r.items() if k != "known"} for r in self.watches.rows()],
@@ -53,6 +57,8 @@ class SmartTools:
         }
 
     def call(self, action, **values):
+        if action.startswith("incoming."):
+            return self.incoming.call(action.removeprefix("incoming."), **values)
         if action == "snapshot":
             return self.snapshot()
         if action == "objects.select":
@@ -134,5 +140,6 @@ class SmartTools:
     def close(self):
         self.stop.set()
         self.watches.close()
+        self.incoming.close()
         if self.thread:
             self.thread.join(timeout=2)

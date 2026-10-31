@@ -16,6 +16,8 @@ class ComponentHealth:
         self.history = deque(maxlen=60)
         self.attempts = {}
         self.last_tick = 0
+        self.last_device_event = 0
+        self.music_evidence = None
         self.worker = None
         try:
             import json
@@ -79,19 +81,56 @@ class ComponentHealth:
             self.worker.start()
         return "Проверяю подключения. Повторно отправлять команды приложениям не буду."
 
+    def device_changed(self):
+        import voice
+
+        now = time.monotonic()
+        rt = self.runtime
+        if (
+            now - self.last_device_event < 10
+            or rt._voice_stop.is_set()
+            or not rt.settings().get("app_settings", {}).get("self_recovery", True)
+        ):
+            return
+        data = voice.telemetry()
+        if (
+            not data.get("connected")
+            or data.get("audio_age_seconds", 0)
+            and data["audio_age_seconds"] > 5
+        ):
+            self.last_device_event = now
+            voice.reconnect_microphone()
+            self.request(("voice",), repair=False)
+
     def tick(self):
         now = time.monotonic()
         if now - self.last_tick < 30:
             return
         self.last_tick = now
-        # Memory-only read. No device enumeration, COM, process scan or model load.
         import voice
+        from desktop_transport import health_snapshot
 
+        components = []
         thread = self.runtime._voice_thread
         if thread and not self.runtime._voice_stop.is_set():
             data = voice.telemetry()
-            if not thread.is_alive() or not data.get("connected") or "voice" in self.rows:
-                self.request(("voice",))
+            if (
+                not thread.is_alive()
+                or not data.get("connected")
+                or (data.get("audio_age_seconds") or 0) > 5
+                or "voice" in self.rows
+            ):
+                components.append("voice")
+        manager = getattr(self.runtime, "integrations", None)
+        if manager and (manager.processes or any(k.startswith("bot:") for k in self.rows)):
+            components.append("bots")
+        music = health_snapshot().get("music", {})
+        evidence = (music.get("failed_at"), music.get("generation"))
+        if music.get("failed_at") and evidence != self.music_evidence:
+            self.music_evidence = evidence
+            components.append("music")
+        if components:
+            self.request(tuple(components))
 
     def check(self, components=("voice", "bots", "music"), *, repair=True, guard=None):
         guard = guard or (lambda: None)
@@ -161,6 +200,11 @@ class ComponentHealth:
                 "Микрофон: нет свежего звука. "
                 + str(
                     data.get("model_error")
+                    or (
+                        f"Следующая попытка через {data['mic_retry_seconds']} с; можно переподключить устройство."
+                        if data.get("mic_retry_seconds")
+                        else ""
+                    )
                     or rt.voice_status
                     or "Драйвер переподключается с задержкой между попытками."
                 ),
@@ -183,6 +227,8 @@ class ComponentHealth:
                     "attention",
                     "нужен вход в аккаунт; автоматический перезапуск не поможет",
                 )
+            elif bridge.get("retry_after_until", 0) > time.time():
+                state, reason = "recovering", "сервис запросил паузу; соединение сохраняется"
             elif data.get("error"):
                 state, reason = "attention", data["error"]
             elif data["running"]:
@@ -271,13 +317,20 @@ class ComponentHealth:
             if repair and self._allow_repair("music"):
                 from desktop_transport import reset_idle
 
-                reset_idle("music")
+                reset = reset_idle("music")
                 self._record(
                     "music",
-                    "recovering",
-                    "Музыка: помощник сброшен для следующего обращения; переключение и лайк повторно не отправлялись.",
+                    "recovering" if reset else "attention",
+                    "Музыка: помощник подготовлен для следующего обращения; действие не повторялось."
+                    if reset
+                    else "Музыка: помощник занят запросом; ожидаю его завершения или тайм-аута.",
                 )
-            raise
+            else:
+                self._record(
+                    "music",
+                    "attention",
+                    "Музыка: восстановление выключено или исчерпаны 3 попытки за 10 минут. Проверьте плеер и повторите диагностику позже.",
+                )
 
     def call(self, action):
         if action == "snapshot":

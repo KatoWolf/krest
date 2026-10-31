@@ -28,6 +28,7 @@ DEFAULT_AUTONOMY = {
 KINDS = {
     "backup": "Версии файлов",
     "copy": "Копирование",
+    "file_return": "Вернуть перемещённый файл",
     "offload": "Освобождение места",
     "archive": "Создание ZIP",
     "unpack": "Распаковка ZIP",
@@ -73,6 +74,12 @@ def validate_task(kind, values):
     if kind not in KINDS or not isinstance(values, dict):
         raise ValueError("Неизвестный вид задачи")
     payload = {}
+    if kind == "file_return":
+        root = str(clean_path(str(values.get("root", ""))))
+        ident = str(values.get("move_id", ""))
+        if not re.fullmatch(r"[a-f0-9]{32}", ident):
+            raise ValueError("Нужна запись перемещения из истории")
+        return {"root": root, "move_id": ident}
     if kind in {"backup", "copy", "archive", "offload", "unpack"}:
         source, destination = (
             clean_path(str(values.get("source", ""))),
@@ -372,8 +379,7 @@ class AutonomousDuty:
         now = time.time()
         self.store.schedule()
         cfg = self.runtime.settings().get("autonomy", DEFAULT_AUTONOMY)
-        app = self.runtime.settings().get("app_settings", {})
-        cfg = dict(cfg, downloads=bool(app.get("downloads_auto_sort")))
+        cfg = dict(cfg)
         smart = getattr(self.runtime, "smart", None)
         cfg["download_rules"] = bool(smart and smart.downloads.enabled())
         pending_kinds = {
@@ -383,7 +389,6 @@ class AutonomousDuty:
             ("profile_backup", "profile_backup", 86400),
             ("health", "health_checks", 1800),
             ("backup_audit", "backup_audit", 86400),
-            ("downloads", "downloads", 180),
             ("download_rules", "download_rules", 180),
         ]:
             if cfg.get(key):
@@ -418,7 +423,8 @@ class AutonomousDuty:
         if time.monotonic() - self._last_schedule > 30:
             self._schedule()
             self._last_schedule = time.monotonic()
-        job = self.store.next()
+        paused_files = self.runtime.settings().get("file_background", {}).get("paused", False)
+        job = self.store.next(exclude=("download_rules", "downloads") if paused_files else ())
         if not job:
             return False
         self.current = job
@@ -491,6 +497,15 @@ class AutonomousDuty:
                 "verify_version": verify_version,
                 "backup_audit": audit_versions,
             }[kind](self, job)
+        if kind == "file_return":
+            incoming = self.runtime.smart.incoming
+            if job["payload"]["root"] not in incoming._roots:
+                raise ValueError("История этой папки не зарегистрирована")
+            journal = incoming._journal(job["payload"]["root"])
+            journal.recover_copies(self.guard)
+            result = journal.undo_copy(job["payload"]["move_id"], self.files, job, self.guard)
+            incoming._snapshot_at = 0
+            return result
         if kind == "downloads":
             return self._sort_downloads()
         if kind == "download_rules":
@@ -546,70 +561,11 @@ class AutonomousDuty:
         raise ValueError("Неизвестная задача")
 
     def _sort_downloads(self):
-        from downloads import DownloadSorter
-
-        performance = getattr(self.runtime, "performance", None)
-        if performance is not None:
-            performance.refresh_activity()
-            if performance.file_pause_reason:
-                raise Paused("Сортировка приостановлена: " + performance.file_pause_reason)
-        settings = self.runtime.settings()
-        cfg = settings.get("app_settings", {})
-        if not cfg.get("downloads_auto_sort") or not settings.get("skills", {}).get(
-            "system_mon", True
-        ):
-            return "Автосортировка выключена; включите её в разделе файлов."
-        policy = settings.get("file_policy", {})
-        # Files covered by a workflow stay in place until its verified copy
-        # and optional extraction finish; the old sorter must not race it.
         smart = getattr(self.runtime, "smart", None)
-        reserved = smart.downloads.rules() if smart else []
-        folders = list(
-            dict.fromkeys(
-                f for f in [cfg.get("downloads_path", ""), *policy.get("folders", [])] if f
-            )
-        )
-        self._download_sorters = {
-            f: self._download_sorters.get(f) or DownloadSorter(policy) for f in folders
-        }
-        result = {"moved": 0, "skipped": 0, "errors": []}
-
-        class Stop:
-            def is_set(inner):
-                return (
-                    self.stop.is_set()
-                    or not self.permitted()
-                    or bool(performance and performance.file_pause_reason)
-                    or bool(self.current and self.current["id"] in self._cancel)
-                )
-
-        for folder, sorter in self._download_sorters.items():
-            self.guard()
-            sorter.policy = dict(
-                policy,
-                exclusions=[
-                    *policy.get("exclusions", []),
-                    *[
-                        pattern.strip()
-                        for r in reserved
-                        if r["enabled"] and Path(r["source"]) == Path(folder)
-                        for pattern in r["pattern"].split(";")
-                    ],
-                ],
-            )
-            try:
-                item = sorter.scan(folder, stop=Stop())
-                result["moved"] += item["moved_count"]
-                result["skipped"] += item["skipped_count"]
-                result["errors"].extend(item["errors"][:3])
-            except (ValueError, OSError) as exc:
-                result["errors"].append(str(exc))
-        self.guard()
-        text = f"Загрузки: перемещено {result['moved']}; ожидают стабильного файла {result['skipped']}."
-        self.runtime.download_status = text
-        if result["errors"]:
-            raise ValueError(text + " " + "; ".join(result["errors"][:3]))
-        return text
+        if smart and hasattr(smart, "incoming"):
+            smart.incoming.tick()
+            return smart.incoming.status
+        return "Лёгкий обработчик файлов ещё не запущен"
 
     def _download(self, job):
         import requests

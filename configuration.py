@@ -66,6 +66,7 @@ DEFAULT_CONFIG = {
     "application_aliases": {},
     "scenarios": DEFAULT_SCENARIOS,
     "event_rules": [],
+    "file_background": {"paused": False},
     "file_policy": {"folders": [], "exclusions": [], "rules": []},
     "briefings": {"morning": "", "evening": ""},
     "accessibility": {"reduce_motion": False, "font_scale": 100, "relic_edges": True},
@@ -274,6 +275,8 @@ def validate(data):
 
     validate_policy(data["file_policy"])
     validate_autonomy(data["autonomy"])
+    if type(data["file_background"]["paused"]) is not bool:
+        raise ValueError("Некорректная пауза фоновой обработки файлов")
     from automation import validate_rules
 
     validate_rules(data["event_rules"], data["scenarios"])

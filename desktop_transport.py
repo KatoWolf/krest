@@ -5,6 +5,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 
 PREFIX = "KREST_DESKTOP_RESULT:"
 _clients = {}
@@ -17,6 +18,9 @@ class DesktopPipe:
         self.lock = threading.Lock()
         self.process = None
         self.sequence = 0
+        self.failed_at = 0
+        self.generation = 0
+        self.started_at = 0
 
     def close(self):
         process, self.process = self.process, None
@@ -35,6 +39,7 @@ class DesktopPipe:
         from app_paths import app_command
 
         self.close()
+        self.generation += 1
         self.process = subprocess.Popen(
             app_command("--desktop-service"),
             stdin=subprocess.PIPE,
@@ -71,6 +76,7 @@ class DesktopPipe:
         with self.lock:
             if self.process is None or self.process.poll() is not None:
                 self._start()
+            self.started_at = time.monotonic()
             self.sequence += 1
             request = dict(payload, request_id=self.sequence)
             try:
@@ -79,8 +85,12 @@ class DesktopPipe:
                 result = self.responses.get(timeout=timeout)
                 if not isinstance(result, dict) or result.get("request_id") != self.sequence:
                     raise OSError("Помощник приложения завершился без подтверждения")
+                self.failed_at = 0
+                self.started_at = 0
                 return result
             except (queue.Empty, OSError, ValueError) as exc:
+                self.failed_at = time.monotonic()
+                self.started_at = 0
                 self.close()
                 raise TimeoutError(
                     "Не получено подтверждение от приложения. Проверьте состояние перед повтором."
@@ -98,6 +108,19 @@ def request(payload, timeout=12):
     with _lock:
         client = _clients.setdefault(domain, DesktopPipe(background=domain == "learned"))
     return client.call(payload, timeout=timeout)
+
+
+def health_snapshot():
+    with _lock:
+        return {
+            name: {
+                "failed_at": client.failed_at,
+                "generation": client.generation,
+                "started_at": client.started_at,
+                "busy": client.lock.locked(),
+            }
+            for name, client in _clients.items()
+        }
 
 
 def close():

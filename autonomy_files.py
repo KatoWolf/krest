@@ -86,6 +86,7 @@ class FileJobs:
                 known
                 and destination.stat().st_size == stamp[0]
                 and digest_file(destination, self.guard) == known
+                and digest_file(source, self.guard) == known
             ):
                 return known
             raise FileExistsError("Файл назначения уже существует: " + str(destination))
@@ -93,24 +94,51 @@ class FileJobs:
         if offset > stamp[0]:
             partial.unlink()
             offset = 0
+        if offset:
+            # Verify the existing prefix before appending; a damaged partial must
+            # never be accepted just because its length looks plausible.
+            with source.open("rb") as original, partial.open("rb") as saved:
+                remaining = offset
+                while remaining:
+                    self.guard()
+                    size = min(CHUNK, remaining)
+                    if original.read(size) != saved.read(size):
+                        offset = 0
+                        break
+                    remaining -= size
+            if not offset:
+                partial.unlink()
+            self.progress(f"Проверено продолжение {source.name}: {offset // 1024**2} МБ")
         if shutil.disk_usage(destination.parent).free < stamp[0] - offset + DISK_RESERVE:
             raise OSError("Недостаточно места на диске назначения")
-        with source.open("rb") as original, partial.open("ab") as output:
-            original.seek(offset)
-            while True:
-                self.guard()
-                block = original.read(CHUNK)
-                if not block:
-                    break
-                output.write(block)
-                offset += len(block)
-                self.progress(
-                    f"{source.name}: {offset // 1024**2} / {max(1, stamp[0] // 1024**2)} МБ"
-                )
-                # Bounded IO throughput; the voice process keeps its CPU budget.
-                time.sleep(0.01)
-            output.flush()
-            os.fsync(output.fileno())
+        try:
+            with source.open("rb") as original, partial.open("ab") as output:
+                original.seek(offset)
+                saved_at = time.monotonic()
+                while True:
+                    self.guard()
+                    block = original.read(CHUNK)
+                    if not block:
+                        break
+                    output.write(block)
+                    offset += len(block)
+                    self.progress(
+                        f"{source.name}: {offset // 1024**2} / {max(1, stamp[0] // 1024**2)} МБ"
+                    )
+                    if time.monotonic() - saved_at >= 2:
+                        output.flush()
+                        os.fsync(output.fileno())
+                        entry["bytes"] = offset
+                        self.store.update(job["id"], checkpoint=checkpoint)
+                        saved_at = time.monotonic()
+                    # Bounded IO throughput; the voice process keeps its CPU budget.
+                    time.sleep(0.01)
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            if partial.exists():
+                entry["bytes"] = partial.stat().st_size
+                self.store.update(job["id"], checkpoint=checkpoint)
         original_hash = digest_file(source, self.guard)
         if expected_hash and original_hash != expected_hash:
             raise ValueError("Контрольная сумма сохранённой версии не совпала")
@@ -183,7 +211,23 @@ class FileJobs:
         ):
             raise ValueError("Папки источника и назначения должны быть раздельными")
         destination.mkdir(parents=True, exist_ok=True)
+        checkpoint.setdefault("source_is_file", source.is_file())
         done = set(checkpoint.get("done", []))
+        if checkpoint.get("_recovered"):
+            for relative in sorted(done):
+                self.guard()
+                original = clean_path(source if checkpoint["source_is_file"] else source / relative)
+                records = [r for r in self.store.versions(original) if r["job_id"] == job["id"]]
+                if not records:
+                    raise ValueError("Нет записи завершённого файла: " + relative)
+                saved = records[0]
+                target = clean_path(saved["destination"])
+                if not target.is_file() or digest_file(target, self.guard) != saved["hash"]:
+                    raise ValueError("Сохранённый файл изменился: " + str(target))
+                if original.is_file() and digest_file(original, self.guard) != saved["hash"]:
+                    raise ValueError("Исходник изменился после прерывания: " + relative)
+            checkpoint["_recovered"] = False
+            self.store.update(job["id"], checkpoint=checkpoint)
         moved = job["kind"] == "offload"
         root_free = payload.get("min_free_gb", 30) * 1024**3
         for path, relative in self.entries(source):

@@ -8,11 +8,12 @@ from tkinter import ttk, filedialog
 from audio_dispatcher import PROFILE_NAMES
 from routine_learning import TRIGGERS
 from task_watch import STATES
+from incoming_pages import IncomingPages
 
 SMART_PAGES = {"smart_files", "watches", "sound", "habits"}
 
 
-class SmartPages:
+class SmartPages(IncomingPages):
     def _smart_call(self, action, done=None, **values):
         def finish(result):
             if isinstance(result, str):
@@ -27,6 +28,7 @@ class SmartPages:
 
     def build_smart_files_tab(self):
         parent = self.page_bodies["smart_files"]
+        self._build_incoming_controls(parent)
         card = self.card(
             parent,
             "Работа с выбранными файлами",
@@ -46,7 +48,7 @@ class SmartPages:
         card = self.card(
             parent,
             "Правила для загрузок",
-            "После 20 минут простоя: проверить стабильность, сохранить проверенную копию, при необходимости распаковать ZIP. Исходники сохраняются, установщики не запускаются.",
+            "Выберите быстрое перемещение или проверенное копирование при AFK. В лёгком фоне перемещаются только закрытые стабильные файлы на том же диске.",
         )
         self.download_rule_tree = self._table(
             card,
@@ -73,8 +75,10 @@ class SmartPages:
         )
         self.workflow_destination = tk.StringVar()
         self.workflow_pattern = tk.StringVar(value="*.zip")
-        self.workflow_unpack = tk.BooleanVar(value=True)
-        self.workflow_duplicates = tk.BooleanVar(value=True)
+        self.workflow_mode = tk.StringVar(value="Перемещать в фоне")
+        self.workflow_label = tk.StringVar(value="Загрузки браузера")
+        self.workflow_unpack = tk.BooleanVar(value=False)
+        self.workflow_duplicates = tk.BooleanVar(value=False)
         for title, variable in (
             ("Папка загрузки", self.workflow_source),
             ("Папка результата", self.workflow_destination),
@@ -88,15 +92,29 @@ class SmartPages:
             ttk.Button(row, text="Выбрать…", command=lambda v=variable: self._smart_folder(v)).pack(
                 side="left", padx=(6, 0)
             )
+        self.field(card, "Название источника", self.workflow_label)
+        mode = ttk.Combobox(
+            card,
+            textvariable=self.workflow_mode,
+            values=["Перемещать в фоне", "Копировать при AFK"],
+            state="readonly",
+        )
+        mode.pack(fill="x", pady=8)
+        mode.bind("<<ComboboxSelected>>", lambda _: self._workflow_mode_changed())
+        for event in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            mode.bind(event, lambda _: "break")
         self.field(card, "Маска имени, например *мод*.zip", self.workflow_pattern)
-        ttk.Checkbutton(
+        self.workflow_unpack_button = ttk.Checkbutton(
             card, text="Распаковывать ZIP в отдельную папку", variable=self.workflow_unpack
-        ).pack(anchor="w", pady=4)
-        ttk.Checkbutton(
+        )
+        self.workflow_unpack_button.pack(anchor="w", pady=4)
+        self.workflow_duplicates_button = ttk.Checkbutton(
             card,
             text="Находить точные дубликаты в папке результата",
             variable=self.workflow_duplicates,
-        ).pack(anchor="w", pady=4)
+        )
+        self.workflow_duplicates_button.pack(anchor="w", pady=4)
+        self._workflow_mode_changed()
         ttk.Button(
             card,
             text="Создать правило",
@@ -108,6 +126,8 @@ class SmartPages:
                 pattern=self.workflow_pattern.get(),
                 unpack=self.workflow_unpack.get(),
                 duplicates=self.workflow_duplicates.get(),
+                mode="move" if self.workflow_mode.get() == "Перемещать в фоне" else "copy",
+                source_label=self.workflow_label.get(),
             ),
         ).pack(anchor="w", pady=10)
         card = self.card(
@@ -130,6 +150,14 @@ class SmartPages:
             command=lambda: self._smart_selected("workflow_results", "downloads.retry"),
         ).pack(anchor="w", pady=8)
         self._smart_refresh(force=True)
+
+    def _workflow_mode_changed(self):
+        moving = self.workflow_mode.get() == "Перемещать в фоне"
+        if moving:
+            self.workflow_unpack.set(False)
+            self.workflow_duplicates.set(False)
+        for button in (self.workflow_unpack_button, self.workflow_duplicates_button):
+            button.configure(state="disabled" if moving else "normal")
 
     @staticmethod
     def _smart_folder(variable):
@@ -179,8 +207,13 @@ class SmartPages:
         ids = self.download_rule_tree.selection()
         row = next((r for r in self._smart_data.get("downloads", []) if r["id"] in ids), None)
         if row:
+            mode = (
+                "Перемещение в фоне; другой диск — при AFK"
+                if row.get("mode") == "move"
+                else "Копирование при AFK"
+            )
             self.download_rule_detail.set(
-                f"{row['source']} → {row['destination']}\nZIP: {'распаковать' if row['unpack'] else 'сохранить'} · Дубликаты: {'проверять' if row['duplicates'] else 'не искать'}"
+                f"{row['source']} → {row['destination']}\n{mode}\nZIP: {'распаковать' if row['unpack'] else 'сохранить'} · Дубликаты: {'проверять' if row['duplicates'] else 'не искать'}"
             )
 
     def build_watches_tab(self):
@@ -499,6 +532,7 @@ class SmartPages:
         if getattr(self, "closing", False) or getattr(self, "_destroyed", False):
             return
         self._smart_data = data
+        self._incoming_display(data.get("incoming", {}))
         self._smart_rows(
             "download_rule_tree",
             [
@@ -508,7 +542,9 @@ class SmartPages:
                         r["pattern"],
                         Path(r["source"]).name,
                         Path(r["destination"]).name,
-                        "Включено" if r["enabled"] else "Пауза",
+                        ("Перемещение" if r.get("mode") == "move" else "Копирование · AFK")
+                        if r["enabled"]
+                        else "Пауза",
                     ),
                 )
                 for r in data["downloads"]

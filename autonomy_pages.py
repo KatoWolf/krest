@@ -24,7 +24,7 @@ class AutonomyPages:
         card = self.card(
             body,
             "Дежурю, пока вас нет",
-            "Одна задача за раз. Возвращение к ПК, игра, просмотр или звонок приостанавливают работу.",
+            "Тяжёлые задачи выполняются по одной при AFK. Лёгкая сортировка работает отдельно и доступна во время игры — в разделе файлов.",
         )
         self.duty_status = tk.StringVar(value="Проверяю состояние…")
         self.label(card, textvariable=self.duty_status, wraplength=740).pack(
@@ -453,7 +453,12 @@ class AutonomyPages:
                     if field in {"updated", "created"}:
                         value = dt.datetime.fromtimestamp(value).strftime("%d.%m %H:%M")
                     elif field == "status":
-                        value = STATUS_NAMES.get(value, value)
+                        value = STATUS_NAMES.get(value, value) + (
+                            " · восстановлено"
+                            if row.get("recovered")
+                            and row.get("status") in {"waiting", "retry", "running", "failed"}
+                            else ""
+                        )
                     elif field == "enabled":
                         value = ("Включено" if value else "Выключено") + (
                             " · изучено" if row.get("learned") else ""
@@ -485,6 +490,13 @@ class AutonomyPages:
         self.duty_selection = kind, ident
         row = self.duty_rows.get(kind, {}).get(ident, {})
         text = row.get("result", "")
+        if row.get("recovered"):
+            text = (
+                "Восстановлено после перезапуска: "
+                + dt.datetime.fromtimestamp(row["recovered"]).strftime("%d.%m %H:%M")
+                + "\n"
+                + text
+            )
         if kind == "versions" and row:
             text = (
                 "Сохранено: "

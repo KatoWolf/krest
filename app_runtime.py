@@ -249,6 +249,7 @@ class AssistantRuntime:
             return False
         if source in ("text", "voice"):
             self.autonomy.gate.touch()
+            self.smart.incoming.budget.voice()
         # Emergency release must not wait behind network commands in the execution queue.
         from speech_tools import normalize_command
 
@@ -960,14 +961,7 @@ class AssistantRuntime:
     def downloads_summary(self):
         if not self.settings().get("app_settings", {}).get("downloads_auto_sort"):
             return "Автосортировка выключена"
-        activity = self.autonomy.gate.snapshot()
-        if self.autonomy.paused or not activity.get("allowed"):
-            return "Сортировка ожидает AFK: " + (
-                "дежурство приостановлено"
-                if self.autonomy.paused
-                else activity.get("reason", "ПК используется")
-            )
-        return self.download_status
+        return self.smart.incoming.status
 
     def publish_notice(
         self, text, source="Система", priority="normal", speak=True, kind="", target=None

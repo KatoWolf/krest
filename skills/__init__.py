@@ -2,6 +2,7 @@
 
 BUILTIN_MODULES = (
     "organizer",
+    "incoming",
     "learned_actions",
     "brain",
     "autonomy",

@@ -333,6 +333,14 @@ def stop_speaking():
             break
 
 
+def reconnect_microphone():
+    """Signal the capture owner; never close PortAudio from a UI/health thread."""
+    if _engine is None:
+        return False
+    _engine.request_microphone_refresh()
+    return True
+
+
 def telemetry():
     if _remote is not None:
         return _remote.cached["voice"]["telemetry"]

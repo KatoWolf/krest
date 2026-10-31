@@ -117,33 +117,7 @@ class ObjectActions:
         if len(context["paths"]) != 1:
             raise ValueError("Выберите один файл или папку")
         path = clean_path(context["paths"][0])
-        if os.name != "nt":
-            raise ValueError("Открытие объекта доступно в Windows")
-        if reveal:
-            import subprocess
-
-            subprocess.Popen(["explorer.exe", "/select,", str(path)])
-        else:
-            if path.suffix.casefold() in {
-                ".exe",
-                ".msi",
-                ".msix",
-                ".cmd",
-                ".bat",
-                ".ps1",
-                ".py",
-                ".vbs",
-                ".lnk",
-                ".url",
-                ".hta",
-                ".com",
-                ".scr",
-                ".reg",
-                ".js",
-            }:
-                raise ValueError("Для запуска этого файла откройте его папку и запустите вручную")
-            os.startfile(str(path))
-        return "Открываю: " + str(path)
+        return open_path(path, reveal)
 
     def pack(self, foreground=True):
         context = self.current(foreground=foreground)
@@ -236,3 +210,34 @@ class ObjectActions:
             partial.unlink(missing_ok=True)
         self.select([str(target)], str(destination))
         return "Архив создан и проверен: " + str(target)
+
+
+def open_path(path, reveal=False):
+    path = clean_path(path)
+    if os.name != "nt":
+        raise ValueError("Открытие объекта доступно в Windows")
+    if reveal:
+        import subprocess
+
+        subprocess.Popen(["explorer.exe", "/select,", str(path)])
+    else:
+        if path.suffix.casefold() in {
+            ".exe",
+            ".msi",
+            ".msix",
+            ".cmd",
+            ".bat",
+            ".ps1",
+            ".py",
+            ".vbs",
+            ".lnk",
+            ".url",
+            ".hta",
+            ".com",
+            ".scr",
+            ".reg",
+            ".js",
+        }:
+            raise ValueError("Для запуска этого файла откройте его папку и запустите вручную")
+        os.startfile(str(path))
+    return "Открываю: " + str(path)

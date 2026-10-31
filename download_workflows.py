@@ -2,6 +2,7 @@
 
 import fnmatch
 import hashlib
+import json
 from pathlib import Path
 import time
 import uuid
@@ -24,12 +25,50 @@ class DownloadWorkflows:
         self.runtime, self.store = runtime, store
         self.observed = {}
         self.revision = 0
+        with store.connect() as db:
+            interrupted = [
+                json.loads(r[0])
+                for r in db.execute(
+                    "SELECT value FROM records WHERE kind='download_items' AND (json_extract(value,'$.status')='running' OR (json_extract(value,'$.status') IS NULL AND json_extract(value,'$.checkpoint') IS NOT NULL)) LIMIT 200"
+                )
+            ]
+        for item in interrupted:
+            if item.get("status") == "running" or (
+                not item.get("status") and item.get("checkpoint")
+            ):
+                item.update(
+                    status="waiting",
+                    result="Прервано перезапуском. Проверю сохранённую часть и продолжу при AFK.",
+                    recovered=time.time(),
+                )
+                store.put("download_items", item, limit=60000)
 
     def rules(self):
         return self.store.rows("download_rules", 30)
 
-    def add(self, source, destination, pattern="*.zip", unpack=True, duplicates=True):
+    def add(
+        self,
+        source,
+        destination,
+        pattern="*.zip",
+        unpack=True,
+        duplicates=True,
+        mode="copy",
+        source_label="",
+    ):
+        if mode not in {"copy", "move"} or (mode == "move" and (unpack or duplicates)):
+            raise ValueError(
+                "Быстрое перемещение не совмещается с распаковкой и поиском дубликатов"
+            )
         source, destination = clean_path(source), clean_path(destination)
+        if mode == "move":
+            from incoming_files import local_folder
+
+            local_folder(source)
+            local_folder(destination)
+            incoming = getattr(getattr(self.runtime, "smart", None), "incoming", None)
+            if incoming:
+                incoming._source_path(source)
         if not source.is_dir() or not destination.is_dir():
             raise ValueError("Выберите существующие папки загрузки и результата")
         if (
@@ -55,6 +94,8 @@ class DownloadWorkflows:
             "download_rules",
             {
                 "source": str(source),
+                "mode": mode,
+                "source_label": str(source_label).strip()[:80],
                 "destination": str(destination),
                 "pattern": pattern,
                 "unpack": unpack,
@@ -68,7 +109,11 @@ class DownloadWorkflows:
             "id": row["id"],
             "text": "Правило включено: "
             + pattern
-            + ". Обработка только во время AFK; исходники сохраняются.",
+            + (
+                ". Перемещение в лёгком фоне; другой диск — при AFK."
+                if mode == "move"
+                else ". Проверенное копирование и распаковка при AFK; исходники сохраняются."
+            ),
         }
 
     @staticmethod
@@ -108,12 +153,34 @@ class DownloadWorkflows:
         seen = set()
         for rule in self.rules():
             duty.guard()
-            if not rule["enabled"]:
+            source_control = self.store.get(
+                "incoming_sources", hashlib.sha256(rule["source"].encode()).hexdigest()
+            )
+            if not rule["enabled"] or source_control and not source_control["enabled"]:
                 continue
+            if self.runtime.settings().get("file_background", {}).get("paused"):
+                raise Paused("Обработка входящих файлов приостановлена вами")
             root, destination = clean_path(rule["source"]), clean_path(rule["destination"])
             if not root.is_dir() or not destination.is_dir():
                 errors.append("Папка правила недоступна: " + str(root))
                 continue
+            from file_moves import MoveJournal
+
+            moving = rule.get("mode", "copy") == "move"
+            journal = MoveJournal(root) if moving else None
+            if journal:
+                journal.recover_copies(duty.guard)
+                recovered = {r["batch"]: r for r in journal.rows(200) if r["status"] == "moved"}
+                for item in self.store.rows("download_items", 200):
+                    record = recovered.get(item.get("job_id"))
+                    if record and item.get("status") != "completed":
+                        item.update(
+                            status="completed",
+                            destination=record["target"],
+                            result="Перемещение подтверждено после перезапуска: "
+                            + record["target"],
+                        )
+                        self.store.put("download_items", item, limit=60000)
             count = 0
             for path in root.iterdir():
                 duty.guard()
@@ -129,6 +196,13 @@ class DownloadWorkflows:
                     or not self.matches(rule, path)
                 ):
                     continue
+                from task_watch import file_available
+
+                if not file_available(path):
+                    skipped += 1
+                    continue
+                if moving and path.stat().st_dev == destination.stat().st_dev:
+                    continue  # The light worker owns same-volume moves.
                 key = rule["id"] + ":" + str(path)
                 seen.add(key)
                 stamp = fingerprint(path)
@@ -141,6 +215,8 @@ class DownloadWorkflows:
                     skipped += 1
                     continue
                 ident = hashlib.sha256(key.encode()).hexdigest()
+                if journal and journal.was_returned(path, stamp):
+                    continue
                 existing = self.store.get("download_items", ident)
                 if existing and existing.get("stamp") != stamp:
                     existing = None
@@ -165,9 +241,21 @@ class DownloadWorkflows:
 
                 def guard():
                     duty.guard()
+                    if self.runtime.settings().get("file_background", {}).get("paused"):
+                        raise Paused("Обработка входящих файлов приостановлена вами")
                     if rule_state[0] != self.revision:
                         current = self.store.get("download_rules", rule["id"])
-                        rule_state[:] = [self.revision, bool(current and current["enabled"])]
+                        folder_state = self.store.get(
+                            "incoming_sources", hashlib.sha256(rule["source"].encode()).hexdigest()
+                        )
+                        rule_state[:] = [
+                            self.revision,
+                            bool(
+                                current
+                                and current["enabled"]
+                                and not (folder_state and not folder_state["enabled"])
+                            ),
+                        ]
                     if not rule_state[1]:
                         raise Paused("Правило обработки загрузок отключено")
 
@@ -178,6 +266,8 @@ class DownloadWorkflows:
 
                 files = FileJobs(CheckpointStore(), guard, duty.progress)
                 job = {"id": item["job_id"], "payload": {}, "checkpoint": item["checkpoint"]}
+                item.update(status="running", result="Обрабатываю файл; продолжение сохраняется")
+                self.store.put("download_items", item, limit=60000)
                 try:
                     if stamp[0] > MAX_BYTES:
                         raise ValueError("За одну операцию поддерживаются файлы до 20 ГБ")
@@ -219,6 +309,21 @@ class DownloadWorkflows:
                         message += "\n" + files.unpack(job)
                     if fingerprint(path) != stamp:
                         raise OSError("Исходник изменился во время обработки")
+                    if moving:
+                        move = journal.finish_copy(
+                            path,
+                            target,
+                            stamp,
+                            content_hash,
+                            guard=guard,
+                            label=rule.get("source_label") or "Папка правила",
+                            batch=item["job_id"],
+                        )
+                        message = "Файл перенесён после проверки: " + str(target)
+                        incoming = getattr(self.runtime.smart, "incoming", None)
+                        if incoming:
+                            incoming._journal(root)
+                            incoming._snapshot_at = 0
                     item.update(status="completed", result=message, destination=str(target))
                     processed += 1
                 except Paused:

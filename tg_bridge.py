@@ -790,6 +790,7 @@ def start_tg_bridge(notifications_queue=None):
                                 "health",
                                 "Telegram запросил паузу; соединение не перезапускаю",
                                 connected=True,
+                                retry_after=max(0, reply_gate.blocked_until - time.monotonic()),
                                 pending=len(reply_gate.pending),
                             )
                             continue
@@ -810,6 +811,7 @@ def start_tg_bridge(notifications_queue=None):
                                 "health",
                                 "Telegram ограничил проверки; ожидаю разрешённое время",
                                 connected=True,
+                                retry_after=exc.value,
                             )
                         except (AuthKeyUnregistered, SessionRevoked, UserDeactivated, Unauthorized):
                             emit("auth_required", "Telegram: войдите в аккаунт заново")

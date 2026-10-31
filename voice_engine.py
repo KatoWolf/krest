@@ -122,6 +122,11 @@ _last_backend_refresh = 0
 _failed_microphones = {}
 _last_nonzero_audio_at = 0
 _refresh_audio_requested = False
+_reconnect_requested = threading.Event()
+from reconnect_budget import ReconnectBudget
+
+_mic_budget = ReconnectBudget()
+_mic_attempt_setting = None
 _quick_phrases = set()
 _gaming = False
 
@@ -524,7 +529,7 @@ def audio_callback(indata, frames, time_info, status):
 
 def start_microphone() -> bool:
     """Безопасная инициализация / перезапуск микрофона."""
-    global _refresh_audio_requested
+    global _refresh_audio_requested, _mic_attempt_setting
     global \
         stream, \
         last_mic_error_time, \
@@ -533,10 +538,43 @@ def start_microphone() -> bool:
         _last_backend_refresh, \
         _last_nonzero_audio_at
 
-    # Защита от слишком частых попыток перезапуска при сбое устройства
-    if time.time() - last_mic_error_time < 3.0:
+    requested = _reconnect_requested.is_set()
+    if requested:
+        _reconnect_requested.clear()
+        _mic_budget.reset()
+    settings = _settings_getter().get("app_settings", {})
+    selected = str(settings.get("microphone", ""))
+    changed = _mic_attempt_setting is not None and selected != _mic_attempt_setting
+    if changed:
+        _mic_budget.reset()
+    try:
+        working = stream is not None and stream.active and time.monotonic() - _last_audio_at < 5
+    except Exception:
+        working = False
+    if not requested and not changed and working:
+        return True
+    _mic_attempt_setting = selected
+    if (
+        last_mic_error_time
+        and not settings.get("self_recovery", True)
+        and not requested
+        and not changed
+    ):
+        metrics.update(
+            connected=False,
+            mic_hint="Автовосстановление выключено. Переподключите микрофон в меню.",
+        )
         clear_audio_queue()
         return False
+    if not _mic_budget.allow():
+        metrics.update(
+            connected=False,
+            mic_retry_seconds=int(_mic_budget.remaining()) + 1,
+            mic_hint="Ожидаю следующую попытку подключения; смена устройства запустит проверку раньше.",
+        )
+        clear_audio_queue()
+        return False
+    metrics["mic_retry_seconds"] = 0
 
     try:
         if stream is not None:
@@ -585,6 +623,7 @@ def start_microphone() -> bool:
             mic_error="",
             mic_hint="",
         )
+        last_mic_error_time = 0
         clear_audio_queue()
         _reset_recognizer()
         return True
@@ -598,6 +637,7 @@ def start_microphone() -> bool:
 
 
 def request_microphone_refresh():
+    _reconnect_requested.set()
     global _refresh_audio_requested, last_mic_error_time
     _refresh_audio_requested = True
     last_mic_error_time = 0
@@ -664,6 +704,7 @@ def listen():
         metrics["device_name"] = ""
     if (
         not active
+        or _reconnect_requested.is_set()
         or (_microphone_setting is not None and selected != _microphone_setting)
         or stalled
     ):
@@ -672,6 +713,7 @@ def listen():
             # clearing it the capture loop retries at full CPU for the backoff.
             clear_audio_queue()
             return ""
+    _mic_budget.healthy()
     metrics["mic_hint"] = (
         "Микрофон подключён, но передаёт тишину. Проверьте кнопку mute на гарнитуре и уровень входа в Windows."
         if _last_nonzero_audio_at and now - _last_nonzero_audio_at > 8

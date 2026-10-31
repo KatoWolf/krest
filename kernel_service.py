@@ -111,6 +111,8 @@ class Kernel:
             if self.runtime.learned.draft:
                 self.runtime.submit("запомни кнопку")
         else:
+            if kind == "device_change":
+                self.runtime.health.device_changed()
             self.runtime.automation.emit(kind, payload)
 
     def event(self, kind, value):

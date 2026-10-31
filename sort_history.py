@@ -52,9 +52,21 @@ class SortHistory:
         with self.connect() as db:
             db.execute("DELETE FROM moves WHERE id=?", (ident,))
 
-    def list(self):
+    def legacy_list(self):
         with self.connect() as db:
             return [dict(v) for v in db.execute("SELECT * FROM moves ORDER BY id DESC LIMIT 500")]
+
+    def list(self):
+        rows = self.legacy_list()
+        if (self.root / ".krest-moves.sqlite3").exists():
+            from file_moves import MoveJournal
+
+            rows.extend(
+                dict(r, id="fast:" + r["id"], undone=int(r["status"] == "returned"))
+                for r in MoveJournal(self.root).rows()
+                if r["status"] in {"moved", "returned"}
+            )
+        return sorted(rows, key=lambda r: r["created"], reverse=True)[:500]
 
     def was_restored(self, path, info):
         with self.connect() as db:
@@ -68,6 +80,16 @@ class SortHistory:
         )
 
     def undo_last(self, stop=None, batch_id=None):
+        if (self.root / ".krest-moves.sqlite3").exists():
+            from file_moves import MoveJournal
+
+            fast = MoveJournal(self.root)
+            rows = [r for r in fast.rows() if r["status"] == "moved"]
+            old = [r for r in self.legacy_list() if not r["undone"]]
+            if (batch_id and any(r["batch"] == batch_id for r in rows)) or (
+                not batch_id and rows and (not old or rows[0]["created"] >= old[0]["created"])
+            ):
+                return fast.undo_batch(batch_id, stop)
         from downloads import _sort_lock, _CancellableReader
 
         result = {"restored": 0, "errors": []}

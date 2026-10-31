@@ -38,6 +38,7 @@ audio_restore.json
 extensions/
 activity_profile.json
 .krest-sort-history.sqlite3*
+.krest-moves.sqlite3*
 
 jobs.sqlite3*
 memory.sqlite3*

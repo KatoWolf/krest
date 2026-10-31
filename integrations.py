@@ -271,6 +271,11 @@ class IntegrationManager:
                 replies=value.get("replies", 0),
                 health_timeout=timeout,
             )
+            retry_after = value.get("retry_after", 0)
+            if isinstance(retry_after, (int, float)) and 0 < retry_after <= 86400:
+                self.bridge[filename]["retry_after_until"] = time.time() + retry_after
+            elif connected:
+                self.bridge[filename].pop("retry_after_until", None)
             if connected:
                 self.errors.pop(filename, None)
                 self.bridge[filename].pop("disconnected_since", None)
@@ -350,6 +355,7 @@ class IntegrationManager:
                 proc.poll() is None
                 and bridge.get("monitored")
                 and not bridge.get("auth_required")
+                and now_wall >= bridge.get("retry_after_until", 0)
                 and cfg.get("auto_restart", True)
                 and settings.get("app_settings", {}).get("self_recovery", True)
                 and (

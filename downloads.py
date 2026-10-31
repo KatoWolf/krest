@@ -35,7 +35,10 @@ class DownloadSorter:
         from skills.system_mon import get_category_for_extension, INCOMPLETE_DOWNLOAD_EXTENSIONS
 
         now = time.time() if now is None else now
-        root = Path(folder).expanduser().resolve()
+        from autonomy_files import clean_path, fingerprint
+        from file_moves import MoveJournal
+
+        root = clean_path(Path(folder).expanduser().absolute())
         if not root.is_dir():
             raise ValueError("Папка загрузок не найдена: " + str(root))
         if root != self.root:
@@ -59,6 +62,7 @@ class DownloadSorter:
             from sort_history import SortHistory
 
             journal = None if preview else SortHistory(root)
+            fast = None if preview else MoveJournal(root)
             batch = uuid.uuid4().hex
             result["batch"] = batch
             seen = set()
@@ -79,7 +83,14 @@ class DownloadSorter:
                     if not ext or ext in INCOMPLETE_DOWNLOAD_EXTENSIONS:
                         continue
                     info = path.stat()
-                    if automatic and journal and journal.was_restored(path, info):
+                    if (
+                        automatic
+                        and journal
+                        and (
+                            journal.was_restored(path, info)
+                            or fast.was_returned(path, fingerprint(path))
+                        )
+                    ):
                         result["skipped_count"] += 1
                         continue
                     stamp = (info.st_size, info.st_mtime_ns)
@@ -112,45 +123,12 @@ class DownloadSorter:
                             {"source": str(path), "category": folder_name, "bytes": info.st_size}
                         )
                         continue
-                    if shutil.disk_usage(root).free < info.st_size + 10 * 1024 * 1024:
-                        raise OSError("Недостаточно свободного места для безопасного копирования")
-                    target_dir.mkdir(exist_ok=True)
-                    target = None
-                    # Exclusive creation preserves existing same-name files on every OS.
-                    for number in range(10000):
-                        candidate = target_dir / (
-                            path.name if number == 0 else f"{path.stem} ({number}){path.suffix}"
-                        )
-                        try:
-                            output = candidate.open("xb")
-                            target = candidate
-                            break
-                        except FileExistsError:
-                            continue
-                    if target is None:
-                        raise OSError("Слишком много файлов с одинаковым именем")
-                    record_id = None
-                    try:
-                        with output, path.open("rb") as source:
-                            reader = _CancellableReader(source, stop)
-                            shutil.copyfileobj(reader, output, length=1024 * 1024)
-                            output.flush()
-                            os.fsync(output.fileno())
-                        after = path.stat()
-                        if (after.st_size, after.st_mtime_ns) != stamp or (stop and stop.is_set()):
-                            target.unlink()
-                            result["skipped_count"] += 1
-                            continue
-                        shutil.copystat(path, target)
-                        record_id = journal.record(batch, path, target, reader.hash.hexdigest())
-                        path.unlink()
-                    except Exception:
-                        try:
-                            if record_id is not None:
-                                journal.discard(record_id)
-                        finally:
-                            target.unlink(missing_ok=True)
-                        raise
+
+                    def guard():
+                        if stop and stop.is_set():
+                            raise InterruptedError("Сортировка остановлена")
+
+                    fast.move(path, target_dir, batch=batch, guard=guard, locked=True)
                     self.observed.pop(path.name, None)
                     result["moved_count"] += 1
                     result["moved_by_category"][folder_name] = (

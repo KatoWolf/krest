@@ -220,6 +220,12 @@ class AccountSession:
                             json={"custom_status": {"text": text}},
                         )
                     except RateLimited as exc:
+                        emit(
+                            "health",
+                            "Discord запросил паузу; сохраняю соединение",
+                            connected=not ws.closed,
+                            retry_after=exc.seconds,
+                        )
                         emit("status", str(exc))
                         await asyncio.sleep(exc.seconds)
                         continue

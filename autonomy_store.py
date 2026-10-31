@@ -30,9 +30,35 @@ class DutyStore:
                     key TEXT PRIMARY KEY, kind TEXT, label TEXT, payload TEXT, days TEXT,
                     successes INTEGER DEFAULT 0, rejected INTEGER DEFAULT 0, rule_id TEXT DEFAULT '');
             """)
-            db.execute(
-                "UPDATE jobs SET status='waiting', result='Продолжу после простоя' WHERE status='running'"
-            )
+            columns = {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
+            if "recovered" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN recovered REAL DEFAULT 0")
+            for row in db.execute(
+                "SELECT * FROM jobs WHERE status='running' OR (status IN ('waiting','retry') AND checkpoint!='{}')"
+            ).fetchall():
+                checkpoint = json.loads(row["checkpoint"])
+                checkpoint["_recovered"] = True
+                saved = sum(int(c.get("bytes", 0)) for c in checkpoint.get("copies", {}).values())
+                if row["kind"] == "software" and checkpoint.get("installer_started"):
+                    status = "failed"
+                    detail = "Прервано во время установки. Автоматический повтор запрещён; проверьте программу."
+                else:
+                    status = "waiting"
+                    detail = "Задача восстановлена после перезапуска. Проверю сохранённый результат и продолжу при AFK."
+                    if saved:
+                        detail += f" Частично записано: {saved // 1024**2} МБ; перед продолжением проверю содержимое."
+                    if row["kind"] == "archive":
+                        detail += " Незавершённый ZIP будет создан заново."
+                db.execute(
+                    "UPDATE jobs SET status=?,result=?,checkpoint=?,recovered=? WHERE id=?",
+                    (
+                        status,
+                        detail,
+                        json.dumps(checkpoint, ensure_ascii=False),
+                        time.time(),
+                        row["id"],
+                    ),
+                )
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=5)
@@ -97,12 +123,15 @@ class DutyStore:
                 [*values.values(), ident],
             )
 
-    def next(self):
+    def next(self, exclude=()):
+        condition = " AND kind NOT IN (" + ",".join("?" for _ in exclude) + ")" if exclude else ""
         with closing(self.connect()) as db:
             return self.decode(
                 db.execute(
-                    "SELECT * FROM jobs WHERE status IN ('waiting','retry') AND due<=? ORDER BY priority DESC,created LIMIT 1",
-                    (time.time(),),
+                    "SELECT * FROM jobs WHERE status IN ('waiting','retry') AND due<=?"
+                    + condition
+                    + " ORDER BY priority DESC,created LIMIT 1",
+                    (time.time(), *exclude),
                 ).fetchone()
             )
 
@@ -124,7 +153,7 @@ class DutyStore:
     def jobs(self):
         with closing(self.connect()) as db:
             rows = db.execute(
-                "SELECT id,kind,label,status,created,updated,due,attempts,priority,rule_id,result FROM jobs ORDER BY CASE WHEN status IN ('running','waiting','retry') THEN 0 ELSE 1 END,updated DESC LIMIT 100"
+                "SELECT id,kind,label,status,created,updated,due,attempts,priority,rule_id,result,recovered FROM jobs ORDER BY CASE WHEN status IN ('running','waiting','retry') THEN 0 ELSE 1 END,updated DESC LIMIT 100"
             ).fetchall()
             return [dict(row) for row in rows]
 
