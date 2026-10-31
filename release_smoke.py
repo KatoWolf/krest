@@ -806,7 +806,7 @@ def check_dependencies():
         check_menu_surface()
         from release_learning_check import check_native_recipes
 
-        check_native_recipes()
+        check_native_recipes(interactive=False)
     import torch
 
     if torch.tensor([1.0, 2.0]).sum().item() != 3:

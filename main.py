@@ -36,6 +36,7 @@ def main(argv=None):
     parser.add_argument("--check-output", help=argparse.SUPPRESS)
     parser.add_argument("--release-model-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-import-check", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--release-interactive-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-service", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
@@ -83,6 +84,7 @@ def main(argv=None):
         or args.rollback
         or args.restore
         or args.release_import_check
+        or args.release_interactive_check
         or args.release_model_check
         or args.release_smoke
     )
@@ -116,6 +118,11 @@ def main(argv=None):
     from configuration import CONFIG_PATH, ConfigManager
 
     settings = ConfigManager(args.config or CONFIG_PATH)
+    if args.release_interactive_check:
+        from release_learning_check import check_native_recipes
+
+        check_native_recipes()
+        return 0
     if args.release_import_check:
         from release_smoke import check_dependencies
 

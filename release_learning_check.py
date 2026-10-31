@@ -68,9 +68,9 @@ def check_recipes():
     )
 
 
-def check_native_recipes():
+def check_native_recipes(*, interactive=True):
     try:
-        _check_native_recipes()
+        _check_native_recipes(interactive=interactive)
     except Exception:
         import traceback
 
@@ -82,7 +82,30 @@ def check_native_recipes():
         raise
 
 
-def _check_native_recipes():
+def _focus_test_window(hwnd):
+    """Interactive CI only: verify the real foreground, including Win32's code-0 error."""
+    import win32gui
+    import pywintypes
+
+    def current():
+        foreground = win32gui.GetForegroundWindow()
+        return win32gui.GetAncestor(foreground, 2) if foreground else 0
+
+    if current() == hwnd:
+        return
+    try:
+        win32gui.SetForegroundWindow(hwnd)
+    except pywintypes.error as exc:
+        if current() != hwnd:
+            raise RuntimeError(
+                "Windows не дала интерактивной проверке активировать тестовое окно. "
+                "Для обычной сборки не используйте --interactive-checks."
+            ) from exc
+    if current() != hwnd:
+        raise RuntimeError("Интерактивная проверка не получила фокус тестового окна")
+
+
+def _check_native_recipes(*, interactive=True):
     """Only our disposable test window is touched; no user application is opened."""
     import os
     import time
@@ -114,10 +137,11 @@ def _check_native_recipes():
     wc.lpszClassName = class_name
     wc.lpfnWndProc = wndproc
     win32gui.RegisterClass(wc)
-    hwnd = win32gui.CreateWindow(
+    hwnd = win32gui.CreateWindowEx(
+        0 if interactive else win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TOOLWINDOW,
         class_name,
         "Крест · проверка обучения",
-        win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE,
+        win32con.WS_OVERLAPPEDWINDOW,
         80,
         80,
         500,
@@ -154,8 +178,9 @@ def _check_native_recipes():
         None,
     )
     try:
-        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-        win32gui.SetForegroundWindow(hwnd)
+        win32gui.ShowWindow(hwnd, win32con.SW_SHOW if interactive else win32con.SW_SHOWNOACTIVATE)
+        if interactive:
+            _focus_test_window(hwnd)
         win32gui.UpdateWindow(hwnd)
         with ThreadPoolExecutor(max_workers=1) as worker:
 
@@ -178,7 +203,7 @@ def _check_native_recipes():
                     ) from exc
 
             def capture(control):
-                win32gui.SetForegroundWindow(hwnd)
+                _focus_test_window(hwnd)
                 win32gui.UpdateWindow(hwnd)
                 win32gui.PumpWaitingMessages()
                 x1, y1, x2, y2 = win32gui.GetWindowRect(control)
@@ -188,6 +213,36 @@ def _check_native_recipes():
                     raise RuntimeError(
                         f"Capture failed: target={hwnd}, foreground={win32gui.GetForegroundWindow()}, rect={(x1, y1, x2, y2)}: {exc}"
                     ) from exc
+
+            if not interactive:
+                import psutil
+
+                # Locate by exact Unicode labels without cursor hit testing,
+                # foreground changes, clicks, toggles or keyboard input.
+                step = dict(
+                    exe=psutil.Process(os.getpid()).exe(),
+                    window_class=class_name,
+                    window_title="Крест · проверка обучения",
+                    name="Применить",
+                    auto_id="",
+                    class_name="Button",
+                    control_type="Button",
+                    parents=[],
+                    operation="invoke",
+                    value=None,
+                )
+                result = call("locate", step=step)
+                if not result["found"] or result["window"] != hwnd or clicks:
+                    raise RuntimeError("Фоновая проверка не нашла свою кнопку без нажатия")
+                absent = call("locate", step=dict(step, name="Несуществующая кнопка"))
+                if absent["found"] or clicks:
+                    raise RuntimeError("Фоновая проверка неверно распознала отсутствующую кнопку")
+                print(
+                    "Native recipes: background UIA lookup passed without focus changes or input. "
+                    "Interactive capture/invocation checks were not run in this mode.",
+                    flush=True,
+                )
+                return
 
             step = capture(button)
             if step["operation"] != "invoke" or clicks:
@@ -252,7 +307,7 @@ def _check_native_recipes():
                 None,
             )
             try:
-                win32gui.SetForegroundWindow(other)
+                _focus_test_window(other)
                 try:
                     call("perform", step=step, expected_window=hwnd)
                 except Exception as exc:

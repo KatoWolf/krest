@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -144,6 +145,83 @@ class ReleaseRecovery(unittest.TestCase):
         ):
             builder.report_distribution(target, archive)
         startfile.assert_not_called()
+
+    def smoke_calls(self, *, interactive):
+        import json
+
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            if "--check-output" in command:
+                report = Path(command[command.index("--check-output") + 1])
+                report.write_text(json.dumps({"errors": [], "skills": 284}), encoding="utf-8")
+
+        with patch.object(builder, "run_checked", side_effect=run):
+            builder.smoke_test(self.stage, **({"interactive": True} if interactive else {}))
+        return calls
+
+    def test_standard_build_keeps_runtime_and_voice_checks_without_focus_test(self):
+        calls = self.smoke_calls(interactive=False)
+        self.assertFalse(any("--release-interactive-check" in command for command in calls))
+        for check in (
+            "--check",
+            "--release-smoke",
+            "--release-import-check",
+            "--release-model-check",
+        ):
+            self.assertTrue(any(check in command for command in calls), check)
+
+    def test_ci_build_adds_the_full_interactive_check(self):
+        calls = self.smoke_calls(interactive=True)
+        self.assertEqual(sum("--release-interactive-check" in command for command in calls), 1)
+        self.assertTrue(any("--release-model-check" in command for command in calls))
+
+    def test_foreground_code_zero_is_checked_against_actual_window(self):
+        from unittest.mock import Mock
+        from release_learning_check import _focus_test_window
+
+        class Win32Error(Exception):
+            pass
+
+        foreground = [22]
+
+        def denied(hwnd):
+            raise Win32Error(0, "SetForegroundWindow", "No error message is available")
+
+        gui = SimpleNamespace(
+            GetForegroundWindow=lambda: foreground[0],
+            GetAncestor=lambda hwnd, kind: hwnd,
+            SetForegroundWindow=Mock(side_effect=denied),
+        )
+        with patch.dict(
+            sys.modules, {"win32gui": gui, "pywintypes": SimpleNamespace(error=Win32Error)}
+        ):
+            with self.assertRaisesRegex(RuntimeError, "не дала"):
+                _focus_test_window(11)
+            self.assertEqual(gui.SetForegroundWindow.call_count, 1)
+            foreground[0] = 11
+            _focus_test_window(11)
+            self.assertEqual(gui.SetForegroundWindow.call_count, 1)
+
+            def changed(hwnd):
+                foreground[0] = hwnd
+                denied(hwnd)
+
+            foreground[0] = 22
+            gui.SetForegroundWindow.side_effect = changed
+            _focus_test_window(11)
+            self.assertEqual(foreground[0], 11)
+
+    @unittest.skipUnless(os.name == "nt", "Windows UI Automation")
+    def test_background_native_check_survives_forbidden_foreground_changes(self):
+        from release_learning_check import check_native_recipes
+
+        with patch(
+            "win32gui.SetForegroundWindow", side_effect=AssertionError("Focus forbidden")
+        ) as focus:
+            check_native_recipes(interactive=False)
+        focus.assert_not_called()
 
     def test_builder_lock_does_not_truncate_active_log(self):
         with BuildSession(self.root):

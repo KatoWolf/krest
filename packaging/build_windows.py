@@ -14,7 +14,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.22.1"
+VERSION = "0.22.2"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_support import BuildSession
 
@@ -282,7 +282,7 @@ def audit_distribution(dist):
             raise RuntimeError("Открытый исходник Крест в сборке: " + str(relative))
 
 
-def smoke_test(dist, *, with_models=True):
+def smoke_test(dist, *, with_models=True, interactive=False):
     executable = Path(dist) / "Krest.exe"
     with tempfile.TemporaryDirectory(prefix="krest-release-check-") as temp:
         root = Path(temp)
@@ -302,6 +302,12 @@ def smoke_test(dist, *, with_models=True):
         run_checked(
             [str(executable), "--release-import-check", "--config", str(cfg)], cwd=root, timeout=180
         )
+        if interactive:
+            run_checked(
+                [str(executable), "--release-interactive-check", "--config", str(cfg)],
+                cwd=root,
+                timeout=90,
+            )
         if with_models:
             run_checked(
                 [str(executable), "--release-model-check", "--config", str(cfg)],
@@ -395,6 +401,11 @@ def main(argv=None):
         "--no-open", action="store_true", help="Не открывать папку результата после сборки"
     )
     parser.add_argument(
+        "--interactive-checks",
+        action="store_true",
+        help="Дополнительная проверка фокуса и нажатий в тестовом окне; нужен свободный рабочий стол",
+    )
+    parser.add_argument(
         "--protect",
         action="store_true",
         help="Обфускация PyArmor; ошибка не вызывает незащищённую пересборку",
@@ -473,7 +484,7 @@ def main(argv=None):
         copy_models(dist, found_models)
     audit_distribution(dist)
     print("[3/4] Проверяю готовую программу, ядро, библиотеки и голос…", flush=True)
-    smoke_test(dist, with_models=args.with_models)
+    smoke_test(dist, with_models=args.with_models, interactive=args.interactive_checks)
     (dist / "build-info.json").write_text(
         json.dumps(
             {
@@ -481,6 +492,7 @@ def main(argv=None):
                 "python": sys.version.split()[0],
                 "with_models": args.with_models,
                 "protected": args.protect,
+                "interactive_checks": args.interactive_checks,
             },
             indent=2,
         ),
