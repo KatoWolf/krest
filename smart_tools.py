@@ -41,7 +41,23 @@ class SmartTools:
                 if self.stop.is_set():
                     return
                 try:
-                    component.tick()
+                    key = (
+                        "incoming"
+                        if component is self.incoming
+                        else "habits"
+                        if component is self.habits
+                        else None
+                    )
+                    if key:
+                        allowed, reason = self.runtime.governor.allowed(key)
+                        if not allowed:
+                            if key == "incoming":
+                                self.incoming.status = reason
+                            continue
+                        with self.runtime.governor.measure(key):
+                            component.tick()
+                    else:
+                        component.tick()
                 except Exception:
                     logger.exception("Сбой выбранной автоматизации: %s", type(component).__name__)
 

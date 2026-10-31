@@ -227,7 +227,7 @@ class VoiceUnderstanding:
         if not addressed or NEGATION.search(clean):
             return Understanding(exact or text)
         choices = []
-        if self.companion:
+        if self.companion and not exact:
             saved = self.companion.learning.lookup(self.companion.profile, clean)
             match = self.manager.match(saved["command"]) if saved else None
             if (
@@ -292,6 +292,9 @@ class VoiceUnderstanding:
             return
         heard, choice = learning
         if self.companion:
+            if choice.get("explicit"):
+                self.companion.runtime.speech_repair.remember(heard, choice)
+                return
             self.companion.record_correction(heard, choice)
             return
         key = "команда: " + heard

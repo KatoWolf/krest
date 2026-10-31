@@ -19,7 +19,7 @@ class ExperiencePages:
         card = self.card(
             page,
             "Обучение вашему произношению",
-            "После ошибки скажите «Крест, я сказал переключи трек». Повторяющиеся исправления появятся здесь. Применяются только подтверждённые записи этого профиля.",
+            "После ошибки скажите «Крест, нет, я сказал переключи трек». Короткая безопасная поправка запоминается после успешного действия. В течение 12 секунд можно ответить без повторного обращения. Команды с параметрами и опасные действия произнесите отдельно. Это словарь произношения вашего профиля, не переобучение Vosk.",
         )
         self.learning_tree = ttk.Treeview(
             card, columns=("heard", "command", "hits", "state"), show="headings", height=5
@@ -54,6 +54,11 @@ class ExperiencePages:
                 side="left", padx=(0, 8)
             )
         self._learning_stamp = None
+        ttk.Button(
+            card,
+            text="Отменить последнее исправление речи",
+            command=lambda: self._companion_action("learning.undo"),
+        ).pack(anchor="w", pady=8)
         self._refresh_experience(force=True)
 
     def _build_scenario_voice(self):

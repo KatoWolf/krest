@@ -8,6 +8,8 @@ import os
 
 PREFIX = "@krest-vault:"
 SECRET_KEYS = {
+    "qbittorrent_password",
+    "aria2_secret",
     "krest_bot_token",
     "discord_token",
     "discord_user_token",

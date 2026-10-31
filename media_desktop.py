@@ -84,6 +84,10 @@ def _handle(raw):
             from learned_native import dispatch
 
             result = dispatch(payload.get("action", ""), data)
+        elif operation == "steam_download":
+            from steam_download_control import native_action
+
+            result = native_action(payload.get("action", ""), data)
         elif operation == "probe":
             with uia_apartment():
                 from pywinauto import Desktop

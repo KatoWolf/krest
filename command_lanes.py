@@ -52,6 +52,8 @@ def lane_for(entry):
     if entry is None:
         return "general"
     ident, module, name = entry.id, entry.module, entry.func.__name__
+    if module == "session_guard":
+        return "control" if name in {"relief", "match_start", "match_end", "undo_speech"} else "system"
     if module == "incoming":
         return "control" if name in {"pause_incoming", "resume_incoming"} else "files"
     if module == "organizer":

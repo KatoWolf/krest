@@ -182,7 +182,13 @@ class AutonomousDuty:
             raise Paused("Задача отменена")
 
     def permitted(self):
-        return not self.stop.is_set() and not self.paused and self.gate.permitted()
+        governor = getattr(self.runtime, "governor", None)
+        return (
+            not self.stop.is_set()
+            and not self.paused
+            and (not governor or governor.allowed("afk")[0])
+            and self.gate.permitted()
+        )
 
     def progress(self, text):
         if self.current and time.monotonic() - self._progress_at >= 2:
@@ -192,6 +198,12 @@ class AutonomousDuty:
 
     def snapshot(self):
         with self._snapshot_lock:
+            activity = dict(self.gate.snapshot())
+            governor = getattr(self.runtime, "governor", None)
+            if governor:
+                allowed, reason = governor.allowed("afk")
+                if not allowed:
+                    activity.update(allowed=False, reason=reason)
             if time.monotonic() - self._stamp >= 2:
                 self._cached = {
                     "jobs": self.store.jobs(),
@@ -202,7 +214,7 @@ class AutonomousDuty:
                 self._stamp = time.monotonic()
             return {
                 **self._cached,
-                "activity": self.gate.snapshot(),
+                "activity": activity,
                 "paused": self.paused,
                 "atomic": self.atomic,
                 "current": self.current["id"] if self.current else "",
@@ -433,7 +445,11 @@ class AutonomousDuty:
         self._stamp = 0
         try:
             self.guard()
-            result = self.execute(job)
+            from contextlib import nullcontext
+
+            governor = getattr(self.runtime, "governor", None)
+            with governor.measure("afk") if governor else nullcontext():
+                result = self.execute(job)
             self.store.update(job["id"], status="completed", result=result[:2000])
         except Paused as exc:
             cancelled = job["id"] in self._cancel

@@ -90,6 +90,9 @@ class AssistantRuntime:
         from companion_session import CompanionSession
 
         self.companion = CompanionSession(self, Path(data_dir))
+        from speech_repair import SpeechRepair
+
+        self.speech_repair = SpeechRepair(self)
         from voice_context import VoiceContext
 
         self.voice_context = VoiceContext(self.settings)
@@ -114,6 +117,12 @@ class AssistantRuntime:
         self.current_command = ""
         self.notifications = NotificationQueue(Path(data_dir) / "notifications.sqlite3")
         self.stop_event = threading.Event()
+        from resource_governor import ResourceGovernor
+
+        self.governor = ResourceGovernor(self)
+        from session_guard import SessionGuard
+
+        self.session_guard = SessionGuard(self, data_dir)
         from autonomy import AutonomousDuty
 
         self.autonomy = AutonomousDuty(self, data_dir)
@@ -248,6 +257,7 @@ class AssistantRuntime:
         if not text:
             return False
         if source in ("text", "voice"):
+            self.governor.voice()
             self.autonomy.gate.touch()
             self.smart.incoming.budget.voice()
         # Emergency release must not wait behind network commands in the execution queue.
@@ -459,6 +469,7 @@ class AssistantRuntime:
             voice.speak("Не расслышала. Повтори, пожалуйста.")
 
     def _prepare_command(self, text, source="text", confidence=None):
+        self._job_local.speech_candidate_id = None
         self._job_local.context_target = None
         self._job_local.action_value = None
         self._job_local.executed_command = ""
@@ -496,8 +507,10 @@ class AssistantRuntime:
             window_accepted = (getattr(self._job_local, "recognition", None) or {}).get(
                 "listening_window", False
             )
+            repair_requested = self.speech_repair.eligible(command, addressed=wake)
             if (
                 not wake
+                and not repair_requested
                 and not contextual
                 and not window_accepted
                 and time.monotonic() > self._active_until
@@ -547,6 +560,7 @@ class AssistantRuntime:
                     or plan_sequence(self.manager, command)
                     or is_answer
                     or is_context
+                    or repair_requested
                 ):
                     observed("Фоновая речь — ожидаю команду")
                     return CommandResult(False, False, "")
@@ -561,6 +575,8 @@ class AssistantRuntime:
                 getattr(self._job_local, "recognition", None) or {},
                 cfg,
             )
+            if wake and not repair_requested:
+                self._job_local.speech_candidate_id = self.speech_repair.capture(command)
             if confidence is not None and confidence * 100 < cfg.get("speech_confidence", 60):
                 observed("Низкая уверенность — повторите фразу")
                 result = CommandResult(
@@ -625,25 +641,29 @@ class AssistantRuntime:
                 observed("Цепочка проверена; передана на выполнение")
                 return plan, None, None, wake, observed
         if source == "voice":
-            import re
+            from speech_repair import target
 
-            correction = re.fullmatch(r"(?:я сказал|я сказала|я имел в виду) (.+)", command, re.I)
-            if (
-                correction
-                and self.companion.last_voice
-                and time.monotonic() - self.companion.last_voice_at < 60
-            ):
-                from command_understanding import exact_command
-
-                corrected = exact_command(self.manager, correction[1])
-                if corrected:
-                    entry = self.manager.match(corrected)[0]
-                    learning = (
-                        self.companion.last_voice,
-                        {"command": corrected, "skill": entry.id},
+            if target(command):
+                try:
+                    command, learning = self.speech_repair.correct(command, addressed=wake)
+                    if learning[1].get("already_done"):
+                        return self._finish_command(
+                            CommandResult(
+                                True,
+                                True,
+                                "Эту команду уже выполнила; повторять действие не буду. Поправка произношения обработана.",
+                                learning[1]["skill"],
+                            ),
+                            learning,
+                            source,
+                            wake,
+                            observed,
+                        )
+                except ValueError as exc:
+                    return self._finish_command(
+                        CommandResult(True, False, str(exc)), None, source, wake, observed
                     )
-                    command = corrected
-            if not learning and command.casefold() not in ("да", "нет", "первое", "второе"):
+            elif command.casefold() not in ("да", "нет", "первое", "второе"):
                 self.companion.last_voice = command
                 self.companion.last_voice_at = time.monotonic()
             interpreted = self.understanding.resolve(command, wake)
@@ -755,6 +775,12 @@ class AssistantRuntime:
         return CommandResult(True, True, "\n".join(replies), "sequence")
 
     def _finish_command(self, result, learning, source, wake, observed):
+        if source == "voice":
+            self.speech_repair.finished(
+                getattr(self._job_local, "speech_candidate_id", None),
+                getattr(self._job_local, "executed_command", ""),
+                result.success,
+            )
         observed("Выполнено" if result.success else "Не выполнено: " + result.text[:160])
         if result.success:
             self.smart.habits.observe(
@@ -856,6 +882,8 @@ class AssistantRuntime:
                     else:
                         self.publish_notice(notification, "Боты")
                 self.performance.tick()
+                self.governor.tick()
+                self.session_guard.tick()
                 game = self.performance.game
                 voice.set_game_mode(bool(game))
                 self.game_sessions.tick(game)
@@ -904,9 +932,10 @@ class AssistantRuntime:
                 return runtime.stop_event.is_set() or not runtime.autonomy.permitted()
 
         while not self.stop_event.wait(5):
-            if not self.autonomy.permitted():
+            if not self.autonomy.permitted() or not self.governor.allowed("index")[0]:
                 continue
-            self.desktop.scan(ScanStop())
+            with self.governor.measure("index"):
+                self.desktop.scan(ScanStop())
             if self.stop_event.wait(900 if self.performance.game else 300):
                 return
 
@@ -926,10 +955,12 @@ class AssistantRuntime:
                 if (
                     os.name == "nt"
                     and not self.performance.game
+                    and self.governor.allowed("catalog")[0]
                     and time.monotonic() - scanned_at >= 600
                 ):
                     scanned_at = time.monotonic()
-                    rows = scan_apps()
+                    with self.governor.measure("catalog"):
+                        rows = scan_apps()
                     if rows and not self.stop_event.is_set():
                         # Merge with manually added executables; never replace a
                         # concurrently edited settings snapshot with the scan's.
@@ -1207,6 +1238,14 @@ class AssistantRuntime:
                 voice.speak(policy(settings, bool(self.performance.game))["listen"])
                 return True
         elif time.monotonic() > self._active_until:
+            if self.speech_repair.eligible(command):
+                return self.submit(
+                    text,
+                    "voice",
+                    recognition.get("confidence"),
+                    recognition=recognition,
+                    feedback_turn=feedback_turn,
+                )
             context = self.voice_context.resolve(command)
             if context and not self.state.is_sleeping:
                 recognition["context"] = context
@@ -1319,6 +1358,7 @@ class AssistantRuntime:
         voice.stop_speaking()
 
     def close(self):
+        self.session_guard.close()
         self.organizer.close()
         self.learned.stop.set()
         self.smart.close()

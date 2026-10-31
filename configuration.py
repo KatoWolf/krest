@@ -38,6 +38,23 @@ def _copy_settings(value):
 
 
 DEFAULT_CONFIG = {
+    "download_guard": {
+        "steam_enabled": False,
+        "enabled": False,
+        "client": "qbittorrent",
+        "port": 8080,
+        "username": "admin",
+        "download_kib": 256,
+        "upload_kib": 64,
+        "gsi": False,
+    },
+    "resource_guard": {
+        "enabled": True,
+        "cpu_percent": 8,
+        "game_cpu_percent": 4,
+        "memory_mb": 1600,
+        "automatic_relief": True,
+    },
     "schema_version": 2,
     "autonomy": DEFAULT_AUTONOMY,
     "autonomy_idle_revision": 1,
@@ -116,6 +133,8 @@ DEFAULT_CONFIG = {
     "api_keys": dict.fromkeys(
         (
             "steam_api_key",
+            "qbittorrent_password",
+            "aria2_secret",
             "steam_id",
             "discord_token",
             "discord_user_token",
@@ -220,6 +239,12 @@ def merge(default, values):
 
 
 def validate(data):
+    from download_control import validate_settings as validate_download_guard
+
+    validate_download_guard(data["download_guard"])
+    from resource_governor import validate_settings
+
+    validate_settings(data["resource_guard"])
     for section, names in {
         "smart_tools": ("learn_routines",),
         "sound_dispatcher": ("enabled", "auto_calls", "restore_devices"),

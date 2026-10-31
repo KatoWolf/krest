@@ -25,6 +25,7 @@ from smart_pages import SmartPages
 from brain_pages import BrainPages
 from learned_pages import LearnedPages
 from organizer_pages import OrganizerPages
+from session_pages import SessionPages
 
 from app_runtime import AssistantRuntime
 from configuration import ConfigManager, DEFAULT_CONFIG, CONFIG_PATH
@@ -48,6 +49,7 @@ TRAY_SUPPORTED = False  # Discovered lazily when the user minimizes to tray.
 
 
 class ControlCenterApp(
+    SessionPages,
     OrganizerPages,
     LearnedPages,
     BrainPages,
@@ -88,6 +90,7 @@ class ControlCenterApp(
         ("logs", "Журнал"),
         ("license", "Premium"),
         ("kernel", "Состояние ядра"),
+        ("protection", "Защита сессии"),
         ("brain", "Мозг"),
         ("learned", "Покажи один раз"),
         ("organizer", "Компания"),
@@ -120,7 +123,7 @@ class ControlCenterApp(
         (
             "kernel",
             "Система",
-            ("kernel", "brain", "programs", "clipboard", "maintenance", "security"),
+            ("kernel", "protection", "brain", "programs", "clipboard", "maintenance", "security"),
         ),
         ("sessions", "Игры", ("sessions",) + tuple(code for code, _ in PAGE_NAMES)),
         ("settings", "Настройки", ("settings", "appearance", "license")),
@@ -137,7 +140,7 @@ class ControlCenterApp(
         self.geometry(f"{width}x{height}")
         self.minsize(min(1020, width), min(700, height))
         self.protocol("WM_DELETE_WINDOW", self.on_close_window)
-        self.bind("<Control-s>", lambda event: self.save_all_settings())
+        self.bind("<Control-s>", lambda event: self._save_current_page())
         self.config_mgr = ConfigManager(config_path) if config_path else ConfigManager()
         from local_setup import discover_settings, readiness
 
@@ -194,6 +197,7 @@ class ControlCenterApp(
         self.api_vars = {
             key: tk.StringVar(value=value)
             for key, value in self.config_mgr.config["api_keys"].items()
+            if key not in {"qbittorrent_password", "aria2_secret"}
         }
         self.skill_vars = {
             key: tk.BooleanVar(value=value)
@@ -466,7 +470,7 @@ class ControlCenterApp(
             footer,
             text="Сохранить" + (" •" if self.dirty else ""),
             style="Accent.TButton",
-            command=self.save_all_settings,
+            command=self._save_current_page,
         )
         self.save_button.pack(side="right")
         self.label(footer, textvariable=self.status_var, muted=True, wraplength=560).pack(
@@ -1574,6 +1578,11 @@ class ControlCenterApp(
             data["autonomy"].update(self.duty_settings_draft())
         return data
 
+    def _save_current_page(self):
+        if self.current_page == "protection":
+            return self._guard_save()
+        return self.save_all_settings()
+
     def save_all_settings(self, quiet=False):
         previous = self.config_mgr.snapshot()
         try:
@@ -2061,6 +2070,7 @@ class ControlCenterApp(
             self._brain_refresh()
             self._learned_refresh()
             self._org_refresh()
+            self._guard_refresh()
             if visible and self.current_page in self.CORE_PAGES:
                 self._update_workflows()
             license_state = licensing.status(self.config_mgr.snapshot())

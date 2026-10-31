@@ -48,6 +48,11 @@ class LightBudget:
 
     def allowed(self):
         now = time.monotonic()
+        governor = getattr(self.runtime, "governor", None)
+        if governor:
+            allowed, reason = governor.allowed("incoming")
+            if not allowed:
+                return allowed, reason
         cfg = self.runtime.settings()
         if cfg.get("safe_mode"):
             return False, "Безопасный режим"

@@ -244,6 +244,7 @@ class PerformancePolicy:
                         continue
                 self._roles = {pid: role for pid, role in self._roles.items() if pid in alive}
                 self.metrics = {
+                    "sampled_at": now,
                     "cpu": round(cpu / (psutil.cpu_count() or 1), 1),
                     "memory_mb": round(memory / 1024**2, 1),
                     "processes": len(alive),

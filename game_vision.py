@@ -285,6 +285,11 @@ class GameVision:
             return
         if self.closed.is_set() or now < self.next_scan or (self.thread and self.thread.is_alive()):
             return
+        governor = getattr(self, "governor", None)
+        if governor and not governor.allowed("vision")[0]:
+            with self.lock:
+                self.state["status"] = "Зрение ждёт свободного бюджета Крест"
+            return
         # Confirm transitions promptly; stable screens need fewer OCR calls.
         self.next_scan = now + (
             3
@@ -301,7 +306,11 @@ class GameVision:
             self.state["busy"] = True
             self.state["attempts"] += 1
         try:
-            result = self.observe()
+            from contextlib import nullcontext
+
+            governor = getattr(self, "governor", None)
+            with governor.measure("vision") if governor else nullcontext():
+                result = self.observe()
             if self.closed.is_set() or not self.allowed():
                 return
             code = result["screen"]

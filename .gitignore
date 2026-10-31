@@ -99,3 +99,6 @@ archives/
 received/
 organizer_routes.json
 organizer_delivery.sqlite3*
+download_lease.json
+game_phase.json
+steam_download_lease.json

@@ -120,6 +120,7 @@ class WarframeService:
         return self.runtime.settings().get("warframe", DEFAULT_WARFRAME)
 
     def start(self):
+        self.vision.governor = getattr(self.runtime, "governor", None)
         if self.thread:
             return
         self.thread = threading.Thread(target=self._loop, name="krest-warframe", daemon=True)

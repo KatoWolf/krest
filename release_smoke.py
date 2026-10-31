@@ -92,6 +92,9 @@ def check_kernel(config_path):
     from release_background_check import check_background
 
     check_background()
+    from release_session_check import check_sessions
+
+    check_sessions()
 
     # The packaged GUI must be able to export its standalone Discord adapter.
     from bot_project import connect_project

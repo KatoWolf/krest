@@ -104,9 +104,10 @@ def request(payload, timeout=12):
         "file_context": "files",
         "audio_dispatch": "audio",
         "learned_action": "learned",
+        "steam_download": "steam",
     }.get(payload["operation"], "music")
     with _lock:
-        client = _clients.setdefault(domain, DesktopPipe(background=domain == "learned"))
+        client = _clients.setdefault(domain, DesktopPipe(background=domain in {"learned", "steam"}))
     return client.call(payload, timeout=timeout)
 
 

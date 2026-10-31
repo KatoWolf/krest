@@ -204,6 +204,8 @@ class Kernel:
 
     def dispatch(self, method, args):
         rt = self.runtime
+        if method == "session_guard":
+            return rt.session_guard.call(**args)
         if method == "learned":
             return rt.learned.call(**args)
         if method == "smart":
@@ -515,6 +517,20 @@ def serve(config_path, safe=False):
             super().setup()
 
         def do_POST(self):
+            if self.path == "/game-state":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    if not 1 <= length <= 64000:
+                        raise ValueError("Invalid game-state size")
+                    accepted = kernel.runtime.session_guard.phase.receive(
+                        json.loads(self.rfile.read(length))
+                    )
+                    self.send_response(200 if accepted else 403)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                except (OSError, ValueError, TypeError, KeyError):
+                    self.send_error(400)
+                return
             if self.path != "/rpc" or not hmac.compare_digest(
                 self.headers.get("Authorization", ""), "Bearer " + token
             ):
@@ -562,6 +578,7 @@ def serve(config_path, safe=False):
 
     server = BoundedServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
+    kernel.runtime.session_guard.phase.configure_endpoint(server.server_port)
     path = root / "kernel_endpoint.json"
     atomic_write_json(
         path,

@@ -136,6 +136,8 @@ class CompanionSession:
     def call(self, action, **args):
         if action == "snapshot":
             return self.snapshot()
+        if action == "learning.undo":
+            return self.runtime.speech_repair.undo()
         if action == "learning.decide":
             self._learning_at = 0
             return self.learning.decide(self.profile, str(args["heard"]), args["status"])

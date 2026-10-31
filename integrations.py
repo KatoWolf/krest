@@ -23,6 +23,8 @@ def redact(text, settings):
             text = text.replace(str(service["token"]), "[скрыто]")
     values = settings.get("api_keys", {})
     for key in (
+        "qbittorrent_password",
+        "aria2_secret",
         "krest_bot_token",
         "discord_token",
         "discord_user_token",

@@ -1,6 +1,7 @@
 """Command modules loaded by SkillManager."""
 
 BUILTIN_MODULES = (
+    "session_guard",
     "organizer",
     "incoming",
     "learned_actions",
