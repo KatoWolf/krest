@@ -145,6 +145,18 @@ class OrganizerPages:
         self.org_delivery = self._table(
             card, {"name": "Друг", "kind": "Сообщение", "state": "Доставка"}, 5
         )
+        self.org_delivery_detail = tk.StringVar(
+            value="Выберите сообщение, чтобы посмотреть результат отправки."
+        )
+        self.org_delivery.bind("<<TreeviewSelect>>", lambda _: self._org_delivery_detail())
+        self.label(card, textvariable=self.org_delivery_detail, wraplength=730).pack(
+            fill="x", pady=6
+        )
+        self._buttons(card, [("Проверить доставку", self._org_check_delivery)])
+        self.org_delivery_result = tk.StringVar()
+        self.label(card, textvariable=self.org_delivery_result, wraplength=730).pack(fill="x")
+        self.org_delivery_error = tk.StringVar()
+        self.label(card, textvariable=self.org_delivery_error, wraplength=730).pack(fill="x")
         self.org_steam_status = tk.StringVar()
         self.label(card, textvariable=self.org_steam_status, muted=True, wraplength=730).pack(
             fill="x"
@@ -538,6 +550,29 @@ class OrganizerPages:
         if selection:
             self._org_call(action, id=selection[0])
 
+    def _org_delivery_detail(self):
+        selection = self.org_delivery.selection()
+        row = next(
+            (r for r in self._org_data.get("outbox", []) if selection and r["id"] == selection[0]),
+            None,
+        )
+        if row:
+            detail = row.get("detail") or {
+                "queued": "Ожидаю подключённый юзербот и свободную очередь отправки.",
+                "sending": "Поручение передано юзерботу. Ожидаю результат мессенджера.",
+                "uncertain": "Подтверждение не получено. Проверьте чат перед новым приглашением.",
+            }.get(row["status"], "")
+            self.org_delivery_detail.set(
+                DELIVERY[row["status"]] + ". " + detail + "\n" + row["text"]
+            )
+        else:
+            self.org_delivery_detail.set("Выберите сообщение, чтобы посмотреть результат отправки.")
+
+    def _org_check_delivery(self):
+        result = self.org_delivery_result
+        result.set("Сверяю результаты юзербота…")
+        self._org_call("delivery_check", done=lambda ok, value: result.set(str(value)))
+
     def _org_request(self):
         selected = self.org_requests.selection()
         return next(
@@ -759,6 +794,8 @@ class OrganizerPages:
                     for r in reversed(data["outbox"][-20:])
                 ],
             )
+            self._org_delivery_detail()
+            self.org_delivery_error.set(data.get("delivery_error", ""))
             self.org_steam_status.set(data["steam_error"])
         elif self._org_current == "requests":
             self._smart_rows(

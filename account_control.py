@@ -1,6 +1,7 @@
 """Bounded stdin control for account services, on their own asyncio loop."""
 
 import asyncio
+import sqlite3
 import threading
 from bridge_sdk import commands, emit
 
@@ -80,51 +81,66 @@ class AccountControl:
                         },
                     )
                 continue
-            loop, handler = (
-                self.loop,
-                self.organizer_handler if command == "organizer_send" else self.handler,
-            )
-            try:
-                if loop is None or handler is None or loop.is_closed():
-                    raise ValueError("Аккаунт сейчас не подключён")
-                text, chat = request.get("text"), str(request.get("chat", ""))
-                if (
-                    not chat.isdigit()
-                    or not isinstance(text, str)
-                    or not 1 <= len(text.strip()) <= 2000
-                ):
-                    raise ValueError("Некорректный адресат или текст")
-                if command == "organizer_send":
-                    from organizer_bridge import claim
-
-                    claim(self.folder, self.service, request)
-                future = asyncio.run_coroutine_threadsafe(handler(chat, text.strip()), loop)
-                try:
-                    delivered = future.result(timeout=30)
-                except TimeoutError:
-                    future.cancel()
-                    raise ValueError(
-                        "Отправка не подтверждена. Проверьте чат перед повтором."
-                    ) from None
+            result, claimed = self._send(request, command, ident)
+            self._receipt(result, request if claimed else None)
+            if command == "reply":
                 emit(
-                    "data",
-                    data={
-                        "action": {
-                            "id": ident,
-                            "ok": True,
-                            "text": "Ответ доставлен",
-                            "message_id": str(delivered or "")[:80],
-                        }
-                    },
+                    "notification",
+                    "Ваш ответ доставлен" if result["ok"] else result["text"],
+                    priority="normal" if result["ok"] else "high",
                 )
-                if command == "reply":
-                    emit("notification", "Ваш ответ доставлен", priority="normal")
-            except Exception as exc:
-                message = (
-                    str(exc)
-                    if isinstance(exc, ValueError)
-                    else "Отправка не подтверждена. Проверьте соединение и чат."
-                )
-                emit("data", data={"action": {"id": ident, "ok": False, "text": message}})
-                if command == "reply":
-                    emit("notification", message, priority="high")
+
+    def _send(self, request, command, ident):
+        loop = self.loop
+        handler = self.organizer_handler if command == "organizer_send" else self.handler
+        claimed = False
+        try:
+            text, chat = request.get("text"), str(request.get("chat", ""))
+            if (
+                not chat.isdigit()
+                or not isinstance(text, str)
+                or not 1 <= len(text.strip()) <= 2000
+            ):
+                raise ValueError("Некорректный адресат или текст")
+            if command == "organizer_send":
+                from organizer_bridge import saved_receipt
+
+                previous = saved_receipt(self.folder, self.service, request)
+                if previous:
+                    return previous, False
+            if loop is None or handler is None or loop.is_closed():
+                raise ValueError("Аккаунт сейчас не подключён")
+            if command == "organizer_send":
+                from organizer_bridge import claim
+
+                claim(self.folder, self.service, request)
+                claimed = True
+            future = asyncio.run_coroutine_threadsafe(handler(chat, text.strip()), loop)
+            try:
+                delivered = future.result(timeout=30)
+            except TimeoutError:
+                future.cancel()
+                raise TimeoutError("Отправка не подтверждена") from None
+            if command == "organizer_send" and not delivered:
+                raise TimeoutError("Мессенджер не вернул номер сообщения")
+            return {
+                "id": ident,
+                "ok": True,
+                "text": "Мессенджер принял сообщение",
+                "message_id": str(delivered or "")[:80],
+            }, claimed
+        except Exception as exc:
+            from organizer_bridge import delivery_error
+
+            message, uncertain = delivery_error(exc)
+            return {"id": ident, "ok": False, "text": message, "uncertain": uncertain}, claimed
+
+    def _receipt(self, result, request=None):
+        if request is not None:
+            from organizer_bridge import record_receipt
+
+            try:
+                record_receipt(self.folder, self.service, request, result)
+            except (OSError, sqlite3.Error, ValueError):
+                emit("status", "Не удалось сохранить результат отправки; передаю его напрямую ядру")
+        emit("data", data={"action": result})

@@ -104,7 +104,160 @@ def check_organizer():
                 restored.close()
         finally:
             org.close()
+    check_delivery_roundtrip()
     print(
         "Organizer: slang, voice parameters, reserve, disconnected bridge, delivery deduplication and restart passed; no live messages sent.",
         flush=True,
     )
+
+
+def check_delivery_roundtrip():
+    """Exercise the real account pipe and organizer; the network handler is local."""
+    import asyncio
+    import io
+    import json
+    import queue
+    import tempfile
+    import time
+    from itertools import product
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    import account_control
+    from bridge_sdk import PREFIX
+    from integrations import IntegrationManager
+    from organizer_service import Organizer
+    from organizer_bridge import claim, saved_receipt
+    from smart_store import SmartStore
+
+    for service, scenario in product(
+        ("tg_bridge.py", "discord_account.py"),
+        ("normal", "lost", "restart", "rejected", "timeout", "missing_id", "reserved"),
+    ):
+        with (
+            tempfile.TemporaryDirectory(prefix="krest-delivery-") as folder,
+            patch("licensing.require_premium"),
+        ):
+            path = Path(folder)
+            cfg = {"profile": {"personality": "concise"}, "services": {}, "api_keys": {}}
+            runtime = SimpleNamespace(
+                settings=lambda: cfg,
+                events=queue.Queue(),
+                notifications=Mock(),
+                center=Mock(),
+                performance=SimpleNamespace(game=""),
+            )
+            runtime.center.muted.return_value = False
+            manager = IntegrationManager(
+                SimpleNamespace(config_mgr=SimpleNamespace(snapshot=lambda: cfg), runtime=runtime),
+                base_dir=path,
+            )
+            runtime.integrations = manager
+            org = Organizer(runtime, SmartStore(path / "store.sqlite3"), path)
+            runtime.organizer = org
+            pipe = io.StringIO()
+            manager.processes[service] = SimpleNamespace(poll=lambda: None, stdin=pipe, pid=1)
+            manager._event(
+                service,
+                PREFIX
+                + json.dumps(
+                    {"type": "ready", "capabilities": ["organizer_send", "organizer_contacts"]}
+                ),
+                cfg,
+            )
+            try:
+                org.add_contact(name="Друг", service=service, chat="123456")
+                org.call("preferences", messenger=service)
+                org.create(size=2)
+                org._send_one()
+                request = json.loads(pipe.getvalue())
+                sent, events = [], []
+                if scenario == "reserved":
+                    claim(path, service, request)  # Old/interrupted attempt without a receipt.
+
+                async def send(chat, text):
+                    sent.append((chat, text))
+                    if scenario == "rejected":
+                        raise type("PeerIdInvalid", (Exception,), {})()
+                    if scenario == "timeout":
+                        raise TimeoutError("Connection lost")
+                    if scenario == "missing_id":
+                        return None
+                    return "987654"
+
+                def receive(kind, **values):
+                    events.append((kind, values))
+                    if scenario not in {"lost", "restart"}:
+                        manager._event(service, PREFIX + json.dumps({"type": kind, **values}), cfg)
+
+                async def exercise():
+                    control = account_control.AccountControl.__new__(account_control.AccountControl)
+                    control.seen, control.service, control.folder = set(), service, path
+                    control.attach(send, send)
+                    try:
+                        await asyncio.to_thread(control._read)
+                    finally:
+                        control.detach()
+
+                # Duplicate commands may replay a result, but never the network operation.
+                with (
+                    patch.object(account_control, "commands", lambda: iter([request, request])),
+                    patch.object(
+                        account_control,
+                        "emit",
+                        receive,
+                    ),
+                ):
+                    asyncio.run(exercise())
+                if scenario == "restart":
+                    org.close()
+                    org = Organizer(runtime, org.store, path)
+                    runtime.organizer = org
+                    org.call("delivery_check")
+                    if org.state["party"]["status"] != "paused":
+                        raise RuntimeError("Сверка доставки возобновила сбор после перезапуска")
+                while not org.inbox.empty():
+                    kind, source, data = org.inbox.get_nowait()
+                    if kind == "receipt":
+                        org.receipt(source, data)
+                org._tick(time.time() + 36)
+                row = org.state["outbox"][0]
+                expected = (
+                    "failed"
+                    if scenario == "rejected"
+                    else "uncertain"
+                    if scenario in {"timeout", "missing_id", "reserved"}
+                    else "delivered"
+                )
+                if row["status"] != expected:
+                    raise RuntimeError(
+                        f"Неверный результат доставки: {service}, {scenario}, {row['status']}"
+                    )
+                if len(sent) != (0 if scenario == "reserved" else 1):
+                    raise RuntimeError("Повтор поручения повторно отправил сообщение")
+                if expected == "delivered":
+                    if (
+                        row.get("message_id") != "987654"
+                        or org.state["party"]["members"][0]["state"] != "invited"
+                    ):
+                        raise RuntimeError("Подтверждение доставки не обновило участника")
+                    if any(not values["data"]["action"]["ok"] for _, values in events):
+                        raise RuntimeError("Повтор поручения изменил результат")
+                if scenario == "rejected" and "контакт" not in row.get("detail", ""):
+                    raise RuntimeError("Потеряна причина отказа Telegram")
+                for change in (
+                    {"chat": "999999"},
+                    {"text": "Другое сообщение"},
+                    {"request_id": "wrong"},
+                ):
+                    if saved_receipt(path, service, {**request, **change}) is not None:
+                        raise RuntimeError("Подтверждение применилось к другому поручению")
+                other = "discord_account.py" if service == "tg_bridge.py" else "tg_bridge.py"
+                if saved_receipt(path, other, request) is not None:
+                    raise RuntimeError("Подтверждение применилось к другому мессенджеру")
+                before = pipe.getvalue()
+                org.call("delivery_check")
+                if pipe.getvalue() != before:
+                    raise RuntimeError("Проверка доставки отправила новое сообщение")
+            finally:
+                org.close()

@@ -229,7 +229,12 @@ class IntegrationManager:
                 return
             if kind == "data" and isinstance(value.get("data"), dict):
                 if isinstance(value["data"].get("action"), dict):
-                    organizer.enqueue("receipt", filename, value["data"]["action"])
+                    receipt = value["data"]["action"]
+                    organizer.enqueue(
+                        "receipt",
+                        filename,
+                        {**receipt, "text": redact(str(receipt.get("text", ""))[:250], settings)},
+                    )
                 if isinstance(value["data"].get("organizer_contacts"), dict):
                     result = value["data"]["organizer_contacts"]
                     organizer.enqueue("contacts", filename, result)

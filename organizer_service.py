@@ -66,6 +66,8 @@ class Organizer:
         self.address_books = {}
         self.contact_loads = {}
         self.contact_status = {}
+        self._delivery_stamp = None
+        self.delivery_error = ""
         self.state = store.get("organizer", "state") or dict(
             id="state", contacts=[], party=None, requests=[], outbox=[], seen=[], aliases=[]
         )
@@ -587,7 +589,13 @@ class Organizer:
             )
             if not row or row["status"] not in {"sending", "uncertain"}:
                 return
-            row["status"] = "delivered" if data.get("ok") is True else "failed"
+            row["status"] = (
+                "delivered"
+                if data.get("ok") is True
+                else "uncertain"
+                if data.get("uncertain") is True
+                else "failed"
+            )
             row["detail"] = str(data.get("text", ""))[:250]
             row["message_id"] = str(data.get("message_id", ""))[:80]
             party = self.state.get("party")
@@ -608,11 +616,59 @@ class Organizer:
                     if request["id"] == row["request"]:
                         if request["status"] != "closed":
                             request["status"] = (
-                                "answered" if row["status"] == "delivered" else "reply_uncertain"
+                                "answered"
+                                if row["status"] == "delivered"
+                                else "reply_uncertain"
+                                if row["status"] == "uncertain"
+                                else "reply_failed"
                             )
             self._persist()
 
+    def _reconcile_delivery(self, force=False):
+        """Restore lost pipe responses from the account's journal; never send again."""
+        import sqlite3
+        from organizer_bridge import receipts
+
+        waiting = {
+            (row["service"], row["id"]): row
+            for row in self.state["outbox"]
+            if row["status"] in {"sending", "uncertain"}
+        }
+        if not waiting:
+            self.delivery_error = ""
+            return 0
+        try:
+            path = self.folder / "organizer_delivery.sqlite3"
+            if not path.exists():
+                return 0
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size)
+            if not force and stamp == self._delivery_stamp:
+                return 0
+            results = receipts(self.folder)
+            self._delivery_stamp = stamp
+            self.delivery_error = ""
+        except (OSError, sqlite3.Error):
+            self.delivery_error = "Не удалось прочитать журнал доставки. Освободите доступ к папке данных и повторите проверку."
+            return 0
+        restored = 0
+        for result in results:
+            row = waiting.get((result["service"], result["id"]))
+            if not row or result["chat"] != row["chat"] or result["digest"] != digest(row["text"]):
+                continue
+            receipt = result["result"]
+            if (
+                receipt.get("uncertain")
+                and row["status"] == "uncertain"
+                and row.get("detail") == receipt.get("text")
+            ):
+                continue
+            self.receipt(result["service"], receipt)
+            restored += 1
+        return restored
+
     def _tick(self, now):
+        self._reconcile_delivery()
         changed = False
         for source, pending in list(self.contact_loads.items()):
             if now - pending["started"] > 60:
@@ -713,8 +769,9 @@ class Organizer:
             return
         self._require()
         with self.lock:
+            busy = {row["service"] for row in self.state["outbox"] if row["status"] == "sending"}
             for row in self.state["outbox"]:
-                if row["status"] != "queued" or row["expires"] <= now:
+                if row["status"] != "queued" or row["expires"] <= now or row["service"] in busy:
                     continue
                 details = self.runtime.integrations.details(row["service"])
                 if self.runtime.center.muted(row["service"], row["chat"]):
@@ -740,10 +797,13 @@ class Organizer:
                         text=row["text"],
                         request_id=row["id"],
                     )
-                except Exception:
+                except Exception as exc:
+                    from integrations import redact
+
                     row.update(
                         status="uncertain",
-                        detail="Отправка не подтверждена. Проверьте чат перед новым приглашением",
+                        detail="Не удалось передать поручение юзерботу: "
+                        + redact(str(exc), self.runtime.settings())[:200],
                     )
                     self._failed_invite(row)
                     self._persist()
@@ -882,6 +942,7 @@ class Organizer:
                     "address_books": self.address_books,
                     "contact_status": self.contact_status,
                     "connections": self._connections(),
+                    "delivery_error": self.delivery_error,
                 }
             )
 
@@ -1015,6 +1076,14 @@ class Organizer:
                     )
             return rows[:50]
         self._require()
+        if action == "delivery_check":
+            with self.lock:
+                count = self._reconcile_delivery(force=True)
+                return self.delivery_error or (
+                    f"Восстановлено подтверждений: {count}. Сообщения повторно не отправлялись."
+                    if count
+                    else "Новых подтверждений нет. Выберите сообщение, чтобы посмотреть результат и причину."
+                )
         if action == "steam_friends":
             with self.lock:
                 if self.steam_busy:
