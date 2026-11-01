@@ -286,8 +286,33 @@ def main(argv=None):
     return 0
 
 
+def entrypoint(argv=None):
+    """Report release-check failures through the builder pipe, without a GUI crash dialog."""
+    import sys
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return main(args)
+    except Exception:
+        if not set(args).intersection(
+            {
+                "--check",
+                "--release-smoke",
+                "--release-import-check",
+                "--release-model-check",
+                "--release-interactive-check",
+            }
+        ):
+            raise
+        import traceback
+
+        configure_output()
+        traceback.print_exc()
+        return 1
+
+
 if __name__ == "__main__":
     import multiprocessing
 
     multiprocessing.freeze_support()
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

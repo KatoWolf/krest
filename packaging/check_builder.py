@@ -1,7 +1,7 @@
 """Failure recovery with temporary artifacts; no models or external accounts."""
 
 from pathlib import Path
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 import io
 import os
 import shutil
@@ -222,6 +222,86 @@ class ReleaseRecovery(unittest.TestCase):
         ) as focus:
             check_native_recipes(interactive=False)
         focus.assert_not_called()
+
+    def test_new_kernel_can_record_a_current_game_during_release_check(self):
+        import psutil
+        import time
+        from configuration import DEFAULT_CONFIG
+        from kernel_client import KernelClient
+        from personal_tools import GameSessions
+        from release_smoke import check_kernel
+
+        original = KernelClient.ensure_started
+        name = psutil.Process().name()
+
+        def started(client, *args, **kwargs):
+            result = original(client, *args, **kwargs)
+            process = psutil.Process(client.call("ping")["pid"])
+            try:
+                until = time.monotonic() + 8
+                while time.monotonic() < until:
+                    if client.call("personal_tools", section="sessions", action="list")["rows"]:
+                        return result
+                    time.sleep(0.1)
+                raise AssertionError("Контрольная игровая сессия не началась")
+            except BaseException:
+                client.call("shutdown")
+                process.wait(timeout=15)
+                raise
+
+        # Use the Python process already running this check as a game name.
+        # A real child kernel must create a fresh session, without starting a game.
+        with (
+            patch.dict(DEFAULT_CONFIG["performance"], {"game_processes": name}),
+            patch.object(KernelClient, "ensure_started", started),
+        ):
+            check_kernel(self.root / "config.json")
+        journal = GameSessions(self.root / "game_sessions.sqlite3")
+        try:
+            self.assertTrue(journal.snapshot()["rows"])
+        finally:
+            journal.close()
+
+    def test_preexisting_game_history_is_still_rejected_before_starting_kernel(self):
+        from kernel_client import KernelClient
+        from personal_tools import GameSessions
+        from release_smoke import check_kernel
+
+        journal = GameSessions(self.root / "game_sessions.sqlite3")
+        journal.tick("Earlier game")
+        journal.close()
+        with patch.object(KernelClient, "ensure_started") as start:
+            with self.assertRaisesRegex(RuntimeError, "до запуска ядра"):
+                check_kernel(self.root / "config.json")
+        start.assert_not_called()
+
+    def test_release_failure_is_logged_and_returns_failure_without_escaping(self):
+        import main
+
+        for flag in (
+            "--check",
+            "--release-smoke",
+            "--release-import-check",
+            "--release-model-check",
+            "--release-interactive-check",
+        ):
+            log = io.StringIO()
+            with (
+                self.subTest(flag=flag),
+                patch.object(main, "main", side_effect=RuntimeError("Проверка не прошла")),
+                patch.object(main, "configure_output") as configure,
+                redirect_stderr(log),
+            ):
+                self.assertEqual(main.entrypoint([flag]), 1)
+                configure.assert_called_once()
+                self.assertIn("RuntimeError: Проверка не прошла", log.getvalue())
+
+    def test_regular_launch_errors_are_not_swallowed_by_release_wrapper(self):
+        import main
+
+        with patch.object(main, "main", side_effect=RuntimeError("real startup failure")):
+            with self.assertRaisesRegex(RuntimeError, "real startup failure"):
+                main.entrypoint([])
 
     def test_builder_lock_does_not_truncate_active_log(self):
         with BuildSession(self.root):

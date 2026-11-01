@@ -137,6 +137,16 @@ def check_kernel(config_path):
     draft["warframe"]["overlay_enabled"] = False
     draft["app_settings"]["voice_auto_start"] = False
     cfg.save_config(draft)
+    # The live kernel may detect a game that is already running on the author's
+    # PC. Prove the store is fresh BEFORE starting that observer, not afterwards.
+    from personal_tools import GameSessions
+
+    journal = GameSessions(config_path.parent / "game_sessions.sqlite3")
+    try:
+        if journal.snapshot()["rows"]:
+            raise RuntimeError("Игровой журнал нового профиля должен быть пустым до запуска ядра")
+    finally:
+        journal.close()
     from performance import PerformancePolicy
 
     profile = {"performance": {"mode": "game", "game_processes": ""}}
@@ -241,8 +251,14 @@ def check_kernel(config_path):
         if clips["rows"] or clips["enabled"]:
             raise RuntimeError("История буфера нового профиля должна быть пустой и выключенной")
         sessions = client.call("personal_tools", section="sessions", action="list")
-        if sessions["rows"]:
-            raise RuntimeError("Игровой журнал нового профиля должен быть пустым")
+        if not isinstance(sessions.get("rows"), list) or not isinstance(
+            sessions.get("report"), str
+        ):
+            raise RuntimeError("Ядро не вернуло игровой журнал и отчёт")
+        if sessions.get("active") is not None and sessions["active"] not in {
+            row["id"] for row in sessions["rows"]
+        }:
+            raise RuntimeError("Активная игровая сессия отсутствует в журнале")
         import os
 
         if os.name == "nt" and os.getenv("GITHUB_ACTIONS") == "true":
