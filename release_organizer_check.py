@@ -132,7 +132,16 @@ def check_delivery_roundtrip():
 
     for service, scenario in product(
         ("tg_bridge.py", "discord_account.py"),
-        ("normal", "lost", "restart", "rejected", "timeout", "missing_id", "reserved"),
+        (
+            "normal",
+            "lost",
+            "restart",
+            "rejected",
+            "timeout",
+            "missing_id",
+            "invalid_response",
+            "reserved",
+        ),
     ):
         with (
             tempfile.TemporaryDirectory(prefix="krest-delivery-") as folder,
@@ -183,6 +192,8 @@ def check_delivery_roundtrip():
                         raise TimeoutError("Connection lost")
                     if scenario == "missing_id":
                         return None
+                    if scenario == "invalid_response":
+                        raise json.JSONDecodeError("Invalid response", "", 0)
                     return "987654"
 
                 def receive(kind, **values):
@@ -226,7 +237,7 @@ def check_delivery_roundtrip():
                     "failed"
                     if scenario == "rejected"
                     else "uncertain"
-                    if scenario in {"timeout", "missing_id", "reserved"}
+                    if scenario in {"timeout", "missing_id", "invalid_response", "reserved"}
                     else "delivered"
                 )
                 if row["status"] != expected:

@@ -221,7 +221,7 @@ def delivery_error(error):
         return "Сессия юзербота недействительна. Войдите заново в разделе подключений.", False
     if isinstance(error, PermissionError):
         return "Мессенджер отклонил доступ. Проверьте авторизацию юзербота и доступ к чату.", False
-    if isinstance(error, ValueError):
+    if isinstance(error, ValueError) and not isinstance(error, json.JSONDecodeError):
         return str(error)[:250], False
     return (
         "Нет подтверждения от мессенджера. Проверьте соединение и чат; повторной отправки не было.",

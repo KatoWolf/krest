@@ -1080,7 +1080,7 @@ class Organizer:
             with self.lock:
                 count = self._reconcile_delivery(force=True)
                 return self.delivery_error or (
-                    f"Восстановлено подтверждений: {count}. Сообщения повторно не отправлялись."
+                    f"Обновлено результатов отправки: {count}. Сообщения повторно не отправлялись."
                     if count
                     else "Новых подтверждений нет. Выберите сообщение, чтобы посмотреть результат и причину."
                 )
