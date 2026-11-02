@@ -13,8 +13,10 @@ class ScrollViewport(tk.Frame):
         self._command = None
         self._layout_job = None
         self._placement = None
+        self._content_size = None
         self._closed = False
         self._redraw_job = None
+        self._settle_job = None
         self.bind("<Configure>", self._schedule, add="+")
         self.content.bind("<Configure>", self._schedule, add="+")
         self.bind("<Destroy>", self._destroyed, add="+")
@@ -26,6 +28,11 @@ class ScrollViewport(tk.Frame):
     def _schedule(self, event=None):
         if self._closed or getattr(self.winfo_toplevel(), "_destroyed", False):
             return
+        if event is not None and event.widget is self.content:
+            size = (event.width, event.height, self.content.winfo_reqheight())
+            if size == self._content_size:
+                return  # A y-position change is scrolling, not a new layout.
+            self._content_size = size
         if self._layout_job is None:
             self._layout_job = self.after_idle(self._layout)
 
@@ -50,6 +57,12 @@ class ScrollViewport(tk.Frame):
             # Invalidate the visible subtree once per coalesced scroll event.
             if self._redraw_job is None:
                 self._redraw_job = self.after_idle(self.redraw)
+            # Finish a scroll burst with a clean background repaint, after Tk
+            # has placed all native children. Never force synchronous painting
+            # on every wheel/hover event or run a continuous animation timer.
+            if self._settle_job is not None:
+                self.after_cancel(self._settle_job)
+            self._settle_job = self.after(90, self._settle)
         if self._command:
             self._command(*self.yview())
 
@@ -77,6 +90,9 @@ class ScrollViewport(tk.Frame):
         if event is not None and event.widget is not self:
             return
         self._closed = True
+        if self._settle_job is not None:
+            self.after_cancel(self._settle_job)
+            self._settle_job = None
         if self._redraw_job is not None:
             self.after_cancel(self._redraw_job)
             self._redraw_job = None
@@ -84,8 +100,15 @@ class ScrollViewport(tk.Frame):
             self.after_cancel(self._layout_job)
             self._layout_job = None
 
+    def _settle(self):
+        self._settle_job = None
+        self._paint(erase=True)
+
     def redraw(self):
         self._redraw_job = None
+        self._paint()
+
+    def _paint(self, erase=False):
         if self._closed or not self.winfo_ismapped():
             return
         import os
@@ -101,9 +124,9 @@ class ScrollViewport(tk.Frame):
                 wintypes.HANDLE,
                 wintypes.UINT,
             ]
-            # Invalidate once; let Windows coalesce WM_PAINT with the next frame.
-            # RDW_UPDATENOW/ERASE forced synchronous painting of every child.
-            user.RedrawWindow(self.winfo_id(), None, None, 0x1 | 0x80)
+            # RDW_ERASE clears stale glyph/background fragments only after the
+            # burst. No RDW_UPDATENOW: Windows can still coalesce WM_PAINT.
+            user.RedrawWindow(self.winfo_id(), None, None, 0x1 | 0x80 | (0x4 if erase else 0))
 
     def destroy(self):
         self._destroyed()

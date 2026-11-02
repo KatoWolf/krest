@@ -39,6 +39,7 @@ def main(argv=None):
     parser.add_argument("--release-interactive-check", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--desktop-service", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--desktop-domain", help=argparse.SUPPRESS)
     parser.add_argument("--release-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--service", help=argparse.SUPPRESS)
     parser.add_argument("--external-script", help=argparse.SUPPRESS)

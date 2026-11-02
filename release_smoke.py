@@ -420,6 +420,18 @@ def check_runtime_efficiency():
     from speech_dictionary import CommandDictionary
     from command_catalog import rows
     from audio_focus import AudioFocus
+    from performance import process_role
+
+    for arguments, expected in (
+        (["Krest.exe", "--service", "tg_bridge.py"], "Бот: tg_bridge.py"),
+        (["python.exe", "-u", r"C:\Крест\steam_bot.py"], "Бот: steam_bot.py"),
+        (["Krest.exe", "--external-script", r"C:\Боты\custom.py"], "Скрипт: custom.py"),
+        (["Krest.exe", "--desktop-service", "--desktop-domain", "discord"], "Микрофон Discord"),
+        (["Krest.exe"], "Меню Крест"),
+        (["Krest.exe", "--voice-indicator"], "Индикатор голоса"),
+    ):
+        if process_role(arguments) != expected:
+            raise RuntimeError("Не определена роль дочернего процесса")
 
     with TemporaryDirectory(prefix="krest-efficiency-") as folder:
         cfg = ConfigManager(Path(folder) / "config.json")
@@ -736,6 +748,9 @@ def check_telegram_worker():
 
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="TelegramAuthCheck") as pool:
         pool.submit(load).result(timeout=20)
+    from release_bridge_check import check_telegram_efficiency
+
+    check_telegram_efficiency()
     print("Telegram: импорт из фонового потока выполнен без подключения к аккаунту.", flush=True)
 
 
@@ -892,6 +907,14 @@ def check_menu_surface():
         root.update()
         if pane.content.winfo_y() != 0:
             raise RuntimeError("Не удалось вернуть страницу в начало")
+        root.after(150, root.quit)
+        root.mainloop()
+        if (
+            pane._layout_job is not None
+            or pane._redraw_job is not None
+            or pane._settle_job is not None
+        ):
+            raise RuntimeError("Меню продолжает перерисовку после остановки прокрутки")
         from types import SimpleNamespace
         from welcome_gui import ControlCenterApp
 

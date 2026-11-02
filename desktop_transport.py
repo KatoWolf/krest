@@ -13,8 +13,9 @@ _lock = threading.Lock()
 
 
 class DesktopPipe:
-    def __init__(self, background=False):
+    def __init__(self, background=False, domain="music"):
         self.background = background
+        self.domain = domain
         self.lock = threading.Lock()
         self.process = None
         self.sequence = 0
@@ -41,7 +42,7 @@ class DesktopPipe:
         self.close()
         self.generation += 1
         self.process = subprocess.Popen(
-            app_command("--desktop-service"),
+            app_command("--desktop-service", "--desktop-domain", self.domain),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -107,7 +108,9 @@ def request(payload, timeout=12):
         "steam_download": "steam",
     }.get(payload["operation"], "music")
     with _lock:
-        client = _clients.setdefault(domain, DesktopPipe(background=domain in {"learned", "steam"}))
+        client = _clients.setdefault(
+            domain, DesktopPipe(background=domain in {"learned", "steam"}, domain=domain)
+        )
     return client.call(payload, timeout=timeout)
 
 

@@ -21,8 +21,8 @@ except RuntimeError:
     asyncio.set_event_loop(_import_loop)
 
 try:
-    from pyrogram import Client, filters, enums, raw, types
-    from pyrogram.handlers import MessageHandler
+    from pyrogram import Client, enums, raw, types
+    from pyrogram.handlers import RawUpdateHandler
     from pyrogram.errors import (
         AuthKeyUnregistered,
         SessionRevoked,
@@ -67,13 +67,21 @@ logger = logging.getLogger("TGBridge")
 from auto_replies import ReplyGate, urgent
 
 reply_gate = ReplyGate()
+_config_manager = None
+_config_lock = threading.Lock()
 
 
 def load_app_config() -> dict:
     """Use the shared loader, including keys stored in Windows Credential Manager."""
     from configuration import ConfigManager
 
-    return ConfigManager(CONFIG_FILE).snapshot()
+    global _config_manager
+    with _config_lock:
+        if _config_manager is None or str(_config_manager.filepath) != CONFIG_FILE:
+            _config_manager = ConfigManager(CONFIG_FILE)
+        manager = _config_manager
+    # snapshot checks the file stamp, so edits in the menu still apply at once.
+    return manager.snapshot()
 
 
 def get_owner_name() -> str:
@@ -91,13 +99,14 @@ async def status_updater(client):
     last_bio = None
     while True:
         try:
-            settings = load_app_config()["telegram_user"]
+            config = load_app_config()
+            settings = config["telegram_user"]
             if not settings["update_bio"]:
                 await asyncio.sleep(30)
                 continue
             from bot_activity import status_text
 
-            new_bio = status_text(load_app_config(), "telegram_user", await get_local_status())
+            new_bio = status_text(config, "telegram_user", await get_local_status())
 
             if len(new_bio) > 70:
                 new_bio = new_bio[:67] + "..."
@@ -128,6 +137,40 @@ async def track_outgoing(client, message):
     chat_id = message.chat.id
     if not reply_gate.own_echo(chat_id, message.text or "", getattr(message, "id", None)):
         reply_gate.outgoing(chat_id)
+
+
+async def private_update(client, update, users, chats):
+    """Parse only personal messages, without fetching quoted message history."""
+    if not isinstance(update, (raw.types.UpdateNewMessage, raw.types.UpdateNewScheduledMessage)):
+        return
+    message = update.message
+    if not isinstance(message, raw.types.Message) or not isinstance(
+        message.peer_id, raw.types.PeerUser
+    ):
+        return
+    sender = users.get(getattr(message.from_id, "user_id", message.peer_id.user_id))
+    if not message.out and sender is not None and getattr(sender, "bot", False):
+        return
+    parsed = await types.Message._parse(
+        client,
+        message,
+        users,
+        chats,
+        is_scheduled=isinstance(update, raw.types.UpdateNewScheduledMessage),
+        replies=0,
+    )
+    if message.out:
+        await track_outgoing(client, parsed)
+    elif parsed.from_user and not parsed.from_user.is_self and not parsed.from_user.is_bot:
+        await auto_reply(client, parsed)
+
+
+def configure_private_updates(app):
+    # Pyrogram parses every message BEFORE evaluating a MessageHandler filter.
+    # This dedicated client uses only our raw handler: channel/media/status
+    # parsing and quoted-history requests are unnecessary for its functions.
+    app.dispatcher.update_parsers.clear()
+    app.add_handler(RawUpdateHandler(private_update))
 
 
 async def auto_reply(client, message, deferred=False):
@@ -674,20 +717,10 @@ def start_tg_bridge(notifications_queue=None):
             system_version="Windows 11",
             app_version="4.14.9 x64",
             lang_code="ru",
+            workers=2,
         )
         app.notifications_queue = notifications_queue
-        app.add_handler(
-            MessageHandler(
-                auto_reply,
-                filters.private & ~filters.me & ~filters.bot,
-            )
-        )
-        app.add_handler(
-            MessageHandler(
-                track_outgoing,
-                filters.private & filters.me,
-            )
-        )
+        configure_private_updates(app)
 
         async def run_bot():
             updater_task = None

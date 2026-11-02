@@ -7,6 +7,50 @@ import time
 import psutil
 from storage import atomic_write_json, read_json
 
+
+def process_role(args, fallback="Процесс Крест"):
+    """Describe known launch modes without exposing tokens or full command lines."""
+    desktop_names = {
+        "music": "Управление музыкой",
+        "discord": "Микрофон Discord",
+        "files": "Проводник",
+        "audio": "Звуковые устройства",
+        "learned": "Действия на экране",
+        "steam": "Загрузки Steam",
+    }
+    for flag, label in (
+        ("--voice-indicator", "Индикатор голоса"),
+        ("--game-overlay", "Игровой индикатор"),
+        ("--desktop-worker", "Помощник рабочего стола"),
+        ("--extension-worker", "Расширение"),
+        ("--kernel", "Ядро Крест"),
+    ):
+        if flag in args:
+            return label
+    if "--desktop-service" in args:
+        try:
+            return desktop_names.get(
+                args[args.index("--desktop-domain") + 1], "Помощник рабочего стола"
+            )
+        except (ValueError, IndexError):
+            return "Помощник рабочего стола"
+    for flag, label in (("--service", "Бот: "), ("--external-script", "Скрипт: ")):
+        if flag in args:
+            try:
+                return label + args[args.index(flag) + 1].replace("\\", "/").rsplit("/", 1)[-1][:80]
+            except IndexError:
+                return label.rstrip(": ")
+    from service_runner import BUILTIN_SERVICES
+
+    scripts = [arg.replace("\\", "/").rsplit("/", 1)[-1] for arg in args]
+    for name in scripts:
+        if name in BUILTIN_SERVICES:
+            return "Бот: " + name
+    if "main.py" in scripts or any(name.casefold() == "krest.exe" for name in scripts):
+        return "Меню Крест"
+    return fallback[:80]
+
+
 MODES = {"auto", "balanced", "game", "economy"}
 # Steam also installs desktop software. A manifest or a process under
 # steamapps/common alone does not establish that a game is running.
@@ -105,20 +149,9 @@ class PerformancePolicy:
         if process.pid == root.pid:
             return "Ядро Крест"
         if process.pid not in self._roles:
-            role = "Дочерний процесс"
+            role = "Процесс Крест"
             try:
-                args = process.cmdline()
-                for flag, label in (
-                    ("--voice-indicator", "Индикатор голоса"),
-                    ("--game-overlay", "Игровой индикатор"),
-                    ("--desktop-service", "Управление плеером"),
-                ):
-                    if flag in args:
-                        role = label
-                        break
-                else:
-                    if "--service" in args:
-                        role = "Бот: " + Path(args[args.index("--service") + 1]).name[:80]
+                role = process_role(process.cmdline(), process.name())
             except (psutil.Error, IndexError):
                 pass
             self._roles[process.pid] = role

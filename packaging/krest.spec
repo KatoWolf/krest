@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_submodules, collect_dynamic_libs
 
 root = Path(os.environ["KREST_BUILD_ROOT"])
 own_modules = [p.stem for p in root.glob("*.py") if p.stem != "main"]
-hidden = own_modules + ["pystray._win32", "pyautogui._pyautogui_win"]
+hidden = own_modules + ["pystray._win32", "pyautogui._pyautogui_win", "tgcrypto"]
 for package in ("skills", "vosk", "winsdk", "pywinauto", "pycaw", "comtypes", "telebot", "discord", "pyrogram"):
     hidden += collect_submodules(package, filter=lambda name: not any(part in ("tests", "test") for part in name.split(".")))
 

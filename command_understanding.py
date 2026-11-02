@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 import json
 import re
 import sqlite3
@@ -81,11 +82,13 @@ def exact_command(manager, text):
     return spoken if manager.match(spoken) else None
 
 
+@lru_cache(maxsize=2048)
 def _sound(text):
     text = text.casefold().replace("ё", "е").translate(str.maketrans("бдгжзвое", "пткссфаи"))
     return re.sub(r"(.)\1+", r"\1", text.replace("ь", "").replace("ъ", ""))
 
 
+@lru_cache(maxsize=4096)
 def _similarity(heard, expected):
     if heard == expected:
         return 1.0

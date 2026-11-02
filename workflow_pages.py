@@ -527,8 +527,9 @@ class WorkflowPages:
         self.resource_var.set(
             f"Сейчас: {next(k for k, v in MODES.items() if v == self.runtime.performance.active)} · CPU {metrics['cpu']}% · RAM {metrics['memory_mb']} МБ · процессов {metrics['processes']}"
             + "\n"
-            + " · ".join(
-                f"{row['name']}: {row['cpu']}%" for row in metrics.get("breakdown", [])[:4]
+            + "\n".join(
+                f"{row['name']} · PID {row['pid']}: CPU {row['cpu']}% · {row['memory_mb']} МБ"
+                for row in metrics.get("breakdown", [])[:12]
             )
             + (
                 "\nПотоки ядра: "
